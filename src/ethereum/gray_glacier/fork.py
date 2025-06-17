@@ -190,16 +190,17 @@ def state_transition(chain: BlockChain, block: Block) -> None:
 
     if block_output.block_gas_used != block.header.gas_used:
         raise InvalidBlock(
-            f"{block_output.block_gas_used} != {block.header.gas_used}"
+            f"Block gas used `{block_output.block_gas_used}` does not match "
+            f"header gas used `{block.header.gas_used}`"
         )
     if transactions_root != block.header.transactions_root:
-        raise InvalidBlock
+        raise InvalidBlock("Transactions root does not match header")
     if block_state_root != block.header.state_root:
-        raise InvalidBlock
+        raise InvalidBlock("State root does not match header")
     if receipt_root != block.header.receipt_root:
-        raise InvalidBlock
+        raise InvalidBlock("Receipt root does not match header")
     if block_logs_bloom != block.header.bloom:
-        raise InvalidBlock
+        raise InvalidBlock("Logs bloom does not match header")
 
     chain.blocks.append(block)
     if len(chain.blocks) > 255:
@@ -235,7 +236,7 @@ def calculate_base_fee_per_gas(
     """
     parent_gas_target = parent_gas_limit // ELASTICITY_MULTIPLIER
     if not check_gas_limit(block_gas_limit, parent_gas_limit):
-        raise InvalidBlock
+        raise InvalidBlock("Invalid gas limit")
 
     if parent_gas_used == parent_gas_target:
         expected_base_fee_per_gas = parent_base_fee_per_gas
@@ -289,7 +290,7 @@ def validate_header(chain: BlockChain, header: Header) -> None:
         Header to check for correctness.
     """
     if header.number < Uint(1):
-        raise InvalidBlock
+        raise InvalidBlock("Invalid number")
     parent_header_number = header.number - Uint(1)
     first_block_number = chain.blocks[0].header.number
     last_block_number = chain.blocks[-1].header.number
@@ -298,14 +299,14 @@ def validate_header(chain: BlockChain, header: Header) -> None:
         parent_header_number < first_block_number
         or parent_header_number > last_block_number
     ):
-        raise InvalidBlock
+        raise InvalidBlock("Invalid number")
 
     parent_header = chain.blocks[
         parent_header_number - first_block_number
     ].header
 
     if header.gas_used > header.gas_limit:
-        raise InvalidBlock
+        raise InvalidBlock("Gas used exceeds gas limit")
 
     expected_base_fee_per_gas = calculate_base_fee_per_gas(
         header.gas_limit,
@@ -314,15 +315,15 @@ def validate_header(chain: BlockChain, header: Header) -> None:
         parent_header.base_fee_per_gas,
     )
     if expected_base_fee_per_gas != header.base_fee_per_gas:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid base fee per gas")
 
     parent_has_ommers = parent_header.ommers_hash != EMPTY_OMMER_HASH
     if header.timestamp <= parent_header.timestamp:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid timestamp")
     if header.number != parent_header.number + Uint(1):
-        raise InvalidBlock
+        raise InvalidBlock("Invalid number")
     if len(header.extra_data) > 32:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid extradata")
 
     block_difficulty = calculate_block_difficulty(
         header.number,
@@ -332,11 +333,11 @@ def validate_header(chain: BlockChain, header: Header) -> None:
         parent_has_ommers,
     )
     if header.difficulty != block_difficulty:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid difficulty")
 
     block_parent_hash = keccak256(rlp.encode(parent_header))
     if header.parent_hash != block_parent_hash:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid parent hash")
 
     validate_proof_of_work(header)
 
@@ -407,11 +408,11 @@ def validate_proof_of_work(header: Header) -> None:
         header_hash, header.nonce, cache, dataset_size(header.number)
     )
     if mix_digest != header.mix_digest:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid mix digest")
 
     limit = Uint(U256.MAX_VALUE) + Uint(1)
     if Uint.from_be_bytes(result) > (limit // header.difficulty):
-        raise InvalidBlock
+        raise InvalidBlock("Invalid difficulty")
 
 
 def check_transaction(
@@ -445,15 +446,15 @@ def check_transaction(
     """
     gas_available = block_env.block_gas_limit - block_output.block_gas_used
     if tx.gas > gas_available:
-        raise InvalidBlock
+        raise InvalidBlock("Transaction gas exceeds gas available")
     sender_address = recover_sender(block_env.chain_id, tx)
     sender_account = get_account(block_env.state, sender_address)
 
     if isinstance(tx, FeeMarketTransaction):
         if tx.max_fee_per_gas < tx.max_priority_fee_per_gas:
-            raise InvalidBlock
+            raise InvalidBlock("Max fee per gas less than max priority fee per gas")
         if tx.max_fee_per_gas < block_env.base_fee_per_gas:
-            raise InvalidBlock
+            raise InvalidBlock("Max fee per gas less than base fee per gas")
 
         priority_fee_per_gas = min(
             tx.max_priority_fee_per_gas,
@@ -463,14 +464,20 @@ def check_transaction(
         max_gas_fee = tx.gas * tx.max_fee_per_gas
     else:
         if tx.gas_price < block_env.base_fee_per_gas:
-            raise InvalidBlock
+            raise InvalidBlock("Gas price less than base fee per gas")
         effective_gas_price = tx.gas_price
         max_gas_fee = tx.gas * tx.gas_price
 
     if sender_account.nonce != tx.nonce:
-        raise InvalidBlock
+        raise InvalidBlock(
+            f"Transaction nonce `{tx.nonce}` does not match sender nonce "
+            f"`{sender_account.nonce}`"
+        )
     if Uint(sender_account.balance) < max_gas_fee + Uint(tx.value):
-        raise InvalidBlock
+        raise InvalidBlock(
+            f"Transaction value `{tx.value}` exceeds sender balance "
+            f"`{sender_account.balance}`"
+        )
     if sender_account.code:
         raise InvalidSenderError("not EOA")
 
@@ -579,7 +586,7 @@ def validate_ommers(
     """
     block_hash = keccak256(rlp.encode(block_header))
     if keccak256(rlp.encode(ommers)) != block_header.ommers_hash:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid ommers hash")
 
     if len(ommers) == 0:
         # Nothing to validate
@@ -588,14 +595,14 @@ def validate_ommers(
     # Check that each ommer satisfies the constraints of a header
     for ommer in ommers:
         if Uint(1) > ommer.number or ommer.number >= block_header.number:
-            raise InvalidBlock
+            raise InvalidBlock(f"Invalid ommer for block number {ommer.number}")
         validate_header(chain, ommer)
     if len(ommers) > 2:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid ommers length")
 
     ommers_hashes = [keccak256(rlp.encode(ommer)) for ommer in ommers]
     if len(ommers_hashes) != len(set(ommers_hashes)):
-        raise InvalidBlock
+        raise InvalidBlock("Invalid ommers hashes")
 
     recent_canonical_blocks = chain.blocks[-(MAX_OMMER_DEPTH + Uint(1)) :]
     recent_canonical_block_hashes = {
@@ -611,21 +618,21 @@ def validate_ommers(
     for ommer_index, ommer in enumerate(ommers):
         ommer_hash = ommers_hashes[ommer_index]
         if ommer_hash == block_hash:
-            raise InvalidBlock
+            raise InvalidBlock("Ommer hash equals block hash")
         if ommer_hash in recent_canonical_block_hashes:
-            raise InvalidBlock
+            raise InvalidBlock("Ommer hash in recent canonical block hashes")
         if ommer_hash in recent_ommers_hashes:
-            raise InvalidBlock
+            raise InvalidBlock("Ommer hash in recent ommers hashes")
 
         # Ommer age with respect to the current block. For example, an age of
         # 1 indicates that the ommer is a sibling of previous block.
         ommer_age = block_header.number - ommer.number
         if Uint(1) > ommer_age or ommer_age > MAX_OMMER_DEPTH:
-            raise InvalidBlock
+            raise InvalidBlock("Invalid ommer age")
         if ommer.parent_hash not in recent_canonical_block_hashes:
-            raise InvalidBlock
+            raise InvalidBlock("Ommer parent not in recent canonical block hashes")
         if ommer.parent_hash == block_header.parent_hash:
-            raise InvalidBlock
+            raise InvalidBlock("Ommer parent hash matches block parent hash")
 
 
 def pay_rewards(

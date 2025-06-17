@@ -176,7 +176,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
     """
     validate_header(chain, block.header)
     if block.ommers != ():
-        raise InvalidBlock
+        raise InvalidBlock("Ommers not empty list")
 
     block_env = vm.BlockEnvironment(
         chain_id=chain.chain_id,
@@ -205,20 +205,24 @@ def state_transition(chain: BlockChain, block: Block) -> None:
 
     if block_output.block_gas_used != block.header.gas_used:
         raise InvalidBlock(
-            f"{block_output.block_gas_used} != {block.header.gas_used}"
+            f"Block gas used `{block_output.block_gas_used}` does not match "
+            f"header gas used `{block.header.gas_used}`"
         )
     if transactions_root != block.header.transactions_root:
-        raise InvalidBlock
+        raise InvalidBlock("Transactions root does not match header")
     if block_state_root != block.header.state_root:
-        raise InvalidBlock
+        raise InvalidBlock("State root does not match header")
     if receipt_root != block.header.receipt_root:
-        raise InvalidBlock
+        raise InvalidBlock("Receipt root does not match header")
     if block_logs_bloom != block.header.bloom:
-        raise InvalidBlock
+        raise InvalidBlock("Logs bloom does not match header")
     if withdrawals_root != block.header.withdrawals_root:
-        raise InvalidBlock
+        raise InvalidBlock("Withdrawals root does not match header")
     if block_output.blob_gas_used != block.header.blob_gas_used:
-        raise InvalidBlock
+        raise InvalidBlock(
+            f"Blob gas used `{block_output.blob_gas_used}` does not match "
+            f"header blob gas used `{block.header.blob_gas_used}`"
+        )
 
     chain.blocks.append(block)
     if len(chain.blocks) > 255:
@@ -254,7 +258,7 @@ def calculate_base_fee_per_gas(
     """
     parent_gas_target = parent_gas_limit // ELASTICITY_MULTIPLIER
     if not check_gas_limit(block_gas_limit, parent_gas_limit):
-        raise InvalidBlock
+        raise InvalidBlock("Invalid gas limit")
 
     if parent_gas_used == parent_gas_target:
         expected_base_fee_per_gas = parent_base_fee_per_gas
@@ -308,16 +312,16 @@ def validate_header(chain: BlockChain, header: Header) -> None:
         Header to check for correctness.
     """
     if header.number < Uint(1):
-        raise InvalidBlock
+        raise InvalidBlock("Invalid number")
 
     parent_header = chain.blocks[-1].header
 
     excess_blob_gas = calculate_excess_blob_gas(parent_header)
     if header.excess_blob_gas != excess_blob_gas:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid excess blob gas")
 
     if header.gas_used > header.gas_limit:
-        raise InvalidBlock
+        raise InvalidBlock("Gas used exceeds gas limit")
 
     expected_base_fee_per_gas = calculate_base_fee_per_gas(
         header.gas_limit,
@@ -326,23 +330,23 @@ def validate_header(chain: BlockChain, header: Header) -> None:
         parent_header.base_fee_per_gas,
     )
     if expected_base_fee_per_gas != header.base_fee_per_gas:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid base fee per gas")
     if header.timestamp <= parent_header.timestamp:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid timestamp")
     if header.number != parent_header.number + Uint(1):
-        raise InvalidBlock
+        raise InvalidBlock("Invalid number")
     if len(header.extra_data) > 32:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid extradata")
     if header.difficulty != 0:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid difficulty")
     if header.nonce != b"\x00\x00\x00\x00\x00\x00\x00\x00":
-        raise InvalidBlock
+        raise InvalidBlock("Invalid nonce")
     if header.ommers_hash != EMPTY_OMMER_HASH:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid ommers hash")
 
     block_parent_hash = keccak256(rlp.encode(parent_header))
     if header.parent_hash != block_parent_hash:
-        raise InvalidBlock
+        raise InvalidBlock("Invalid parent hash")
 
 
 def check_transaction(
@@ -382,20 +386,20 @@ def check_transaction(
     blob_gas_available = MAX_BLOB_GAS_PER_BLOCK - block_output.blob_gas_used
 
     if tx.gas > gas_available:
-        raise InvalidBlock
+        raise InvalidBlock("Transaction gas exceeds gas available")
 
     tx_blob_gas_used = calculate_total_blob_gas(tx)
     if tx_blob_gas_used > blob_gas_available:
-        raise InvalidBlock
+        raise InvalidBlock("Transaction blob gas exceeds blob gas available")
 
     sender_address = recover_sender(block_env.chain_id, tx)
     sender_account = get_account(block_env.state, sender_address)
 
     if isinstance(tx, (FeeMarketTransaction, BlobTransaction)):
         if tx.max_fee_per_gas < tx.max_priority_fee_per_gas:
-            raise InvalidBlock
+            raise InvalidBlock("Max fee per gas less than max priority fee per gas")
         if tx.max_fee_per_gas < block_env.base_fee_per_gas:
-            raise InvalidBlock
+            raise InvalidBlock("Max fee per gas less than base fee per gas")
 
         priority_fee_per_gas = min(
             tx.max_priority_fee_per_gas,
@@ -405,22 +409,22 @@ def check_transaction(
         max_gas_fee = tx.gas * tx.max_fee_per_gas
     else:
         if tx.gas_price < block_env.base_fee_per_gas:
-            raise InvalidBlock
+            raise InvalidBlock("Gas price less than base fee per gas")
         effective_gas_price = tx.gas_price
         max_gas_fee = tx.gas * tx.gas_price
 
     if isinstance(tx, BlobTransaction):
         if not isinstance(tx.to, Address):
-            raise InvalidBlock
+            raise InvalidBlock("Blob transaction to address is not set")
         if len(tx.blob_versioned_hashes) == 0:
-            raise InvalidBlock
+            raise InvalidBlock("Blob transaction has no blob versioned hashes")
         for blob_versioned_hash in tx.blob_versioned_hashes:
             if blob_versioned_hash[0:1] != VERSIONED_HASH_VERSION_KZG:
-                raise InvalidBlock
+                raise InvalidBlock("Invalid blob versioned hash version")
 
         blob_gas_price = calculate_blob_gas_price(block_env.excess_blob_gas)
         if Uint(tx.max_fee_per_blob_gas) < blob_gas_price:
-            raise InvalidBlock
+            raise InvalidBlock("Max fee per blob gas less than blob gas price")
 
         max_gas_fee += Uint(calculate_total_blob_gas(tx)) * Uint(
             tx.max_fee_per_blob_gas
@@ -429,9 +433,15 @@ def check_transaction(
     else:
         blob_versioned_hashes = ()
     if sender_account.nonce != tx.nonce:
-        raise InvalidBlock
+        raise InvalidBlock(
+            f"Transaction nonce `{tx.nonce}` does not match sender nonce "
+            f"`{sender_account.nonce}`"
+        )
     if Uint(sender_account.balance) < max_gas_fee + Uint(tx.value):
-        raise InvalidBlock
+        raise InvalidBlock(
+            f"Transaction value `{tx.value}` exceeds sender balance "
+            f"`{sender_account.balance}`"
+        )
     if sender_account.code:
         raise InvalidSenderError("not EOA")
 
