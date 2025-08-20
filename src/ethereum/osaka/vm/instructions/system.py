@@ -16,6 +16,7 @@ from ethereum_types.bytes import Bytes, Bytes0
 from ethereum_types.numeric import U256, Uint
 
 from ethereum.utils.numeric import ceil32
+from ...block_access_lists import track_address_access
 
 from ...fork_types import Address
 from ...state import (
@@ -137,7 +138,7 @@ def generic_create(
     )
     
     if evm.message.change_tracker:
-        evm.message.change_tracker.track_address_access(contract_address)
+        track_address_access(evm.message.change_tracker, contract_address)
     
     child_evm = process_create_message(child_message)
 
@@ -332,7 +333,7 @@ def generic_call(
     )
     
     if evm.message.change_tracker:
-        evm.message.change_tracker.track_address_access(to)
+        track_address_access(evm.message.change_tracker, to)
     
     child_evm = process_message(child_message)
 

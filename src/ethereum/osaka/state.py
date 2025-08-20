@@ -24,13 +24,13 @@ from ethereum_types.bytes import Bytes, Bytes32
 from ethereum_types.frozen import modify
 from ethereum_types.numeric import U256, Uint
 
+from .block_access_lists import (
+    track_balance_change,
+    track_code_change,
+    track_nonce_change,
+)
 from .fork_types import EMPTY_ACCOUNT, Account, Address, Root
 from .trie import EMPTY_TRIE_ROOT, Trie, copy_trie, root, trie_get, trie_set
-
-# Forward declaration for type hints
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from .block_access_lists import StateChangeTracker
 
 
 @dataclass
@@ -513,9 +513,9 @@ def move_ether(
     if change_tracker is not None:
         sender_new_balance = get_account(state, sender_address).balance
         recipient_new_balance = get_account(state, recipient_address).balance
-        
-        change_tracker.track_balance_change(sender_address, U256(sender_new_balance), state)
-        change_tracker.track_balance_change(recipient_address, U256(recipient_new_balance), state)
+
+        track_balance_change(change_tracker, sender_address, U256(sender_new_balance))
+        track_balance_change(change_tracker, recipient_address, U256(recipient_new_balance))
 
 
 def set_account_balance(
@@ -548,7 +548,7 @@ def set_account_balance(
     modify_state(state, address, set_balance)
     
     if change_tracker is not None:
-        change_tracker.track_balance_change(address, amount, state)
+        track_balance_change(change_tracker, address, amount)
 
 
 def increment_nonce(state: State, address: Address, change_tracker: "StateChangeTracker") -> None:
@@ -579,7 +579,7 @@ def increment_nonce(state: State, address: Address, change_tracker: "StateChange
     # - Deployed contracts
     # - EIP-7702 authorities
     account = get_account(state, address)
-    change_tracker.track_nonce_change(address, account.nonce, state)
+    track_nonce_change(change_tracker, address, account.nonce)
 
 
 def set_code(
@@ -610,8 +610,7 @@ def set_code(
         sender.code = code
 
     modify_state(state, address, write_code)
-    
-    change_tracker.track_code_change(address, code, state)
+    track_code_change(change_tracker, address, code)
 
 
 def get_storage_original(state: State, address: Address, key: Bytes32) -> U256:

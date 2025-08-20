@@ -148,10 +148,7 @@ def evm_trace(
     Create a trace of the event.
     """
     # System Transaction do not have a tx_hash or index
-    if (
-        evm.message.tx_env.index_in_block is None
-        or evm.message.tx_env.tx_hash is None
-    ):
+    if evm.message.tx_env.index_in_block is None or evm.message.tx_env.tx_hash is None:
         return
 
     assert isinstance(evm, (EvmWithoutReturnData, EvmWithReturnData))
@@ -329,18 +326,12 @@ class _TraceJsonEncoder(json.JSONEncoder):
         if not is_dataclass(obj) or isinstance(obj, type):
             return super().default(obj)
 
-        trace = {
-            k: v
-            for k, v in asdict(obj).items()
-            if _TraceJsonEncoder.retain(k, v)
-        }
+        trace = {k: v for k, v in asdict(obj).items() if _TraceJsonEncoder.retain(k, v)}
 
         return trace
 
 
-def output_op_trace(
-    trace: Union[Trace, FinalTrace], json_file: TextIO
-) -> None:
+def output_op_trace(trace: Union[Trace, FinalTrace], json_file: TextIO) -> None:
     """
     Output a single trace to a json file.
     """
