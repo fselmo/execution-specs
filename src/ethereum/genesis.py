@@ -233,6 +233,7 @@ def add_genesis_block(
         "timestamp": genesis.timestamp,
         "extra_data": genesis.extra_data,
         "nonce": genesis.nonce,
+
     }
 
     if has_field(hardfork.Header, "mix_digest"):
@@ -258,6 +259,9 @@ def add_genesis_block(
     if has_field(hardfork.Header, "requests_hash"):
         fields["requests_hash"] = Hash32(b"\0" * 32)
 
+    if has_field(hardfork.Header, "bal_hash"):
+        fields["bal_hash"] = Hash32(b"\0" * 32)
+
     genesis_header = hardfork.Header(**fields)
 
     block_fields = {
@@ -271,6 +275,9 @@ def add_genesis_block(
 
     if has_field(hardfork.Block, "requests"):
         block_fields["requests"] = ()
+
+    if has_field(hardfork.Block, "block_access_list"):
+        block_fields["block_access_list"] = rlp.encode([])
 
     genesis_block = hardfork.Block(**block_fields)
 

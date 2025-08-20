@@ -143,7 +143,9 @@ def process_message_call(message: Message) -> MessageCallOutput:
         accounts_to_delete = evm.accounts_to_delete
         refund_counter += U256(evm.refund_counter)
 
-    tx_end = TransactionEnd(int(message.gas) - int(evm.gas_left), evm.output, evm.error)
+    tx_end = TransactionEnd(
+        int(message.gas) - int(evm.gas_left), evm.output, evm.error
+    )
     evm_trace(evm, tx_end)
 
     return MessageCallOutput(
@@ -190,7 +192,7 @@ def process_create_message(message: Message) -> Evm:
     # added to SELFDESTRUCT by EIP-6780.
     mark_account_created(state, message.current_target)
 
-    increment_nonce(state, message.current_target)
+    increment_nonce(state, message.current_target, message.change_tracker)
     evm = process_message(message)
     if not evm.error:
         contract_code = evm.output
@@ -208,7 +210,12 @@ def process_create_message(message: Message) -> Evm:
             evm.output = b""
             evm.error = error
         else:
-            set_code(state, message.current_target, contract_code)
+            set_code(
+                state,
+                message.current_target,
+                contract_code,
+                message.change_tracker,
+            )
             commit_transaction(state, transient_storage)
     else:
         rollback_transaction(state, transient_storage)
@@ -238,7 +245,13 @@ def process_message(message: Message) -> Evm:
     begin_transaction(state, transient_storage)
 
     if message.should_transfer_value and message.value != 0:
-        move_ether(state, message.caller, message.current_target, message.value)
+        move_ether(
+            state,
+            message.caller,
+            message.current_target,
+            message.value,
+            message.change_tracker,
+        )
 
     evm = execute_code(message)
     if evm.error:
@@ -297,8 +310,8 @@ def execute_code(message: Message) -> Evm:
         while evm.running and evm.pc < ulen(evm.code):
             try:
                 op = Ops(evm.code[evm.pc])
-            except ValueError:
-                raise InvalidOpcode(evm.code[evm.pc])
+            except ValueError as e:
+                raise InvalidOpcode(evm.code[evm.pc]) from e
 
             evm_trace(evm, OpStart(op))
             op_implementation[op](evm)
