@@ -5,6 +5,7 @@ from ethereum_types.numeric import U64, U256, Uint
 
 from ethereum.crypto.hash import keccak256
 from ethereum.osaka.blocks import Block, Header, Log, Receipt, Withdrawal
+from ethereum.osaka.rlp_types import BlockAccessList
 from ethereum.osaka.transactions import (
     Access,
     AccessListTransaction,
@@ -113,10 +114,14 @@ header = Header(
     blob_gas_used=U64(7),
     excess_blob_gas=U64(8),
     requests_hash=hash7,
+    bal_hash=hash1,  # Added missing bal_hash
 )
 
 block = Block(
     header=header,
+    block_access_list=BlockAccessList(
+        account_changes=()
+    ),  # Added missing block_access_list
     transactions=(
         encode_transaction(legacy_transaction),
         encode_transaction(access_list_transaction),
