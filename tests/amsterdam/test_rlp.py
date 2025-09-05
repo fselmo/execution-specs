@@ -114,7 +114,7 @@ header = Header(
     blob_gas_used=U64(7),
     excess_blob_gas=U64(8),
     requests_hash=hash7,
-    bal_hash=hash1,  # Added missing bal_hash
+    block_access_list_hash=hash1,  # Added missing block_access_list_hash
 )
 
 block = Block(

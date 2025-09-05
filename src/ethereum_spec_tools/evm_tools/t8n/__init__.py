@@ -285,14 +285,14 @@ class T8N(Load):
                 data=block_env.parent_beacon_block_root,
             )
 
-        bal_change_tracker = None
+        block_access_list_change_tracker = None
         if self.fork.is_after_fork("ethereum.amsterdam"):
-            bal_change_tracker = StateChangeTracker(
+            block_access_list_change_tracker = StateChangeTracker(
                 block_output.block_access_list_builder
             )
             # EIP-7928: Set transaction index for block access lists
             # pre-execution system contracts use index 0
-            set_transaction_index(bal_change_tracker, 0)
+            set_transaction_index(block_access_list_change_tracker, 0)
 
         for tx_index, (original_idx, tx) in enumerate(zip(
             self.txs.successfully_parsed, self.txs.transactions, strict=True,
@@ -307,14 +307,14 @@ class T8N(Load):
                 ]
 
                 if self.fork.is_after_fork("ethereum.amsterdam"):
-                    process_tx_args.append(bal_change_tracker)
+                    process_tx_args.append(block_access_list_change_tracker)
 
-                    assert bal_change_tracker is not None
+                    assert block_access_list_change_tracker is not None
                     # use 1...n for transaction indices
-                    set_transaction_index(bal_change_tracker, tx_index + 1)
+                    set_transaction_index(block_access_list_change_tracker, tx_index + 1)
                     self.fork.process_transaction(*process_tx_args)
                     finalize_transaction_changes(
-                        bal_change_tracker,
+                        block_access_list_change_tracker,
                         block_env.state,
                     )
                 else:
@@ -343,8 +343,8 @@ class T8N(Load):
             ]
 
             if self.fork.is_after_fork("ethereum.amsterdam"):
-                assert bal_change_tracker is not None
-                process_withdrawal_args.append(bal_change_tracker)
+                assert block_access_list_change_tracker is not None
+                process_withdrawal_args.append(block_access_list_change_tracker)
 
             self.fork.process_withdrawals(*process_withdrawal_args)
 
@@ -352,20 +352,20 @@ class T8N(Load):
             process_general_purpose_args = [block_env, block_output]
 
             if self.fork.is_after_fork("ethereum.amsterdam"):
-                assert bal_change_tracker is not None
-                process_general_purpose_args.append(bal_change_tracker)
+                assert block_access_list_change_tracker is not None
+                process_general_purpose_args.append(block_access_list_change_tracker)
 
             self.fork.process_general_purpose_requests(*process_general_purpose_args)
 
         if self.fork.is_after_fork("ethereum.amsterdam"):
-            assert bal_change_tracker is not None
+            assert block_access_list_change_tracker is not None
             num_transactions = len(
                 [tx for tx in self.txs.successfully_parsed if tx]
             )
 
             # post-execution use n + 1
             post_execution_index = num_transactions + 1
-            set_transaction_index(bal_change_tracker, post_execution_index)
+            set_transaction_index(block_access_list_change_tracker, post_execution_index)
 
     def run_blockchain_test(self) -> None:
         """

@@ -335,19 +335,19 @@ class Result:
                 compute_block_access_list_hash,
             )
 
-            bal = build(block_output.block_access_list_builder)
+            block_access_list = build(block_output.block_access_list_builder)
             self.block_access_list = (
-                bal  # Store the BAL object directly, not RLP
+                block_access_list  # Store the Block Access List object directly, not RLP
             )
-            self.block_access_list_hash = compute_block_access_list_hash(bal)
+            self.block_access_list_hash = compute_block_access_list_hash(block_access_list)
 
-    def _bal_to_json(self, bal: Any) -> Any:
+    def _block_access_list_to_json(self, block_access_list: Any) -> Any:
         """
         Convert BlockAccessList to JSON format matching the Pydantic models.
         """
         account_changes = []
 
-        for account in bal.account_changes:
+        for account in block_access_list.account_changes:
             account_data: Dict[str, Any] = {
                 "address": "0x" + account.address.hex()
             }
@@ -411,7 +411,7 @@ class Result:
 
             account_changes.append(account_data)
 
-        # Return the list directly per EIP-7928 - BAL IS the list
+        # Return the list directly per EIP-7928 - Block Access List IS the list
         return account_changes
 
     def json_encode_receipts(self) -> Any:
@@ -482,8 +482,8 @@ class Result:
             data["blockException"] = self.block_exception
 
         if self.block_access_list is not None:
-            # Convert BAL to JSON format
-            data["blockAccessList"] = self._bal_to_json(self.block_access_list)
+            # Convert Block Access List to JSON format
+            data["blockAccessList"] = self._block_access_list_to_json(self.block_access_list)
 
         if self.block_access_list_hash is not None:
             data["blockAccessListHash"] = encode_to_hex(

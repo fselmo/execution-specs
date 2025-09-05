@@ -508,8 +508,8 @@ whitelist
 AccountT
 uint
 
-bal
-BAL
+block_access_list
+BlockAccessList
 slot1
 slot2
 lexicographically

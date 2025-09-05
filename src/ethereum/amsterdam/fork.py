@@ -275,7 +275,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         raise InvalidBlock
     if requests_hash != block.header.requests_hash:
         raise InvalidBlock
-    if computed_block_access_list_hash != block.header.bal_hash:
+    if computed_block_access_list_hash != block.header.block_access_list_hash:
         raise InvalidBlock
 
     chain.blocks.append(block)
@@ -784,7 +784,7 @@ def apply_body(
     change_tracker = StateChangeTracker(block_output.block_access_list_builder)
 
     # Set system transaction index for pre-execution system contracts
-    # EIP-7928: System contracts use bal_index 0
+    # EIP-7928: System contracts use block_access_index 0
     set_transaction_index(change_tracker, 0)
 
     process_unchecked_system_transaction(
@@ -801,14 +801,14 @@ def apply_body(
         change_tracker=change_tracker,
     )
 
-    # EIP-7928: Transactions use bal_index 1 to len(transactions)
+    # EIP-7928: Transactions use block_access_index 1 to len(transactions)
     for i, tx in enumerate(map(decode_transaction, transactions)):
         set_transaction_index(change_tracker, i + 1)
         process_transaction(
             block_env, block_output, tx, Uint(i), change_tracker
         )
 
-    # EIP-7928: Post-execution uses bal_index len(transactions) + 1
+    # EIP-7928: Post-execution uses block_access_index len(transactions) + 1
     post_execution_index = len(transactions) + 1
     set_transaction_index(change_tracker, post_execution_index)
 
@@ -1071,7 +1071,7 @@ def process_withdrawals(
 
         modify_state(block_env.state, wd.address, increase_recipient_balance)
 
-        # Track balance change for BAL
+        # Track balance change for Block Access List
         # (withdrawals are tracked as system contract changes)
         new_balance = get_account(block_env.state, wd.address).balance
         track_balance_change(change_tracker, wd.address, U256(new_balance))

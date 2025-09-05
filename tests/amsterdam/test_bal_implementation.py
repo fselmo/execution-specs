@@ -1,7 +1,7 @@
 """
-Comprehensive tests for Block Access List (BAL) implementation in EIP-7928.
+Comprehensive tests for Block Access List implementation in EIP-7928.
 
-This module tests the complete BAL implementation including:
+This module tests the complete Block Access List implementation including:
 - Core functionality (tracking, building, validation)
 - State modifications and nonce tracking
 - Integration with VM instructions
@@ -40,16 +40,16 @@ from ethereum.amsterdam.rlp_types import (
 )
 
 
-class TestBALCore:
-    """Test core BAL functionality."""
+class TestBlockAccessListCore:
+    """Test core Block Access List functionality."
 
-    def test_bal_builder_initialization(self) -> None:
-        """Test BAL builder initializes correctly."""
+    def test_block_access_list_builder_initialization(self) -> None:
+        """Test Block Access List builder initializes correctly."
         builder = BlockAccessListBuilder()
         assert builder.accounts == {}
 
-    def test_bal_builder_add_storage_write(self) -> None:
-        """Test adding storage writes to BAL builder."""
+    def test_block_access_list_builder_add_storage_write(self) -> None:
+        """Test adding storage writes to Block Access List builder."
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
         slot = Bytes32(b"\x02" * 32)
@@ -65,8 +65,8 @@ class TestBALCore:
         assert change.block_access_index == 0
         assert change.new_value == value
 
-    def test_bal_builder_add_storage_read(self) -> None:
-        """Test adding storage reads to BAL builder."""
+    def test_block_access_list_builder_add_storage_read(self) -> None:
+        """Test adding storage reads to Block Access List builder."
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
         slot = Bytes32(b"\x02" * 32)
@@ -76,8 +76,8 @@ class TestBALCore:
         assert address in builder.accounts
         assert slot in builder.accounts[address].storage_reads
 
-    def test_bal_builder_add_balance_change(self) -> None:
-        """Test adding balance changes to BAL builder."""
+    def test_block_access_list_builder_add_balance_change(self) -> None:
+        """Test adding balance changes to Block Access List builder."
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
         balance = U256(0)
@@ -91,8 +91,8 @@ class TestBALCore:
         assert change.block_access_index == 0
         assert change.post_balance == balance
 
-    def test_bal_builder_add_nonce_change(self) -> None:
-        """Test adding nonce changes to BAL builder."""
+    def test_block_access_list_builder_add_nonce_change(self) -> None:
+        """Test adding nonce changes to Block Access List builder."
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
         nonce = 42
@@ -106,8 +106,8 @@ class TestBALCore:
         assert change.block_access_index == 0
         assert change.new_nonce == U64(42)
 
-    def test_bal_builder_add_code_change(self) -> None:
-        """Test adding code changes to BAL builder."""
+    def test_block_access_list_builder_add_code_change(self) -> None:
+        """Test adding code changes to Block Access List builder."
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
         code = Bytes(b"\x60\x80\x60\x40")
@@ -121,7 +121,7 @@ class TestBALCore:
         assert change.block_access_index == 0
         assert change.new_code == code
 
-    def test_bal_builder_touched_account(self) -> None:
+    def test_block_access_list_builder_touched_account(self) -> None:
         """Test adding touched accounts without changes."""
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
@@ -135,7 +135,7 @@ class TestBALCore:
         assert builder.accounts[address].nonce_changes == []
         assert builder.accounts[address].code_changes == []
 
-    def test_bal_builder_build_complete(self) -> None:
+    def test_block_access_list_builder_build_complete(self) -> None:
         """Test building a complete BlockAccessList."""
         builder = BlockAccessListBuilder()
 
@@ -159,7 +159,7 @@ class TestBALCore:
         # Address 2: only touched
         add_touched_account(builder, address2)
 
-        # Build BAL
+        # Build Block Access List
         block_access_list = build(builder)
 
         assert isinstance(block_access_list, BlockAccessList)
@@ -183,11 +183,11 @@ class TestBALCore:
         assert len(acc2.balance_changes) == 0
 
 
-class TestBALTracker:
-    """Test BAL state change tracker functionality."""
+class TestBlockAccessListTracker:
+    """Test Block Access List state change tracker functionality."
 
     def test_tracker_initialization(self) -> None:
-        """Test tracker initializes with BAL builder."""
+        """Test tracker initializes with Block Access List builder."
         builder = BlockAccessListBuilder()
         tracker = StateChangeTracker(builder)
         assert tracker.block_access_list_builder is builder
@@ -337,8 +337,8 @@ class TestBALTracker:
         assert change.new_code == new_code
 
 
-class TestBALIntegration:
-    """Test BAL integration with block execution."""
+class TestBlockAccessListIntegration:
+    """Test Block Access List integration with block execution."
 
     def test_system_contract_indices(self) -> None:
         """Test that system contracts use block_access_index 0."""
@@ -418,7 +418,7 @@ class TestBALIntegration:
                 )
 
     def test_mixed_indices_ordering(self) -> None:
-        """Test that mixed indices are properly ordered in the BAL."""
+        """Test that mixed indices are properly ordered in the Block Access List."
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
 
@@ -452,7 +452,7 @@ class TestBALIntegration:
 
 
 class TestRLPEncoding:
-    """Test RLP encoding of BAL structures."""
+    """Test RLP encoding of Block Access List structures."
 
     def test_rlp_encoding_import(self) -> None:
         """Test that RLP encoding utilities can be imported."""
@@ -464,8 +464,8 @@ class TestRLPEncoding:
         assert rlp_encode_block_access_list is not None
         assert compute_block_access_list_hash is not None
 
-    def test_rlp_encode_simple_bal(self) -> None:
-        """Test RLP encoding of a simple BAL."""
+    def test_rlp_encode_simple_block_access_list(self) -> None:
+        """Test RLP encoding of a simple Block Access List."
         from ethereum.amsterdam.block_access_lists import (
             rlp_encode_block_access_list,
         )
@@ -482,8 +482,8 @@ class TestRLPEncoding:
         assert isinstance(encoded, (bytes, Bytes))
         assert len(encoded) > 0
 
-    def test_bal_hash_computation(self) -> None:
-        """Test BAL hash computation using RLP."""
+    def test_block_access_list_hash_computation(self) -> None:
+        """Test Block Access List hash computation using RLP."
         from ethereum.amsterdam.block_access_lists import (
             compute_block_access_list_hash,
         )
@@ -505,12 +505,12 @@ class TestRLPEncoding:
         # Should produce a 32-byte hash
         assert len(hash_val) == 32
 
-        # Same BAL should produce same hash
+        # Same Block Access List should produce same hash
         hash_val2 = compute_block_access_list_hash(block_access_list)
         assert hash_val == hash_val2
 
-    def test_rlp_encode_complex_bal(self) -> None:
-        """Test RLP encoding of a complex BAL with multiple change types."""
+    def test_rlp_encode_complex_block_access_list(self) -> None:
+        """Test RLP encoding of a complex Block Access List with multiple change types."
         from ethereum.amsterdam.block_access_lists import (
             rlp_encode_block_access_list,
         )
@@ -546,8 +546,8 @@ class TestRLPEncoding:
 class TestEdgeCases:
     """Test edge cases and error handling."""
 
-    def test_empty_bal(self) -> None:
-        """Test building an empty BAL."""
+    def test_empty_block_access_list(self) -> None:
+        """Test building an empty Block Access List."
         builder = BlockAccessListBuilder()
         block_access_list = build(builder)
 
@@ -590,7 +590,7 @@ class TestEdgeCases:
         assert MAX_CODE_CHANGES == 1
 
     def test_address_sorting(self) -> None:
-        """Test that addresses are sorted lexicographically in BAL."""
+        """Test that addresses are sorted lexicographically in Block Access List.""
         builder = BlockAccessListBuilder()
 
         # Add addresses in reverse order
