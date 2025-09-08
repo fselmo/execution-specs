@@ -345,8 +345,8 @@ class TestBALIntegration:
         builder = BlockAccessListBuilder()
 
         # Simulate pre-execution system contract changes
-        beacon_roots_addr = Bytes20(b"\x00" * 19 + b"\x02")
-        history_addr = Bytes20(b"\x00" * 19 + b"\x35")
+        beacon_roots_addr = Bytes20(bytes.fromhex("000F3df6D732807Ef1319fB7B8bB8522d0Beac02"))
+        history_addr = Bytes20(bytes.fromhex("0000F90827F1C53a10cb7A02335B175320002935"))
 
         # These should use index 0
         add_storage_write(
