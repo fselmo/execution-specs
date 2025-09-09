@@ -125,6 +125,25 @@ class ForkLoad:
         return self._module("transactions").signing_hash_155
 
     @property
+    def build(self) -> Any:
+        """build function of the fork"""
+        return self._module("block_access_lists").build
+
+    @property
+    def compute_block_access_list_hash(self) -> Any:
+        """compute_block_access_list_hash function of the fork"""
+        return (
+            self._module("block_access_lists").compute_block_access_list_hash
+        )
+
+    @property
+    def set_transaction_index(self) -> Any:
+        """set_transaction_index function of the fork"""
+        return (
+            self._module("block_access_lists").set_transaction_index
+        )
+
+    @property
     def signing_hash_2930(self) -> Any:
         """signing_hash_2930 function of the fork"""
         return self._module("transactions").signing_hash_2930
