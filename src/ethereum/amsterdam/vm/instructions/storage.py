@@ -13,6 +13,10 @@ Implementations of the EVM storage related instructions.
 """
 from ethereum_types.numeric import Uint
 
+from ...block_access_lists.tracker import (
+    track_storage_read,
+    track_storage_write,
+)
 from ...state import (
     get_storage,
     get_storage_original,
@@ -56,19 +60,17 @@ def sload(evm: Evm) -> None:
         charge_gas(evm, GAS_COLD_SLOAD)
 
     # OPERATION
+    state = evm.message.block_env.state
     value = get_storage(
-        evm.message.block_env.state, evm.message.current_target, key
+        state, evm.message.current_target, key
     )
 
-    if evm.message.change_tracker:
-        from ...block_access_lists.tracker import track_storage_read
-
-        track_storage_read(
-            evm.message.change_tracker,
-            evm.message.current_target,
-            key,
-            evm.message.block_env.state,
-        )
+    track_storage_read(
+        state.change_tracker,
+        evm.message.current_target,
+        key,
+        evm.message.block_env.state,
+    )
 
     push(evm.stack, value)
 
@@ -139,16 +141,14 @@ def sstore(evm: Evm) -> None:
 
     # Track storage write BEFORE modifying state
     # so we capture the correct pre-value
-    if evm.message.change_tracker:
-        from ...block_access_lists.tracker import track_storage_write
 
-        track_storage_write(
-            evm.message.change_tracker,
-            evm.message.current_target,
-            key,
-            new_value,
-            state,
-        )
+    track_storage_write(
+        state.change_tracker,
+        evm.message.current_target,
+        key,
+        new_value,
+        state,
+    )
 
     # Now modify the storage
     set_storage(state, evm.message.current_target, key, new_value)

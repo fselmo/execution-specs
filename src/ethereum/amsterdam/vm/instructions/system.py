@@ -17,6 +17,7 @@ from ethereum_types.numeric import U256, Uint
 
 from ethereum.utils.numeric import ceil32
 
+from ...block_access_lists.tracker import track_address_access
 from ...fork_types import Address
 from ...state import (
     account_has_code_or_nonce,
@@ -77,6 +78,7 @@ def generic_create(
         STACK_DEPTH_LIMIT,
         process_create_message,
     )
+    state = evm.message.block_env.state
 
     call_data = memory_read_bytes(
         evm.memory, memory_start_position, memory_size
@@ -91,7 +93,7 @@ def generic_create(
     evm.return_data = b""
 
     sender_address = evm.message.current_target
-    sender = get_account(evm.message.block_env.state, sender_address)
+    sender = get_account(state, sender_address)
 
     if (
         sender.balance < endowment
@@ -105,20 +107,18 @@ def generic_create(
     evm.accessed_addresses.add(contract_address)
 
     if account_has_code_or_nonce(
-        evm.message.block_env.state, contract_address
-    ) or account_has_storage(evm.message.block_env.state, contract_address):
+        state, contract_address
+    ) or account_has_storage(state, contract_address):
         increment_nonce(
-            evm.message.block_env.state,
+            state,
             evm.message.current_target,
-            evm.message.change_tracker,
         )
         push(evm.stack, U256(0))
         return
 
     increment_nonce(
-        evm.message.block_env.state,
+        state,
         evm.message.current_target,
-        evm.message.change_tracker,
     )
 
     child_message = Message(
@@ -139,13 +139,9 @@ def generic_create(
         accessed_storage_keys=evm.accessed_storage_keys.copy(),
         disable_precompiles=False,
         parent_evm=evm,
-        change_tracker=evm.message.change_tracker,
     )
 
-    if evm.message.change_tracker:
-        from ...block_access_lists.tracker import track_address_access
-
-        track_address_access(evm.message.change_tracker, contract_address)
+    track_address_access(state.change_tracker, contract_address)
 
     child_evm = process_create_message(child_message)
 
@@ -336,13 +332,9 @@ def generic_call(
         accessed_storage_keys=evm.accessed_storage_keys.copy(),
         disable_precompiles=disable_precompiles,
         parent_evm=evm,
-        change_tracker=evm.message.change_tracker,
     )
 
-    if evm.message.change_tracker:
-        from ...block_access_lists.tracker import track_address_access
-
-        track_address_access(evm.message.change_tracker, to)
+    track_address_access(evm.message.block_env.state.change_tracker, to)
 
     child_evm = process_message(child_message)
 
@@ -574,7 +566,6 @@ def selfdestruct(evm: Evm) -> None:
         originator,
         beneficiary,
         originator_balance,
-        evm.message.change_tracker,
     )
 
     # register account for deletion only if it was created
@@ -586,7 +577,6 @@ def selfdestruct(evm: Evm) -> None:
             evm.message.block_env.state,
             originator,
             U256(0),
-            evm.message.change_tracker,
         )
         evm.accounts_to_delete.add(originator)
 

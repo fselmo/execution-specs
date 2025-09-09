@@ -64,7 +64,7 @@ class StateChangeTracker:
     from the beginning of the current transaction.
     """
 
-    current_block_access_index: int = 0
+    current_block_access_index: Uint = Uint(0)
     """
     The current block access index (0 for pre-execution,
     1..n for transactions, n+1 for post-execution).
@@ -72,7 +72,7 @@ class StateChangeTracker:
 
 
 def set_transaction_index(
-    tracker: StateChangeTracker, block_access_index: int
+    tracker: StateChangeTracker, block_access_index: Uint
 ) -> None:
     """
     Set the current block access index for tracking changes.
