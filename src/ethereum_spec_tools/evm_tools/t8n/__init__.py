@@ -271,20 +271,6 @@ class T8N(Load):
         self.result.rejected = self.txs.rejected_txs
 
     def _run_blockchain_test(self, block_env: Any, block_output: Any) -> None:
-        if self.fork.is_after_fork("ethereum.prague"):
-            self.fork.process_unchecked_system_transaction(
-                block_env=block_env,
-                target_address=self.fork.HISTORY_STORAGE_ADDRESS,
-                data=block_env.block_hashes[-1],  # The parent hash
-            )
-
-        if self.fork.is_after_fork("ethereum.cancun"):
-            self.fork.process_unchecked_system_transaction(
-                block_env=block_env,
-                target_address=self.fork.BEACON_ROOTS_ADDRESS,
-                data=block_env.parent_beacon_block_root,
-            )
-
         block_access_list_change_tracker = None
         if self.fork.is_after_fork("ethereum.amsterdam"):
             block_access_list_change_tracker = StateChangeTracker(
@@ -293,6 +279,26 @@ class T8N(Load):
             # EIP-7928: Set transaction index for block access lists
             # pre-execution system contracts use index 0
             set_transaction_index(block_access_list_change_tracker, 0)
+
+        if self.fork.is_after_fork("ethereum.prague"):
+            process_args = {
+                "block_env": block_env,
+                "target_address": self.fork.HISTORY_STORAGE_ADDRESS,
+                "data": block_env.block_hashes[-1],  # The parent hash
+            }
+            if self.fork.is_after_fork("ethereum.amsterdam"):
+                process_args["change_tracker"] = block_access_list_change_tracker
+            self.fork.process_unchecked_system_transaction(**process_args)
+
+        if self.fork.is_after_fork("ethereum.cancun"):
+            process_args = {
+                "block_env": block_env,
+                "target_address": self.fork.BEACON_ROOTS_ADDRESS,
+                "data": block_env.parent_beacon_block_root,
+            }
+            if self.fork.is_after_fork("ethereum.amsterdam"):
+                process_args["change_tracker"] = block_access_list_change_tracker
+            self.fork.process_unchecked_system_transaction(**process_args)
 
         for tx_index, (original_idx, tx) in enumerate(zip(
             self.txs.successfully_parsed, self.txs.transactions, strict=True,
