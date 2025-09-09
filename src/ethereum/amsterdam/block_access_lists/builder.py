@@ -344,7 +344,9 @@ def add_touched_account(
     ensure_account(builder, address)
 
 
-def build(builder: BlockAccessListBuilder) -> BlockAccessList:
+def build_block_access_list(
+    builder: BlockAccessListBuilder
+) -> BlockAccessList:
     """
     Build the final [`BlockAccessList`] from accumulated changes.
 

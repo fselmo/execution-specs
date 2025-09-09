@@ -23,7 +23,7 @@ from ethereum.amsterdam.block_access_lists import (
     add_storage_read,
     add_storage_write,
     add_touched_account,
-    build,
+    build_block_access_list,
 )
 from ethereum.amsterdam.block_access_lists.tracker import (
     capture_pre_state,
@@ -160,7 +160,7 @@ class TestBALCore:
         add_touched_account(builder, address2)
 
         # Build BAL
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         assert isinstance(block_access_list, BlockAccessList)
         assert len(block_access_list.account_changes) == 2
@@ -364,7 +364,7 @@ class TestBALIntegration:
             Bytes32(b"\x02" * 32),
         )
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         for account in block_access_list.account_changes:
             if account.address in [beacon_roots_addr, history_addr]:
@@ -384,7 +384,7 @@ class TestBALIntegration:
                 builder, address, BlockAccessIndex(tx_num), U256(0)
             )
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         assert len(block_access_list.account_changes) == 3
         for i, account in enumerate(block_access_list.account_changes):
@@ -407,7 +407,7 @@ class TestBALIntegration:
             U256(0),
         )
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         for account in block_access_list.account_changes:
             if account.address == withdrawal_addr:
@@ -434,7 +434,7 @@ class TestBALIntegration:
         )
         add_balance_change(builder, address, BlockAccessIndex(0), U256(0))
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         assert len(block_access_list.account_changes) == 1
         account = block_access_list.account_changes[0]
@@ -475,7 +475,7 @@ class TestRLPEncoding:
 
         add_balance_change(builder, address, BlockAccessIndex(1), U256(0))
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
         encoded = rlp_encode_block_access_list(block_access_list)
 
         # Should produce valid RLP bytes
@@ -499,7 +499,7 @@ class TestRLPEncoding:
             Bytes32(b"\x03" * 32),
         )
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
         hash_val = compute_block_access_list_hash(block_access_list)
 
         # Should produce a 32-byte hash
@@ -535,7 +535,7 @@ class TestRLPEncoding:
             builder, address, BlockAccessIndex(2), Bytes(b"\x60\x80")
         )
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
         encoded = rlp_encode_block_access_list(block_access_list)
 
         # Should produce valid RLP bytes
@@ -549,7 +549,7 @@ class TestEdgeCases:
     def test_empty_bal(self) -> None:
         """Test building an empty BAL."""
         builder = BlockAccessListBuilder()
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         assert isinstance(block_access_list, BlockAccessList)
         assert len(block_access_list.account_changes) == 0
@@ -571,7 +571,7 @@ class TestEdgeCases:
             builder, address, slot, BlockAccessIndex(2), Bytes32(b"\x02" * 32)
         )
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         assert len(block_access_list.account_changes) == 1
         account = block_access_list.account_changes[0]
@@ -604,7 +604,7 @@ class TestEdgeCases:
         for addr in addresses:
             add_touched_account(builder, addr)
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         # Should be sorted lexicographically
         sorted_addresses = sorted(addresses)

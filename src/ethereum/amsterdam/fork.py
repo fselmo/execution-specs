@@ -30,7 +30,7 @@ from ethereum.exceptions import (
 )
 
 from . import vm
-from .block_access_lists.builder import build
+from .block_access_lists.builder import build_block_access_list
 from .block_access_lists.rlp_utils import compute_block_access_list_hash
 from .block_access_lists.tracker import (
     set_transaction_index,
@@ -797,7 +797,7 @@ def apply_body(
         block_env=block_env,
         block_output=block_output,
     )
-    block_output.block_access_list = build(
+    block_output.block_access_list = build_block_access_list(
         block_env.state.change_tracker.block_access_list_builder
     )
 
