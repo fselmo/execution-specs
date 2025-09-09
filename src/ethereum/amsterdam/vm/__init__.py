@@ -22,9 +22,9 @@ from ethereum_types.numeric import U64, U256, Uint
 from ethereum.crypto.hash import Hash32
 from ethereum.exceptions import EthereumException
 
-from ..block_access_lists.builder import BlockAccessList
 from ..blocks import Log, Receipt, Withdrawal
 from ..fork_types import Address, Authorization, VersionedHash
+from ..rlp_types import BlockAccessList
 from ..state import State, TransientStorage
 from ..transactions import LegacyTransaction
 from ..trie import Trie
