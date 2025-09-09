@@ -3,9 +3,9 @@ from ethereum_rlp import rlp
 from ethereum_types.bytes import Bytes, Bytes0, Bytes8, Bytes32
 from ethereum_types.numeric import U64, U256, Uint
 
-from ethereum.amsterdam.blocks import Block, Header, Log, Receipt, Withdrawal
-from ethereum.amsterdam.rlp_types import BlockAccessList
-from ethereum.amsterdam.transactions import (
+from ethereum.forks.amsterdam.blocks import Block, Header, Log, Receipt, Withdrawal
+from ethereum.forks.amsterdam.rlp_types import BlockAccessList
+from ethereum.forks.amsterdam.transactions import (
     Access,
     AccessListTransaction,
     FeeMarketTransaction,
@@ -14,7 +14,7 @@ from ethereum.amsterdam.transactions import (
     decode_transaction,
     encode_transaction,
 )
-from ethereum.amsterdam.utils.hexadecimal import hex_to_address
+from ethereum.forks.amsterdam.utils.hexadecimal import hex_to_address
 from ethereum.crypto.hash import keccak256
 from ethereum.utils.hexadecimal import hex_to_bytes256
 

@@ -13,7 +13,7 @@ The builder follows a two-phase approach:
 2. **Build Phase**: After block execution, the accumulated data is sorted
    and encoded into the final deterministic format.
 
-[`BlockAccessList`]: ref:ethereum.amsterdam.rlp_types.BlockAccessList
+[`BlockAccessList`]: ref:ethereum.forks.amsterdam.block_access_lists.rlp_types.BlockAccessList  # noqa: E501
 """
 
 from dataclasses import dataclass, field
@@ -86,7 +86,7 @@ class BlockAccessListBuilder:
     by address, field type, and transaction index to enable efficient
     reconstruction of state changes.
 
-    [`BlockAccessList`]: ref:ethereum.amsterdam.rlp_types.BlockAccessList
+    [`BlockAccessList`]: ref:ethereum.forks.amsterdam.block_access_lists.rlp_types.BlockAccessList  # noqa: E501
     """
 
     accounts: Dict[Address, AccountData] = field(default_factory=dict)
@@ -111,7 +111,7 @@ def ensure_account(builder: BlockAccessListBuilder, address: Address) -> None:
         The account address to ensure exists.
 
     [`AccountData`] :
-        ref:ethereum.amsterdam.block_access_lists.builder.AccountData
+        ref:ethereum.forks.amsterdam.block_access_lists.builder.AccountData
     """
     if address not in builder.accounts:
         builder.accounts[address] = AccountData()
@@ -255,8 +255,8 @@ def add_nonce_change(
     new_nonce :
         The new nonce value after the change.
 
-    [`CREATE`]: ref:ethereum.amsterdam.vm.instructions.system.create
-    [`CREATE2`]: ref:ethereum.amsterdam.vm.instructions.system.create2
+    [`CREATE`]: ref:ethereum.forks.amsterdam.vm.instructions.system.create
+    [`CREATE2`]: ref:ethereum.forks.amsterdam.vm.instructions.system.create2
     """
     ensure_account(builder, address)
 
@@ -303,8 +303,8 @@ def add_code_change(
     new_code :
         The deployed contract bytecode.
 
-    [`CREATE`]: ref:ethereum.amsterdam.vm.instructions.system.create
-    [`CREATE2`]: ref:ethereum.amsterdam.vm.instructions.system.create2
+    [`CREATE`]: ref:ethereum.forks.amsterdam.vm.instructions.system.create
+    [`CREATE2`]: ref:ethereum.forks.amsterdam.vm.instructions.system.create2
     """
     ensure_account(builder, address)
 
@@ -333,18 +333,20 @@ def add_touched_account(
         The account address that was accessed.
 
     [`EXTCODEHASH`] :
-        ref:ethereum.amsterdam.vm.instructions.environment.extcodehash
+        ref:ethereum.forks.amsterdam.vm.instructions.environment.extcodehash
     [`BALANCE`] :
-        ref:ethereum.amsterdam.vm.instructions.environment.balance
+        ref:ethereum.forks.amsterdam.vm.instructions.environment.balance
     [`EXTCODESIZE`] :
-        ref:ethereum.amsterdam.vm.instructions.environment.extcodesize
+        ref:ethereum.forks.amsterdam.vm.instructions.environment.extcodesize
     [`EXTCODECOPY`] :
-        ref:ethereum.amsterdam.vm.instructions.environment.extcodecopy
+        ref:ethereum.forks.amsterdam.vm.instructions.environment.extcodecopy
     """
     ensure_account(builder, address)
 
 
-def build(builder: BlockAccessListBuilder) -> BlockAccessList:
+def build_block_access_list(
+    builder: BlockAccessListBuilder
+) -> BlockAccessList:
     """
     Build the final [`BlockAccessList`] from accumulated changes.
 
@@ -366,7 +368,7 @@ def build(builder: BlockAccessListBuilder) -> BlockAccessList:
     block_access_list :
         The final sorted and encoded block access list.
 
-    [`BlockAccessList`]: ref:ethereum.amsterdam.rlp_types.BlockAccessList
+    [`BlockAccessList`]: ref:ethereum.forks.amsterdam.block_access_lists.rlp_types.BlockAccessList  # noqa: E501
     """
     account_changes_list = []
 

@@ -14,7 +14,7 @@ import pytest
 from ethereum_types.bytes import Bytes, Bytes20, Bytes32
 from ethereum_types.numeric import U64, U256, Uint
 
-from ethereum.amsterdam.block_access_lists import (
+from ethereum.forks.amsterdam.block_access_lists import (
     BlockAccessListBuilder,
     StateChangeTracker,
     add_balance_change,
@@ -23,9 +23,9 @@ from ethereum.amsterdam.block_access_lists import (
     add_storage_read,
     add_storage_write,
     add_touched_account,
-    build,
+    build_block_access_list,
 )
-from ethereum.amsterdam.block_access_lists.tracker import (
+from ethereum.forks.amsterdam.block_access_lists.tracker import (
     capture_pre_state,
     set_transaction_index,
     track_balance_change,
@@ -33,7 +33,7 @@ from ethereum.amsterdam.block_access_lists.tracker import (
     track_nonce_change,
     track_storage_write,
 )
-from ethereum.amsterdam.rlp_types import (
+from ethereum.forks.amsterdam.rlp_types import (
     MAX_CODE_CHANGES,
     BlockAccessIndex,
     BlockAccessList,
@@ -160,7 +160,7 @@ class TestBALCore:
         add_touched_account(builder, address2)
 
         # Build BAL
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         assert isinstance(block_access_list, BlockAccessList)
         assert len(block_access_list.account_changes) == 2
@@ -204,7 +204,7 @@ class TestBALTracker:
         # Pre-storage cache should persist across transactions
         assert tracker.pre_storage_cache == {}
 
-    @patch("ethereum.amsterdam.state.get_storage")
+    @patch("ethereum.forks.amsterdam.state.get_storage")
     def test_tracker_capture_pre_state(
         self, mock_get_storage: MagicMock
     ) -> None:
@@ -230,7 +230,7 @@ class TestBALTracker:
         assert value2 == expected_value
         mock_get_storage.assert_not_called()
 
-    @patch("ethereum.amsterdam.block_access_lists.tracker.capture_pre_state")
+    @patch("ethereum.forks.amsterdam.block_access_lists.tracker.capture_pre_state")
     def test_tracker_storage_write_actual_change(
         self, mock_capture: MagicMock
     ) -> None:
@@ -258,7 +258,7 @@ class TestBALTracker:
         assert change.block_access_index == 1
         assert change.new_value == new_value.to_be_bytes32()
 
-    @patch("ethereum.amsterdam.block_access_lists.tracker.capture_pre_state")
+    @patch("ethereum.forks.amsterdam.block_access_lists.tracker.capture_pre_state")
     def test_tracker_storage_write_no_change(
         self, mock_capture: MagicMock
     ) -> None:
@@ -364,7 +364,7 @@ class TestBALIntegration:
             Bytes32(b"\x02" * 32),
         )
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         for account in block_access_list.account_changes:
             if account.address in [beacon_roots_addr, history_addr]:
@@ -384,7 +384,7 @@ class TestBALIntegration:
                 builder, address, BlockAccessIndex(tx_num), U256(0)
             )
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         assert len(block_access_list.account_changes) == 3
         for i, account in enumerate(block_access_list.account_changes):
@@ -407,7 +407,7 @@ class TestBALIntegration:
             U256(0),
         )
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         for account in block_access_list.account_changes:
             if account.address == withdrawal_addr:
@@ -434,7 +434,7 @@ class TestBALIntegration:
         )
         add_balance_change(builder, address, BlockAccessIndex(0), U256(0))
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         assert len(block_access_list.account_changes) == 1
         account = block_access_list.account_changes[0]
@@ -456,7 +456,7 @@ class TestRLPEncoding:
 
     def test_rlp_encoding_import(self) -> None:
         """Test that RLP encoding utilities can be imported."""
-        from ethereum.amsterdam.block_access_lists import (
+        from ethereum.forks.amsterdam.block_access_lists import (
             compute_block_access_list_hash,
             rlp_encode_block_access_list,
         )
@@ -466,7 +466,7 @@ class TestRLPEncoding:
 
     def test_rlp_encode_simple_bal(self) -> None:
         """Test RLP encoding of a simple BAL."""
-        from ethereum.amsterdam.block_access_lists import (
+        from ethereum.forks.amsterdam.block_access_lists import (
             rlp_encode_block_access_list,
         )
 
@@ -475,7 +475,7 @@ class TestRLPEncoding:
 
         add_balance_change(builder, address, BlockAccessIndex(1), U256(0))
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
         encoded = rlp_encode_block_access_list(block_access_list)
 
         # Should produce valid RLP bytes
@@ -484,7 +484,7 @@ class TestRLPEncoding:
 
     def test_bal_hash_computation(self) -> None:
         """Test BAL hash computation using RLP."""
-        from ethereum.amsterdam.block_access_lists import (
+        from ethereum.forks.amsterdam.block_access_lists import (
             compute_block_access_list_hash,
         )
 
@@ -499,7 +499,7 @@ class TestRLPEncoding:
             Bytes32(b"\x03" * 32),
         )
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
         hash_val = compute_block_access_list_hash(block_access_list)
 
         # Should produce a 32-byte hash
@@ -511,7 +511,7 @@ class TestRLPEncoding:
 
     def test_rlp_encode_complex_bal(self) -> None:
         """Test RLP encoding of a complex BAL with multiple change types."""
-        from ethereum.amsterdam.block_access_lists import (
+        from ethereum.forks.amsterdam.block_access_lists import (
             rlp_encode_block_access_list,
         )
 
@@ -535,7 +535,7 @@ class TestRLPEncoding:
             builder, address, BlockAccessIndex(2), Bytes(b"\x60\x80")
         )
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
         encoded = rlp_encode_block_access_list(block_access_list)
 
         # Should produce valid RLP bytes
@@ -549,7 +549,7 @@ class TestEdgeCases:
     def test_empty_bal(self) -> None:
         """Test building an empty BAL."""
         builder = BlockAccessListBuilder()
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         assert isinstance(block_access_list, BlockAccessList)
         assert len(block_access_list.account_changes) == 0
@@ -571,7 +571,7 @@ class TestEdgeCases:
             builder, address, slot, BlockAccessIndex(2), Bytes32(b"\x02" * 32)
         )
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         assert len(block_access_list.account_changes) == 1
         account = block_access_list.account_changes[0]
@@ -604,7 +604,7 @@ class TestEdgeCases:
         for addr in addresses:
             add_touched_account(builder, addr)
 
-        block_access_list = build(builder)
+        block_access_list = build_block_access_list(builder)
 
         # Should be sorted lexicographically
         sorted_addresses = sorted(addresses)
