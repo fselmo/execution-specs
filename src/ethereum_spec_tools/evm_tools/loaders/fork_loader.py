@@ -127,7 +127,7 @@ class ForkLoad:
     @property
     def build(self) -> Any:
         """build function of the fork"""
-        return self._module("block_access_lists").build
+        return self._module("block_access_lists").build_block_access_list
 
     @property
     def compute_block_access_list_hash(self) -> Any:

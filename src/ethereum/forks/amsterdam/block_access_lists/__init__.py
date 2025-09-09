@@ -10,7 +10,7 @@ from .builder import (
     add_storage_read,
     add_storage_write,
     add_touched_account,
-    build,
+    build_block_access_list,
 )
 from .rlp_utils import (
     compute_block_access_list_hash,
@@ -37,7 +37,7 @@ __all__ = [
     "add_storage_read",
     "add_storage_write",
     "add_touched_account",
-    "build",
+    "build_block_access_list",
     "compute_block_access_list_hash",
     "set_transaction_index",
     "rlp_encode_block_access_list",

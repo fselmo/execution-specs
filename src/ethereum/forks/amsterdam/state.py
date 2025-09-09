@@ -435,6 +435,33 @@ def account_has_storage(state: State, address: Address) -> bool:
     return address in state._storage_tries
 
 
+def account_exists_and_is_empty(state: State, address: Address) -> bool:
+    """
+    Checks if an account exists and has zero nonce, empty code and zero
+    balance.
+
+    Parameters
+    ----------
+    state:
+        The state
+    address:
+        Address of the account that needs to be checked.
+
+    Returns
+    -------
+    exists_and_is_empty : `bool`
+        True if an account exists and has zero nonce, empty code and zero
+        balance, False otherwise.
+    """
+    account = get_account_optional(state, address)
+    return (
+        account is not None
+        and account.nonce == Uint(0)
+        and account.code == b""
+        and account.balance == 0
+    )
+
+
 def is_account_alive(state: State, address: Address) -> bool:
     """
     Check whether an account is both in the state and non-empty.
@@ -459,20 +486,10 @@ def modify_state(
     state: State, address: Address, f: Callable[[Account], None]
 ) -> None:
     """
-    Modify an `Account` in the `State`. If, after modification, the account
-    exists and has zero nonce, empty code, and zero balance, it is destroyed.
+    Modify an `Account` in the `State`.
     """
     set_account(state, address, modify(get_account(state, address), f))
-
-    account = get_account_optional(state, address)
-    account_exists_and_is_empty = (
-        account is not None
-        and account.nonce == Uint(0)
-        and account.code == b""
-        and account.balance == 0
-    )
-
-    if account_exists_and_is_empty:
+    if account_exists_and_is_empty(state, address):
         destroy_account(state, address)
 
 
@@ -506,6 +523,7 @@ def move_ether(
     track_balance_change(
         state.change_tracker, recipient_address, U256(recipient_new_balance)
     )
+
 
 def set_account_balance(state: State, address: Address, amount: U256) -> None:
     """

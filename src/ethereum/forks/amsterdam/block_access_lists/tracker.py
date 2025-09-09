@@ -49,7 +49,7 @@ class StateChangeTracker:
     are recorded in the access list.
 
     [`BlockAccessListBuilder`]:
-    ref:ethereum.amsterdam.block_access_lists.builder.BlockAccessListBuilder
+    ref:ethereum.forks.amsterdam.block_access_lists.builder.BlockAccessListBuilder
     """
 
     block_access_list_builder: BlockAccessListBuilder
@@ -278,8 +278,8 @@ def track_nonce_change(
     state :
         The current execution state.
 
-    [`CREATE`]: ref:ethereum.amsterdam.vm.instructions.system.create
-    [`CREATE2`]: ref:ethereum.amsterdam.vm.instructions.system.create2
+    [`CREATE`]: ref:ethereum.forks.amsterdam.vm.instructions.system.create
+    [`CREATE2`]: ref:ethereum.forks.amsterdam.vm.instructions.system.create2
     """
     track_address_access(tracker, address)
     add_nonce_change(
@@ -309,8 +309,8 @@ def track_code_change(
     new_code :
         The deployed contract bytecode.
 
-    [`CREATE`]: ref:ethereum.amsterdam.vm.instructions.system.create
-    [`CREATE2`]: ref:ethereum.amsterdam.vm.instructions.system.create2
+    [`CREATE`]: ref:ethereum.forks.amsterdam.vm.instructions.system.create
+    [`CREATE2`]: ref:ethereum.forks.amsterdam.vm.instructions.system.create2
     """
     track_address_access(tracker, address)
     add_code_change(
@@ -327,7 +327,7 @@ def finalize_transaction_changes(
     """
     Finalize changes for the current transaction.
 
-    This method is called at the end of each transaction execution. Currently
+    This method is called at the end of each transaction execution. Currently,
     a no-op as all tracking is done incrementally during execution, but
     provided for future extensibility.
 

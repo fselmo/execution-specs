@@ -17,6 +17,7 @@ from ethereum_types.numeric import U256, Uint
 
 from ethereum.utils.numeric import ceil32
 
+from ...block_access_lists.tracker import track_address_access
 from ...fork_types import Address
 from ...state import (
     account_has_code_or_nonce,
@@ -77,6 +78,7 @@ def generic_create(
         STACK_DEPTH_LIMIT,
         process_create_message,
     )
+    state = evm.message.block_env.state
 
     call_data = memory_read_bytes(
         evm.memory, memory_start_position, memory_size
@@ -91,7 +93,7 @@ def generic_create(
     evm.return_data = b""
 
     sender_address = evm.message.current_target
-    sender = get_account(evm.message.block_env.state, sender_address)
+    sender = get_account(state, sender_address)
 
     if (
         sender.balance < endowment
@@ -105,15 +107,19 @@ def generic_create(
     evm.accessed_addresses.add(contract_address)
 
     if account_has_code_or_nonce(
-        evm.message.block_env.state, contract_address
-    ) or account_has_storage(evm.message.block_env.state, contract_address):
+        state, contract_address
+    ) or account_has_storage(state, contract_address):
         increment_nonce(
-            evm.message.block_env.state, evm.message.current_target
+            state,
+            evm.message.current_target,
         )
         push(evm.stack, U256(0))
         return
 
-    increment_nonce(evm.message.block_env.state, evm.message.current_target)
+    increment_nonce(
+        state,
+        evm.message.current_target,
+    )
 
     child_message = Message(
         block_env=evm.message.block_env,
@@ -134,6 +140,9 @@ def generic_create(
         disable_precompiles=False,
         parent_evm=evm,
     )
+
+    track_address_access(state.change_tracker, contract_address)
+
     child_evm = process_create_message(child_message)
 
     if child_evm.error:
@@ -324,6 +333,9 @@ def generic_call(
         disable_precompiles=disable_precompiles,
         parent_evm=evm,
     )
+
+    track_address_access(evm.message.block_env.state.change_tracker, to)
+
     child_evm = process_message(child_message)
 
     if child_evm.error:
@@ -561,7 +573,11 @@ def selfdestruct(evm: Evm) -> None:
     if originator in evm.message.block_env.state.created_accounts:
         # If beneficiary is the same as originator, then
         # the ether is burnt.
-        set_account_balance(evm.message.block_env.state, originator, U256(0))
+        set_account_balance(
+            evm.message.block_env.state,
+            originator,
+            U256(0),
+        )
         evm.accounts_to_delete.add(originator)
 
     # HALT the execution
