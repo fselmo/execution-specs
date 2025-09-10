@@ -329,17 +329,12 @@ class Result:
             self.requests = block_output.requests
             self.requests_hash = t8n.fork.compute_requests_hash(self.requests)
 
-        if hasattr(block_output, "block_access_list_builder"):
-            from ethereum.amsterdam.block_access_lists import (
-                build,
-                compute_block_access_list_hash,
-            )
-
-            block_access_list = build(block_output.block_access_list_builder)
-            # Store the Block Access List object directly, not RLP
-            self.block_access_list = block_access_list
-            self.block_access_list_hash = compute_block_access_list_hash(
-                block_access_list
+        if hasattr(block_output, "block_access_list"):
+            self.block_access_list = block_output.block_access_list
+            self.block_access_list_hash = (
+                t8n.fork.compute_block_access_list_hash(
+                    block_output.block_access_list
+                )
             )
 
     def _block_access_list_to_json(self, block_access_list: Any) -> Any:
