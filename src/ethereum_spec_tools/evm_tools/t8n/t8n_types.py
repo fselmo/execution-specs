@@ -336,10 +336,11 @@ class Result:
             )
 
             block_access_list = build(block_output.block_access_list_builder)
-            self.block_access_list = (
-                block_access_list  # Store the Block Access List object directly, not RLP
+            # Store the Block Access List object directly, not RLP
+            self.block_access_list = block_access_list
+            self.block_access_list_hash = compute_block_access_list_hash(
+                block_access_list
             )
-            self.block_access_list_hash = compute_block_access_list_hash(block_access_list)
 
     def _block_access_list_to_json(self, block_access_list: Any) -> Any:
         """
@@ -483,7 +484,9 @@ class Result:
 
         if self.block_access_list is not None:
             # Convert Block Access List to JSON format
-            data["blockAccessList"] = self._block_access_list_to_json(self.block_access_list)
+            data["blockAccessList"] = self._block_access_list_to_json(
+                self.block_access_list
+            )
 
         if self.block_access_list_hash is not None:
             data["blockAccessListHash"] = encode_to_hex(

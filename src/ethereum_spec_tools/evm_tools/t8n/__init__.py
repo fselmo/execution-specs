@@ -287,7 +287,9 @@ class T8N(Load):
                 "data": block_env.block_hashes[-1],  # The parent hash
             }
             if self.fork.is_after_fork("ethereum.amsterdam"):
-                process_args["change_tracker"] = block_access_list_change_tracker
+                process_args["change_tracker"] = (
+                    block_access_list_change_tracker
+                )
             self.fork.process_unchecked_system_transaction(**process_args)
 
         if self.fork.is_after_fork("ethereum.cancun"):
@@ -297,7 +299,9 @@ class T8N(Load):
                 "data": block_env.parent_beacon_block_root,
             }
             if self.fork.is_after_fork("ethereum.amsterdam"):
-                process_args["change_tracker"] = block_access_list_change_tracker
+                process_args["change_tracker"] = (
+                    block_access_list_change_tracker
+                )
             self.fork.process_unchecked_system_transaction(**process_args)
 
         for tx_index, (original_idx, tx) in enumerate(zip(
@@ -317,7 +321,9 @@ class T8N(Load):
 
                     assert block_access_list_change_tracker is not None
                     # use 1...n for transaction indices
-                    set_transaction_index(block_access_list_change_tracker, tx_index + 1)
+                    set_transaction_index(
+                        block_access_list_change_tracker, tx_index + 1
+                    )
                     self.fork.process_transaction(*process_tx_args)
                     finalize_transaction_changes(
                         block_access_list_change_tracker,
@@ -371,7 +377,9 @@ class T8N(Load):
 
             # post-execution use n + 1
             post_execution_index = num_transactions + 1
-            set_transaction_index(block_access_list_change_tracker, post_execution_index)
+            set_transaction_index(
+                block_access_list_change_tracker, post_execution_index
+            )
 
     def run_blockchain_test(self) -> None:
         """
