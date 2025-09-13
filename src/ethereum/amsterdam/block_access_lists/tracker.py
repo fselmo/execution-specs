@@ -22,7 +22,6 @@ from ethereum_types.bytes import Bytes, Bytes32
 from ethereum_types.numeric import U64, U256, Uint
 
 from ..fork_types import Address
-from ..rlp_types import BlockAccessIndex
 from .builder import (
     BlockAccessListBuilder,
     add_balance_change,
@@ -32,6 +31,7 @@ from .builder import (
     add_storage_write,
     add_touched_account,
 )
+from .types import BlockAccessIndex
 
 if TYPE_CHECKING:
     from ..state import State  # noqa: F401

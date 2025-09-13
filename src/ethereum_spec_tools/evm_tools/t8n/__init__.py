@@ -316,9 +316,10 @@ class T8N(Load):
             self.fork.process_general_purpose_requests(block_env, block_output)
 
         if self.fork.is_after_fork("ethereum.amsterdam"):
-                block_output.block_access_list = self.fork.build(
+                block_access_list = self.fork.build_block_access_list(
                     block_env.state.change_tracker.block_access_list_builder
                 )
+                block_output.block_access_list = block_access_list
 
     def run_blockchain_test(self) -> None:
         """

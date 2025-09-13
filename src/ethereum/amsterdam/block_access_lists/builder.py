@@ -13,7 +13,8 @@ The builder follows a two-phase approach:
 2. **Build Phase**: After block execution, the accumulated data is sorted
    and encoded into the final deterministic format.
 
-[`BlockAccessList`]: ref:ethereum.amsterdam.rlp_types.BlockAccessList
+[`BlockAccessList`]:
+    ref:ethereum.amsterdam.block_access_lists.types.BlockAccessList
 """
 
 from dataclasses import dataclass, field
@@ -23,7 +24,7 @@ from ethereum_types.bytes import Bytes, Bytes32
 from ethereum_types.numeric import U64, U256
 
 from ..fork_types import Address
-from ..rlp_types import (
+from .types import (
     AccountChanges,
     BalanceChange,
     BlockAccessIndex,
@@ -86,7 +87,8 @@ class BlockAccessListBuilder:
     by address, field type, and transaction index to enable efficient
     reconstruction of state changes.
 
-    [`BlockAccessList`]: ref:ethereum.amsterdam.rlp_types.BlockAccessList
+    [`BlockAccessList`]:
+    ref:ethereum.amsterdam.block_access_lists.types.BlockAccessList
     """
 
     accounts: Dict[Address, AccountData] = field(default_factory=dict)
@@ -368,7 +370,8 @@ def build_block_access_list(
     block_access_list :
         The final sorted and encoded block access list.
 
-    [`BlockAccessList`]: ref:ethereum.amsterdam.rlp_types.BlockAccessList
+    [`BlockAccessList`]:
+    ref:ethereum.amsterdam.block_access_lists.types.BlockAccessList
     """
     account_changes_list = []
 

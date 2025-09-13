@@ -718,8 +718,6 @@ def process_unchecked_system_transaction(
         Address of the contract to call.
     data :
         Data to pass to the contract.
-    change_tracker :
-        The state change tracker instance.
 
     Returns
     -------

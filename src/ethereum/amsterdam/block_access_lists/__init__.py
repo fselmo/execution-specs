@@ -27,10 +27,28 @@ from .tracker import (
     track_storage_read,
     track_storage_write,
 )
+from .types import (
+    AccountChanges,
+    BalanceChange,
+    BlockAccessIndex,
+    BlockAccessList,
+    CodeChange,
+    NonceChange,
+    SlotChanges,
+    StorageChange,
+)
 
 __all__ = [
+    "AccountChanges",
+    "BalanceChange",
+    "BlockAccessIndex",
+    "BlockAccessList",
     "BlockAccessListBuilder",
+    "CodeChange",
+    "NonceChange",
+    "SlotChanges",
     "StateChangeTracker",
+    "StorageChange",
     "add_balance_change",
     "add_code_change",
     "add_nonce_change",

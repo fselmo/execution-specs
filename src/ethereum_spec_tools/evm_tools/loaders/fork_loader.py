@@ -123,8 +123,8 @@ class ForkLoad:
         return self._module("transactions").signing_hash_155
 
     @property
-    def build(self) -> Any:
-        """build function of the fork"""
+    def build_block_access_list(self) -> Any:
+        """build_block_access_list function of the fork"""
         return self._module("block_access_lists").build_block_access_list
 
     @property

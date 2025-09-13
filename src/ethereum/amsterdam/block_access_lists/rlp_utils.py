@@ -24,8 +24,8 @@ from ethereum_types.numeric import Uint
 
 from ethereum.crypto.hash import Hash32, keccak256
 
-from ..rlp_types import MAX_CODE_SIZE, MAX_TXS, BlockAccessList
 from .builder import BlockAccessListBuilder
+from .types import MAX_CODE_SIZE, MAX_TXS, BlockAccessList
 
 
 def compute_block_access_list_hash(
@@ -68,7 +68,8 @@ def rlp_encode_block_access_list(block_access_list: BlockAccessList) -> Bytes:
     encoded :
         The complete RLP-encoded block access list.
 
-    [`BlockAccessList`]: ref:ethereum.amsterdam.rlp_types.BlockAccessList
+    [`BlockAccessList`]:
+        ref:ethereum.amsterdam.block_access_lists.types.BlockAccessList
     """
     # Encode as a list of AccountChanges directly (not wrapped)
     account_changes_list = []
