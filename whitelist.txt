@@ -508,8 +508,6 @@ whitelist
 AccountT
 uint
 
-bal
-BAL
 slot1
 slot2
 lexicographically
