@@ -24,8 +24,8 @@ from ethereum_types.numeric import Uint
 
 from ethereum.crypto.hash import Hash32, keccak256
 
-from ..rlp_types import MAX_CODE_SIZE, MAX_TXS, BlockAccessList
 from .builder import BlockAccessListBuilder
+from .rlp_types import MAX_CODE_SIZE, MAX_TXS, BlockAccessList
 
 
 def compute_block_access_list_hash(

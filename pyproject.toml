@@ -517,6 +517,12 @@ ignore = [
 "src/ethereum/forks/amsterdam/blocks.py" = [
     "E501"          # Line too long - needed for long ref links
 ]
+ "src/ethereum/forks/amsterdam/block_access_lists/builder.py" = [
+    "E501"          # Line too long - needed for long ref links
+ ]
+"src/ethereum/forks/amsterdam/block_access_lists/rlp_utils.py" = [
+    "E501"          # Line too long - needed for long ref links
+ ]
 
 [tool.ruff.lint.mccabe]
 # Set the maximum allowed cyclomatic complexity. C901 default is 10.

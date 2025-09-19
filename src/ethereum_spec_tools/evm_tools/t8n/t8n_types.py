@@ -333,7 +333,7 @@ class Result:
                 )
             )
 
-    def _bal_to_json(self, bal: Any) -> Any:
+    def _block_access_list_to_json(self, bal: Any) -> Any:
         """
         Convert BlockAccessList to JSON format matching the Pydantic models.
         """
@@ -475,7 +475,9 @@ class Result:
 
         if self.block_access_list is not None:
             # Convert BAL to JSON format
-            data["blockAccessList"] = self._bal_to_json(self.block_access_list)
+            data["blockAccessList"] = self._block_access_list_to_json(
+                self.block_access_list
+            )
 
         if self.block_access_list_hash is not None:
             data["blockAccessListHash"] = encode_to_hex(

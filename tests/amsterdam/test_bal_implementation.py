@@ -33,7 +33,7 @@ from ethereum.forks.amsterdam.block_access_lists.tracker import (
     track_nonce_change,
     track_storage_write,
 )
-from ethereum.forks.amsterdam.rlp_types import (
+from ethereum.forks.amsterdam.block_access_lists.rlp_types import (
     MAX_CODE_CHANGES,
     BlockAccessIndex,
     BlockAccessList,
@@ -43,12 +43,12 @@ from ethereum.forks.amsterdam.rlp_types import (
 class TestBALCore:
     """Test core BAL functionality."""
 
-    def test_bal_builder_initialization(self) -> None:
+    def test_block_access_list_builder_initialization(self) -> None:
         """Test BAL builder initializes correctly."""
         builder = BlockAccessListBuilder()
         assert builder.accounts == {}
 
-    def test_bal_builder_add_storage_write(self) -> None:
+    def test_block_access_list_builder_add_storage_write(self) -> None:
         """Test adding storage writes to BAL builder."""
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
@@ -65,7 +65,7 @@ class TestBALCore:
         assert change.block_access_index == 0
         assert change.new_value == value
 
-    def test_bal_builder_add_storage_read(self) -> None:
+    def test_block_access_list_builder_add_storage_read(self) -> None:
         """Test adding storage reads to BAL builder."""
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
@@ -76,7 +76,7 @@ class TestBALCore:
         assert address in builder.accounts
         assert slot in builder.accounts[address].storage_reads
 
-    def test_bal_builder_add_balance_change(self) -> None:
+    def test_block_access_list_builder_add_balance_change(self) -> None:
         """Test adding balance changes to BAL builder."""
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
@@ -91,7 +91,7 @@ class TestBALCore:
         assert change.block_access_index == 0
         assert change.post_balance == balance
 
-    def test_bal_builder_add_nonce_change(self) -> None:
+    def test_block_access_list_builder_add_nonce_change(self) -> None:
         """Test adding nonce changes to BAL builder."""
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
@@ -106,7 +106,7 @@ class TestBALCore:
         assert change.block_access_index == 0
         assert change.new_nonce == U64(42)
 
-    def test_bal_builder_add_code_change(self) -> None:
+    def test_block_access_list_builder_add_code_change(self) -> None:
         """Test adding code changes to BAL builder."""
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
@@ -121,7 +121,7 @@ class TestBALCore:
         assert change.block_access_index == 0
         assert change.new_code == code
 
-    def test_bal_builder_touched_account(self) -> None:
+    def test_block_access_list_builder_touched_account(self) -> None:
         """Test adding touched accounts without changes."""
         builder = BlockAccessListBuilder()
         address = Bytes20(b"\x01" * 20)
@@ -135,7 +135,7 @@ class TestBALCore:
         assert builder.accounts[address].nonce_changes == []
         assert builder.accounts[address].code_changes == []
 
-    def test_bal_builder_build_complete(self) -> None:
+    def test_block_access_list_builder_build_complete(self) -> None:
         """Test building a complete BlockAccessList."""
         builder = BlockAccessListBuilder()
 
@@ -482,7 +482,7 @@ class TestRLPEncoding:
         assert isinstance(encoded, (bytes, Bytes))
         assert len(encoded) > 0
 
-    def test_bal_hash_computation(self) -> None:
+    def test_block_access_list_hash_computation(self) -> None:
         """Test BAL hash computation using RLP."""
         from ethereum.forks.amsterdam.block_access_lists import (
             compute_block_access_list_hash,

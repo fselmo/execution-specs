@@ -271,7 +271,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         raise InvalidBlock
     if requests_hash != block.header.requests_hash:
         raise InvalidBlock
-    if computed_block_access_list_hash != block.header.bal_hash:
+    if computed_block_access_list_hash != block.header.block_access_list_hash:
         raise InvalidBlock("Invalid block access list hash")
 
     chain.blocks.append(block)
@@ -765,7 +765,7 @@ def apply_body(
     block_output = vm.BlockOutput()
 
     # Set system transaction index for pre-execution system contracts
-    # EIP-7928: System contracts use bal_index 0
+    # EIP-7928: System contracts use block_access_index 0
     set_transaction_index(block_env.state.change_tracker, Uint(0))
 
     process_unchecked_system_transaction(
@@ -783,7 +783,7 @@ def apply_body(
     for i, tx in enumerate(map(decode_transaction, transactions)):
         process_transaction(block_env, block_output, tx, Uint(i))
 
-    # EIP-7928: Post-execution uses bal_index len(transactions) + 1
+    # EIP-7928: Post-execution uses block_access_index len(transactions) + 1
     post_execution_index = ulen(transactions) + Uint(1)
     set_transaction_index(block_env.state.change_tracker, post_execution_index)
 
@@ -873,7 +873,7 @@ def process_transaction(
     index:
         Index of the transaction in the block.
     """
-    # EIP-7928: Transactions use bal_index 1 to len(transactions)
+    # EIP-7928: Transactions use block_access_index 1 to len(transactions)
     set_transaction_index(block_env.state.change_tracker, index + Uint(1))
 
     trie_set(
