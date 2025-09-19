@@ -23,7 +23,7 @@ from ethereum_types.bytes import Bytes, Bytes32
 from ethereum_types.numeric import U64, U256
 
 from ..fork_types import Address
-from ..rlp_types import (
+from .rlp_types import (
     AccountChanges,
     BalanceChange,
     BlockAccessIndex,
