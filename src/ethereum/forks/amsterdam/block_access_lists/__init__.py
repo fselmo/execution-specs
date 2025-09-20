@@ -19,6 +19,9 @@ from .rlp_utils import (
 )
 from .tracker import (
     StateChangeTracker,
+    begin_call_frame,
+    commit_call_frame,
+    rollback_call_frame,
     set_transaction_index,
     track_address_access,
     track_balance_change,
@@ -37,8 +40,11 @@ __all__ = [
     "add_storage_read",
     "add_storage_write",
     "add_touched_account",
+    "begin_call_frame",
     "build_block_access_list",
+    "commit_call_frame",
     "compute_block_access_list_hash",
+    "rollback_call_frame",
     "set_transaction_index",
     "rlp_encode_block_access_list",
     "track_address_access",
