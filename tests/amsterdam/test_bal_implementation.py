@@ -8,8 +8,6 @@ This module tests the complete BAL implementation including:
 - Edge cases and error handling
 """
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 from ethereum_types.bytes import Bytes, Bytes20, Bytes32
 from ethereum_types.numeric import U64, U256, Uint
@@ -610,6 +608,92 @@ class TestEdgeCases:
         sorted_addresses = sorted(addresses)
         for i, account in enumerate(block_access_list.account_changes):
             assert account.address == sorted_addresses[i]
+
+
+class TestValueCalls:
+    """Test value call scenarios including 0 ETH calls."""
+    
+    def test_zero_eth_value_call_tracks_address_without_balance(self) -> None:
+        """Test that 0 ETH calls track recipient address without balance changes."""
+        from ethereum.forks.amsterdam.block_access_lists.tracker import track_address_access
+        
+        builder = BlockAccessListBuilder()
+        tracker = StateChangeTracker(builder)
+        set_transaction_index(tracker, Uint(1))
+        
+        recipient = Bytes20(b"\x02" * 20)
+        
+        # Track only the address access without balance change
+        track_address_access(tracker, recipient)
+        
+        block_access_list = build_block_access_list(builder)
+        
+        # Verify recipient is tracked without balance changes
+        recipient_found = False
+        for account in block_access_list.account_changes:
+            if account.address == recipient:
+                recipient_found = True
+                assert len(account.balance_changes) == 0
+                break
+        
+        assert recipient_found
+    
+    def test_nonzero_eth_value_call_tracks_with_balance(self) -> None:
+        """Test that non-zero ETH calls track addresses with balance changes."""
+        builder = BlockAccessListBuilder()
+        tracker = StateChangeTracker(builder)
+        set_transaction_index(tracker, Uint(1))
+        
+        sender = Bytes20(b"\x01" * 20)
+        recipient = Bytes20(b"\x02" * 20)
+        
+        # Track balance changes for value transfer
+        track_balance_change(tracker, sender, U256(900))
+        track_balance_change(tracker, recipient, U256(100))
+        
+        block_access_list = build_block_access_list(builder)
+        
+        # Verify both addresses tracked with balance changes
+        sender_found = False
+        recipient_found = False
+        
+        for account in block_access_list.account_changes:
+            if account.address == sender:
+                sender_found = True
+                assert len(account.balance_changes) == 1
+                assert account.balance_changes[0].post_balance == U256(900)
+            elif account.address == recipient:
+                recipient_found = True
+                assert len(account.balance_changes) == 1
+                assert account.balance_changes[0].post_balance == U256(100)
+        
+        assert sender_found and recipient_found
+    
+    def test_multiple_zero_eth_calls_deduplication(self) -> None:
+        """Test that multiple 0 ETH calls to same address are deduplicated."""
+        from ethereum.forks.amsterdam.block_access_lists.tracker import track_address_access
+        
+        builder = BlockAccessListBuilder()
+        tracker = StateChangeTracker(builder)
+        set_transaction_index(tracker, Uint(1))
+        
+        recipient = Bytes20(b"\x02" * 20)
+        
+        # Multiple calls to same address
+        track_address_access(tracker, recipient)
+        track_address_access(tracker, recipient)
+        track_address_access(tracker, recipient)
+        
+        block_access_list = build_block_access_list(builder)
+        
+        # Verify address appears exactly once without balance changes
+        recipient_count = sum(1 for account in block_access_list.account_changes 
+                            if account.address == recipient)
+        assert recipient_count == 1
+        
+        for account in block_access_list.account_changes:
+            if account.address == recipient:
+                assert len(account.balance_changes) == 0
 
 
 if __name__ == "__main__":

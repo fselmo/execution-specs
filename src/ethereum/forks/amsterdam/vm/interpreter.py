@@ -239,10 +239,16 @@ def process_message(message: Message) -> Evm:
     # take snapshot of state before processing the message
     begin_transaction(state, transient_storage)
 
-    if message.should_transfer_value and message.value != 0:
-        move_ether(
-            state, message.caller, message.current_target, message.value
-        )
+    if message.should_transfer_value:
+        if message.value != 0:
+            move_ether(
+                state, message.caller, message.current_target, message.value
+            )
+        else:
+            # For 0 ETH value calls, track the recipient address in the block
+            # access list without recording balance changes
+            from ..block_access_lists import track_address_access
+            track_address_access(state.change_tracker, message.current_target)
 
     evm = execute_code(message)
     if evm.error:
