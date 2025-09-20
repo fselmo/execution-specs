@@ -109,15 +109,19 @@ class StateChangeTracker:
     """
 
 
-def set_transaction_index(
+def set_block_access_index(
     tracker: StateChangeTracker, block_access_index: Uint
 ) -> None:
     """
     Set the current block access index for tracking changes.
 
     Must be called before processing each transaction/system contract
-    to ensure changes
-    are associated with the correct block access index.
+    to ensure changes are associated with the correct block access index.
+
+    Note: Block access indices differ from transaction indices:
+    - 0: Pre-execution (system contracts like beacon roots, block hashes)
+    - 1..n: Transactions (tx at index i gets block_access_index i+1)
+    - n+1: Post-execution (withdrawals, requests)
 
     Parameters
     ----------
@@ -291,18 +295,20 @@ def track_balance_change(
     """
     track_address_access(tracker, address)
 
-    block_index = BlockAccessIndex(tracker.current_block_access_index)
+    block_access_index = BlockAccessIndex(tracker.current_block_access_index)
     add_balance_change(
         tracker.block_access_list_builder,
         address,
-        block_index,
+        block_access_index,
         new_balance,
     )
 
     # Record in current call frame snapshot if exists
     if tracker.call_frame_snapshots:
         snapshot = tracker.call_frame_snapshots[-1]
-        snapshot.balance_changes.add((address, block_index, new_balance))
+        snapshot.balance_changes.add(
+            (address, block_access_index, new_balance)
+        )
 
 
 def track_nonce_change(
@@ -330,19 +336,19 @@ def track_nonce_change(
     [`CREATE2`]: ref:ethereum.forks.amsterdam.vm.instructions.system.create2
     """
     track_address_access(tracker, address)
-    block_index = BlockAccessIndex(tracker.current_block_access_index)
+    block_access_index = BlockAccessIndex(tracker.current_block_access_index)
     nonce_u64 = U64(new_nonce)
     add_nonce_change(
         tracker.block_access_list_builder,
         address,
-        block_index,
+        block_access_index,
         nonce_u64,
     )
 
     # Record in current call frame snapshot if exists
     if tracker.call_frame_snapshots:
         snapshot = tracker.call_frame_snapshots[-1]
-        snapshot.nonce_changes.add((address, block_index, nonce_u64))
+        snapshot.nonce_changes.add((address, block_access_index, nonce_u64))
 
 
 def track_code_change(
@@ -368,18 +374,18 @@ def track_code_change(
     [`CREATE2`]: ref:ethereum.forks.amsterdam.vm.instructions.system.create2
     """
     track_address_access(tracker, address)
-    block_index = BlockAccessIndex(tracker.current_block_access_index)
+    block_access_index = BlockAccessIndex(tracker.current_block_access_index)
     add_code_change(
         tracker.block_access_list_builder,
         address,
-        block_index,
+        block_access_index,
         new_code,
     )
 
     # Record in current call frame snapshot if exists
     if tracker.call_frame_snapshots:
         snapshot = tracker.call_frame_snapshots[-1]
-        snapshot.code_changes.add((address, block_index, new_code))
+        snapshot.code_changes.add((address, block_access_index, new_code))
 
 
 def finalize_transaction_changes(
@@ -459,7 +465,7 @@ def rollback_call_frame(tracker: StateChangeTracker) -> None:
             account_data.storage_reads.add(slot)
 
     # Remove balance changes from this call frame
-    for address, block_index, new_balance in snapshot.balance_changes:
+    for address, block_access_index, new_balance in snapshot.balance_changes:
         if address in builder.accounts:
             account_data = builder.accounts[address]
             # Filter out balance changes from this call frame
@@ -467,13 +473,13 @@ def rollback_call_frame(tracker: StateChangeTracker) -> None:
                 change
                 for change in account_data.balance_changes
                 if not (
-                    change.block_access_index == block_index
+                    change.block_access_index == block_access_index
                     and change.post_balance == new_balance
                 )
             ]
 
     # Remove nonce changes from this call frame
-    for address, block_index, new_nonce in snapshot.nonce_changes:
+    for address, block_access_index, new_nonce in snapshot.nonce_changes:
         if address in builder.accounts:
             account_data = builder.accounts[address]
             # Filter out nonce changes from this call frame
@@ -481,13 +487,13 @@ def rollback_call_frame(tracker: StateChangeTracker) -> None:
                 change
                 for change in account_data.nonce_changes
                 if not (
-                    change.block_access_index == block_index
+                    change.block_access_index == block_access_index
                     and change.new_nonce == new_nonce
                 )
             ]
 
     # Remove code changes from this call frame
-    for address, block_index, new_code in snapshot.code_changes:
+    for address, block_access_index, new_code in snapshot.code_changes:
         if address in builder.accounts:
             account_data = builder.accounts[address]
             # Filter out code changes from this call frame
@@ -495,7 +501,7 @@ def rollback_call_frame(tracker: StateChangeTracker) -> None:
                 change
                 for change in account_data.code_changes
                 if not (
-                    change.block_access_index == block_index
+                    change.block_access_index == block_access_index
                     and change.new_code == new_code
                 )
             ]

@@ -137,10 +137,10 @@ class ForkLoad:
         )
 
     @property
-    def set_transaction_index(self) -> Any:
-        """set_transaction_index function of the fork"""
+    def set_block_access_index(self) -> Any:
+        """set_block_access_index function of the fork"""
         return (
-            self._module("block_access_lists").set_transaction_index
+            self._module("block_access_lists").set_block_access_index
         )
 
     @property

@@ -33,7 +33,7 @@ from . import vm
 from .block_access_lists.builder import build_block_access_list
 from .block_access_lists.rlp_utils import compute_block_access_list_hash
 from .block_access_lists.tracker import (
-    set_transaction_index,
+    set_block_access_index,
     track_balance_change,
 )
 from .blocks import Block, Header, Log, Receipt, Withdrawal, encode_receipt
@@ -764,9 +764,9 @@ def apply_body(
     """
     block_output = vm.BlockOutput()
 
-    # Set system transaction index for pre-execution system contracts
+    # Set block access index for pre-execution system contracts
     # EIP-7928: System contracts use block_access_index 0
-    set_transaction_index(block_env.state.change_tracker, Uint(0))
+    set_block_access_index(block_env.state.change_tracker, Uint(0))
 
     process_unchecked_system_transaction(
         block_env=block_env,
@@ -785,7 +785,9 @@ def apply_body(
 
     # EIP-7928: Post-execution uses block_access_index len(transactions) + 1
     post_execution_index = ulen(transactions) + Uint(1)
-    set_transaction_index(block_env.state.change_tracker, post_execution_index)
+    set_block_access_index(
+        block_env.state.change_tracker, post_execution_index
+    )
 
     process_withdrawals(block_env, block_output, withdrawals)
 
@@ -874,7 +876,8 @@ def process_transaction(
         Index of the transaction in the block.
     """
     # EIP-7928: Transactions use block_access_index 1 to len(transactions)
-    set_transaction_index(block_env.state.change_tracker, index + Uint(1))
+    # Transaction at index i gets block_access_index i+1
+    set_block_access_index(block_env.state.change_tracker, index + Uint(1))
 
     trie_set(
         block_output.transactions_trie,

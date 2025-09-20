@@ -253,7 +253,7 @@ class T8N(Load):
 
     def _run_blockchain_test(self, block_env: Any, block_output: Any) -> None:
         if self.fork.is_after_fork("ethereum.forks.amsterdam"):
-            self.fork.set_transaction_index(
+            self.fork.set_block_access_index(
                 block_env.state.change_tracker, Uint(0)
             )
         if self.fork.is_after_fork("ethereum.forks.prague"):
@@ -295,7 +295,7 @@ class T8N(Load):
 
             # post-execution use n + 1
             post_execution_index = num_transactions + Uint(1)
-            self.fork.set_transaction_index(
+            self.fork.set_block_access_index(
                 block_env.state.change_tracker, post_execution_index
             )
 

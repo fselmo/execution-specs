@@ -25,7 +25,7 @@ from ethereum.forks.amsterdam.block_access_lists import (
 )
 from ethereum.forks.amsterdam.block_access_lists.tracker import (
     capture_pre_state,
-    set_transaction_index,
+    set_block_access_index,
     track_balance_change,
     track_code_change,
     track_nonce_change,
@@ -192,14 +192,14 @@ class TestBALTracker:
         assert tracker.pre_storage_cache == {}
         assert tracker.current_block_access_index == 0
 
-    def test_tracker_set_transaction_index(self) -> None:
+    def test_tracker_set_block_access_index(self) -> None:
         """Test setting block access index."""
         builder = BlockAccessListBuilder()
         tracker = StateChangeTracker(builder)
 
-        set_transaction_index(tracker, 5)
+        set_block_access_index(tracker, 5)
         assert tracker.current_block_access_index == 5
-        # Pre-storage cache should persist across transactions
+        # Pre-storage cache should be cleared for new block access index
         assert tracker.pre_storage_cache == {}
 
     @patch("ethereum.forks.amsterdam.state.get_storage")
@@ -619,7 +619,7 @@ class TestValueCalls:
         
         builder = BlockAccessListBuilder()
         tracker = StateChangeTracker(builder)
-        set_transaction_index(tracker, Uint(1))
+        set_block_access_index(tracker, Uint(1))
         
         recipient = Bytes20(b"\x02" * 20)
         
@@ -642,7 +642,7 @@ class TestValueCalls:
         """Test that non-zero ETH calls track addresses with balance changes."""
         builder = BlockAccessListBuilder()
         tracker = StateChangeTracker(builder)
-        set_transaction_index(tracker, Uint(1))
+        set_block_access_index(tracker, Uint(1))
         
         sender = Bytes20(b"\x01" * 20)
         recipient = Bytes20(b"\x02" * 20)
@@ -675,7 +675,7 @@ class TestValueCalls:
         
         builder = BlockAccessListBuilder()
         tracker = StateChangeTracker(builder)
-        set_transaction_index(tracker, Uint(1))
+        set_block_access_index(tracker, Uint(1))
         
         recipient = Bytes20(b"\x02" * 20)
         
@@ -710,7 +710,7 @@ class TestRevertScenarios:
         
         builder = BlockAccessListBuilder()
         tracker = StateChangeTracker(builder)
-        set_transaction_index(tracker, Uint(1))
+        set_block_access_index(tracker, Uint(1))
         
         address = Bytes20(b"\x01" * 20)
         slot1 = Bytes32(b"\x01" * 32)
@@ -759,7 +759,7 @@ class TestRevertScenarios:
         
         builder = BlockAccessListBuilder()
         tracker = StateChangeTracker(builder)
-        set_transaction_index(tracker, Uint(1))
+        set_block_access_index(tracker, Uint(1))
         
         address = Bytes20(b"\x01" * 20)
         
@@ -795,7 +795,7 @@ class TestRevertScenarios:
         
         builder = BlockAccessListBuilder()
         tracker = StateChangeTracker(builder)
-        set_transaction_index(tracker, Uint(1))
+        set_block_access_index(tracker, Uint(1))
         
         address1 = Bytes20(b"\x01" * 20)
         address2 = Bytes20(b"\x02" * 20)
