@@ -30,6 +30,12 @@ from ethereum.trace import (
     evm_trace,
 )
 
+from ..block_access_lists.tracker import (
+    begin_call_frame,
+    commit_call_frame,
+    rollback_call_frame,
+    track_address_access,
+)
 from ..blocks import Log
 from ..fork_types import Address
 from ..state import (
@@ -239,12 +245,6 @@ def process_message(message: Message) -> Evm:
     # take snapshot of state before processing the message
     begin_transaction(state, transient_storage)
 
-    from ..block_access_lists import (
-        begin_call_frame,
-        commit_call_frame,
-        rollback_call_frame,
-        track_address_access,
-    )
     if hasattr(state, 'change_tracker') and state.change_tracker:
         begin_call_frame(state.change_tracker)
         # Track target address access when processing a message
