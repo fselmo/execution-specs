@@ -247,17 +247,13 @@ def process_message(message: Message) -> Evm:
     )
     if hasattr(state, 'change_tracker') and state.change_tracker:
         begin_call_frame(state.change_tracker)
+        # Track target address access when processing a message
+        track_address_access(state.change_tracker, message.current_target)
 
-    if message.should_transfer_value:
-        if message.value != 0:
-            move_ether(
-                state, message.caller, message.current_target, message.value
-            )
-        else:
-            if hasattr(state, 'change_tracker') and state.change_tracker:
-                track_address_access(
-                    state.change_tracker, message.current_target
-                )
+    if message.should_transfer_value and message.value != 0:
+        move_ether(
+            state, message.caller, message.current_target, message.value
+        )
 
     evm = execute_code(message)
     if evm.error:
