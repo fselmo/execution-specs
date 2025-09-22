@@ -16,7 +16,7 @@ See [EIP-7928] for the full specification.
 """
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING, Dict, List, Set, Tuple
 
 from ethereum_types.bytes import Bytes, Bytes32
 from ethereum_types.numeric import U64, U256, Uint
@@ -35,6 +35,39 @@ from .rlp_types import BlockAccessIndex
 
 if TYPE_CHECKING:
     from ..state import State  # noqa: F401
+
+
+@dataclass
+class CallFrameSnapshot:
+    """
+    Snapshot of block access list state for a single call frame.
+
+    Used to track changes within a call frame to enable proper handling
+    of reverts as specified in EIP-7928.
+    """
+
+    touched_addresses: Set[Address] = field(default_factory=set)
+    """Addresses touched during this call frame."""
+
+    storage_writes: Dict[Tuple[Address, Bytes32], U256] = field(
+        default_factory=dict
+    )
+    """Storage writes made during this call frame."""
+
+    balance_changes: Set[Tuple[Address, BlockAccessIndex, U256]] = field(
+        default_factory=set
+    )
+    """Balance changes made during this call frame."""
+
+    nonce_changes: Set[Tuple[Address, BlockAccessIndex, U64]] = field(
+        default_factory=set
+    )
+    """Nonce changes made during this call frame."""
+
+    code_changes: Set[Tuple[Address, BlockAccessIndex, Bytes]] = field(
+        default_factory=set
+    )
+    """Code changes made during this call frame."""
 
 
 @dataclass
@@ -70,16 +103,25 @@ class StateChangeTracker:
     1..n for transactions, n+1 for post-execution).
     """
 
+    call_frame_snapshots: List[CallFrameSnapshot] = field(default_factory=list)
+    """
+    Stack of snapshots for nested call frames to handle reverts properly.
+    """
 
-def set_transaction_index(
+
+def set_block_access_index(
     tracker: StateChangeTracker, block_access_index: Uint
 ) -> None:
     """
     Set the current block access index for tracking changes.
 
     Must be called before processing each transaction/system contract
-    to ensure changes
-    are associated with the correct block access index.
+    to ensure changes are associated with the correct block access index.
+
+    Note: Block access indices differ from transaction indices:
+    - 0: Pre-execution (system contracts like beacon roots, block hashes)
+    - 1..n: Transactions (tx at index i gets block_access_index i+1)
+    - n+1: Post-execution (withdrawals, requests)
 
     Parameters
     ----------
@@ -221,6 +263,10 @@ def track_storage_write(
             BlockAccessIndex(tracker.current_block_access_index),
             value_bytes,
         )
+        # Record in current call frame snapshot if exists
+        if tracker.call_frame_snapshots:
+            snapshot = tracker.call_frame_snapshots[-1]
+            snapshot.storage_writes[(address, key)] = new_value
     else:
         add_storage_read(tracker.block_access_list_builder, address, key)
 
@@ -249,12 +295,20 @@ def track_balance_change(
     """
     track_address_access(tracker, address)
 
+    block_access_index = BlockAccessIndex(tracker.current_block_access_index)
     add_balance_change(
         tracker.block_access_list_builder,
         address,
-        BlockAccessIndex(tracker.current_block_access_index),
+        block_access_index,
         new_balance,
     )
+
+    # Record in current call frame snapshot if exists
+    if tracker.call_frame_snapshots:
+        snapshot = tracker.call_frame_snapshots[-1]
+        snapshot.balance_changes.add(
+            (address, block_access_index, new_balance)
+        )
 
 
 def track_nonce_change(
@@ -282,12 +336,19 @@ def track_nonce_change(
     [`CREATE2`]: ref:ethereum.forks.amsterdam.vm.instructions.system.create2
     """
     track_address_access(tracker, address)
+    block_access_index = BlockAccessIndex(tracker.current_block_access_index)
+    nonce_u64 = U64(new_nonce)
     add_nonce_change(
         tracker.block_access_list_builder,
         address,
-        BlockAccessIndex(tracker.current_block_access_index),
-        U64(new_nonce),
+        block_access_index,
+        nonce_u64,
     )
+
+    # Record in current call frame snapshot if exists
+    if tracker.call_frame_snapshots:
+        snapshot = tracker.call_frame_snapshots[-1]
+        snapshot.nonce_changes.add((address, block_access_index, nonce_u64))
 
 
 def track_code_change(
@@ -313,12 +374,18 @@ def track_code_change(
     [`CREATE2`]: ref:ethereum.forks.amsterdam.vm.instructions.system.create2
     """
     track_address_access(tracker, address)
+    block_access_index = BlockAccessIndex(tracker.current_block_access_index)
     add_code_change(
         tracker.block_access_list_builder,
         address,
-        BlockAccessIndex(tracker.current_block_access_index),
+        block_access_index,
         new_code,
     )
+
+    # Record in current call frame snapshot if exists
+    if tracker.call_frame_snapshots:
+        snapshot = tracker.call_frame_snapshots[-1]
+        snapshot.code_changes.add((address, block_access_index, new_code))
 
 
 def finalize_transaction_changes(
@@ -339,3 +406,120 @@ def finalize_transaction_changes(
         The current execution state.
     """
     pass
+
+
+def begin_call_frame(tracker: StateChangeTracker) -> None:
+    """
+    Begin a new call frame for tracking reverts.
+
+    Creates a new snapshot to track changes within this call frame.
+    This allows proper handling of reverts as specified in EIP-7928.
+
+    Parameters
+    ----------
+    tracker :
+        The state change tracker instance.
+    """
+    tracker.call_frame_snapshots.append(CallFrameSnapshot())
+
+
+def rollback_call_frame(tracker: StateChangeTracker) -> None:
+    """
+    Rollback changes from the current call frame.
+
+    When a call reverts, this function:
+    - Converts storage writes to reads
+    - Removes balance, nonce, and code changes
+    - Preserves touched addresses
+
+    This implements EIP-7928 revert handling where reverted writes
+    become reads and addresses remain in the access list.
+
+    Parameters
+    ----------
+    tracker :
+        The state change tracker instance.
+    """
+    if not tracker.call_frame_snapshots:
+        return
+
+    snapshot = tracker.call_frame_snapshots.pop()
+    builder = tracker.block_access_list_builder
+
+    # Convert storage writes to reads
+    for (address, slot), _ in snapshot.storage_writes.items():
+        # Remove the write from storage_changes
+        if address in builder.accounts:
+            account_data = builder.accounts[address]
+            if slot in account_data.storage_changes:
+                # Filter out changes from this call frame
+                account_data.storage_changes[slot] = [
+                    change
+                    for change in account_data.storage_changes[slot]
+                    if change.block_access_index
+                    != tracker.current_block_access_index
+                ]
+                if not account_data.storage_changes[slot]:
+                    del account_data.storage_changes[slot]
+            # Add as a read instead
+            account_data.storage_reads.add(slot)
+
+    # Remove balance changes from this call frame
+    for address, block_access_index, new_balance in snapshot.balance_changes:
+        if address in builder.accounts:
+            account_data = builder.accounts[address]
+            # Filter out balance changes from this call frame
+            account_data.balance_changes = [
+                change
+                for change in account_data.balance_changes
+                if not (
+                    change.block_access_index == block_access_index
+                    and change.post_balance == new_balance
+                )
+            ]
+
+    # Remove nonce changes from this call frame
+    for address, block_access_index, new_nonce in snapshot.nonce_changes:
+        if address in builder.accounts:
+            account_data = builder.accounts[address]
+            # Filter out nonce changes from this call frame
+            account_data.nonce_changes = [
+                change
+                for change in account_data.nonce_changes
+                if not (
+                    change.block_access_index == block_access_index
+                    and change.new_nonce == new_nonce
+                )
+            ]
+
+    # Remove code changes from this call frame
+    for address, block_access_index, new_code in snapshot.code_changes:
+        if address in builder.accounts:
+            account_data = builder.accounts[address]
+            # Filter out code changes from this call frame
+            account_data.code_changes = [
+                change
+                for change in account_data.code_changes
+                if not (
+                    change.block_access_index == block_access_index
+                    and change.new_code == new_code
+                )
+            ]
+
+    # All touched addresses remain in the access list (already tracked)
+
+
+def commit_call_frame(tracker: StateChangeTracker) -> None:
+    """
+    Commit changes from the current call frame.
+
+    Removes the current call frame snapshot without rolling back changes.
+    Called when a call completes successfully.
+
+    Parameters
+    ----------
+    tracker :
+        The state change tracker instance.
+    """
+    if tracker.call_frame_snapshots:
+        tracker.call_frame_snapshots.pop()

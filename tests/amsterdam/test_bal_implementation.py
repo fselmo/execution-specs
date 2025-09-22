@@ -8,8 +8,6 @@ This module tests the complete BAL implementation including:
 - Edge cases and error handling
 """
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 from ethereum_types.bytes import Bytes, Bytes20, Bytes32
 from ethereum_types.numeric import U64, U256, Uint
@@ -27,7 +25,7 @@ from ethereum.forks.amsterdam.block_access_lists import (
 )
 from ethereum.forks.amsterdam.block_access_lists.tracker import (
     capture_pre_state,
-    set_transaction_index,
+    set_block_access_index,
     track_balance_change,
     track_code_change,
     track_nonce_change,
@@ -194,14 +192,14 @@ class TestBALTracker:
         assert tracker.pre_storage_cache == {}
         assert tracker.current_block_access_index == 0
 
-    def test_tracker_set_transaction_index(self) -> None:
+    def test_tracker_set_block_access_index(self) -> None:
         """Test setting block access index."""
         builder = BlockAccessListBuilder()
         tracker = StateChangeTracker(builder)
 
-        set_transaction_index(tracker, 5)
+        set_block_access_index(tracker, 5)
         assert tracker.current_block_access_index == 5
-        # Pre-storage cache should persist across transactions
+        # Pre-storage cache should be cleared for new block access index
         assert tracker.pre_storage_cache == {}
 
     @patch("ethereum.forks.amsterdam.state.get_storage")
@@ -610,6 +608,230 @@ class TestEdgeCases:
         sorted_addresses = sorted(addresses)
         for i, account in enumerate(block_access_list.account_changes):
             assert account.address == sorted_addresses[i]
+
+
+class TestValueCalls:
+    """Test value call scenarios including 0 ETH calls."""
+    
+    def test_zero_eth_value_call_tracks_address_without_balance(self) -> None:
+        """Test that 0 ETH calls track recipient address without balance changes."""
+        from ethereum.forks.amsterdam.block_access_lists.tracker import track_address_access
+        
+        builder = BlockAccessListBuilder()
+        tracker = StateChangeTracker(builder)
+        set_block_access_index(tracker, Uint(1))
+        
+        recipient = Bytes20(b"\x02" * 20)
+        
+        # Track only the address access without balance change
+        track_address_access(tracker, recipient)
+        
+        block_access_list = build_block_access_list(builder)
+        
+        # Verify recipient is tracked without balance changes
+        recipient_found = False
+        for account in block_access_list.account_changes:
+            if account.address == recipient:
+                recipient_found = True
+                assert len(account.balance_changes) == 0
+                break
+        
+        assert recipient_found
+    
+    def test_nonzero_eth_value_call_tracks_with_balance(self) -> None:
+        """Test that non-zero ETH calls track addresses with balance changes."""
+        builder = BlockAccessListBuilder()
+        tracker = StateChangeTracker(builder)
+        set_block_access_index(tracker, Uint(1))
+        
+        sender = Bytes20(b"\x01" * 20)
+        recipient = Bytes20(b"\x02" * 20)
+        
+        # Track balance changes for value transfer
+        track_balance_change(tracker, sender, U256(900))
+        track_balance_change(tracker, recipient, U256(100))
+        
+        block_access_list = build_block_access_list(builder)
+        
+        # Verify both addresses tracked with balance changes
+        sender_found = False
+        recipient_found = False
+        
+        for account in block_access_list.account_changes:
+            if account.address == sender:
+                sender_found = True
+                assert len(account.balance_changes) == 1
+                assert account.balance_changes[0].post_balance == U256(900)
+            elif account.address == recipient:
+                recipient_found = True
+                assert len(account.balance_changes) == 1
+                assert account.balance_changes[0].post_balance == U256(100)
+        
+        assert sender_found and recipient_found
+    
+    def test_multiple_zero_eth_calls_deduplication(self) -> None:
+        """Test that multiple 0 ETH calls to same address are deduplicated."""
+        from ethereum.forks.amsterdam.block_access_lists.tracker import track_address_access
+        
+        builder = BlockAccessListBuilder()
+        tracker = StateChangeTracker(builder)
+        set_block_access_index(tracker, Uint(1))
+        
+        recipient = Bytes20(b"\x02" * 20)
+        
+        # Multiple calls to same address
+        track_address_access(tracker, recipient)
+        track_address_access(tracker, recipient)
+        track_address_access(tracker, recipient)
+        
+        block_access_list = build_block_access_list(builder)
+        
+        # Verify address appears exactly once without balance changes
+        recipient_count = sum(1 for account in block_access_list.account_changes 
+                            if account.address == recipient)
+        assert recipient_count == 1
+        
+        for account in block_access_list.account_changes:
+            if account.address == recipient:
+                assert len(account.balance_changes) == 0
+
+
+class TestRevertScenarios:
+    """Test block access list behavior during reverts."""
+    
+    def test_storage_write_becomes_read_on_revert(self) -> None:
+        """Test that storage writes become reads when transaction reverts."""
+        from ethereum.forks.amsterdam.block_access_lists.tracker import (
+            begin_call_frame,
+            rollback_call_frame,
+            track_storage_write,
+            track_storage_read,
+        )
+        
+        builder = BlockAccessListBuilder()
+        tracker = StateChangeTracker(builder)
+        set_block_access_index(tracker, Uint(1))
+        
+        address = Bytes20(b"\x01" * 20)
+        slot1 = Bytes32(b"\x01" * 32)
+        slot2 = Bytes32(b"\x02" * 32)
+        
+        # Begin call frame
+        begin_call_frame(tracker)
+        
+        # Mock state for storage operations
+        class MockState:
+            pass
+        state = MockState()
+        
+        # Track storage operations that will be reverted
+        track_storage_read(tracker, address, slot1, state)  # Read slot 0x01
+        
+        # Storage write to slot 0x02 (will be reverted)
+        track_storage_write(tracker, address, slot2, U256(42), state)
+        
+        # Rollback the call frame (simulating revert)
+        rollback_call_frame(tracker)
+        
+        # Build and check the access list
+        block_access_list = build_block_access_list(builder)
+        
+        # Find the account in the access list
+        account_found = False
+        for account in block_access_list.account_changes:
+            if account.address == address:
+                account_found = True
+                # Both slots should be in storage_reads
+                assert slot1 in builder.accounts[address].storage_reads
+                assert slot2 in builder.accounts[address].storage_reads
+                # No storage changes should exist
+                assert len(account.storage_changes) == 0
+                break
+        
+        assert account_found
+    
+    def test_balance_changes_removed_on_revert(self) -> None:
+        """Test that balance changes are removed on revert but address remains."""
+        from ethereum.forks.amsterdam.block_access_lists.tracker import (
+            begin_call_frame,
+            rollback_call_frame,
+        )
+        
+        builder = BlockAccessListBuilder()
+        tracker = StateChangeTracker(builder)
+        set_block_access_index(tracker, Uint(1))
+        
+        address = Bytes20(b"\x01" * 20)
+        
+        # Begin call frame
+        begin_call_frame(tracker)
+        
+        # Track balance change that will be reverted
+        track_balance_change(tracker, address, U256(1000))
+        
+        # Rollback the call frame
+        rollback_call_frame(tracker)
+        
+        # Build and check the access list
+        block_access_list = build_block_access_list(builder)
+        
+        # Address should still be in access list but without balance changes
+        account_found = False
+        for account in block_access_list.account_changes:
+            if account.address == address:
+                account_found = True
+                assert len(account.balance_changes) == 0
+                break
+        
+        assert account_found
+    
+    def test_nested_call_frames_with_partial_revert(self) -> None:
+        """Test nested call frames where inner frame reverts but outer succeeds."""
+        from ethereum.forks.amsterdam.block_access_lists.tracker import (
+            begin_call_frame,
+            commit_call_frame,
+            rollback_call_frame,
+        )
+        
+        builder = BlockAccessListBuilder()
+        tracker = StateChangeTracker(builder)
+        set_block_access_index(tracker, Uint(1))
+        
+        address1 = Bytes20(b"\x01" * 20)
+        address2 = Bytes20(b"\x02" * 20)
+        
+        # Outer call frame
+        begin_call_frame(tracker)
+        track_balance_change(tracker, address1, U256(900))
+        
+        # Inner call frame (will be reverted)
+        begin_call_frame(tracker)
+        track_balance_change(tracker, address2, U256(100))
+        
+        # Rollback inner frame
+        rollback_call_frame(tracker)
+        
+        # Commit outer frame
+        commit_call_frame(tracker)
+        
+        # Build and check the access list
+        block_access_list = build_block_access_list(builder)
+        
+        # address1 should have balance change, address2 should not
+        address1_found = False
+        address2_found = False
+        
+        for account in block_access_list.account_changes:
+            if account.address == address1:
+                address1_found = True
+                assert len(account.balance_changes) == 1
+                assert account.balance_changes[0].post_balance == U256(900)
+            elif account.address == address2:
+                address2_found = True
+                assert len(account.balance_changes) == 0
+        
+        assert address1_found
+        assert address2_found  # Address2 touched but no changes
 
 
 if __name__ == "__main__":
