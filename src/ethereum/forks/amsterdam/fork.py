@@ -35,6 +35,8 @@ from .block_access_lists.rlp_utils import compute_block_access_list_hash
 from .block_access_lists.tracker import (
     set_block_access_index,
     track_balance_change,
+    track_code_change,
+    track_nonce_change,
 )
 from .blocks import Block, Header, Log, Receipt, Withdrawal, encode_receipt
 from .bloom import logs_bloom
@@ -996,6 +998,9 @@ def process_transaction(
         destroy_account(block_env.state, block_env.coinbase)
 
     for address in tx_output.accounts_to_delete:
+        # Track final state before destruction
+        track_code_change(block_env.state.change_tracker, address, Bytes())
+        track_nonce_change(block_env.state.change_tracker, address, Uint(0))
         destroy_account(block_env.state, address)
 
     block_output.block_gas_used += tx_gas_used_after_refund
