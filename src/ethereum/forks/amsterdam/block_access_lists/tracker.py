@@ -388,6 +388,42 @@ def track_code_change(
         snapshot.code_changes.add((address, block_access_index, new_code))
 
 
+def handle_in_transaction_selfdestruct(
+    tracker: StateChangeTracker, address: Address
+) -> None:
+    """
+    Handle an account that self-destructed in the same transaction it was created.
+    
+    Per EIP-7928, accounts destroyed within their creation transaction must be
+    included as read-only with storage writes converted to reads.
+    
+    Note: Since the account was created in the current transaction, ALL its
+    changes must be from the current transaction only.
+    
+    Parameters
+    ----------
+    tracker :
+        The state change tracker instance.
+    address :
+        The address that self-destructed.
+    """
+    builder = tracker.block_access_list_builder
+    if address not in builder.accounts:
+        return
+    
+    account_data = builder.accounts[address]
+    
+    # Convert all storage writes to reads (all must be from current tx)
+    for slot in list(account_data.storage_changes.keys()):
+        account_data.storage_reads.add(slot)
+    account_data.storage_changes.clear()
+    
+    # Remove all other changes (all must be from current tx)
+    account_data.balance_changes = []
+    account_data.nonce_changes = []
+    account_data.code_changes = []
+
+
 def finalize_transaction_changes(
     tracker: StateChangeTracker, state: "State"
 ) -> None:

@@ -33,6 +33,7 @@ from . import vm
 from .block_access_lists.builder import build_block_access_list
 from .block_access_lists.rlp_utils import compute_block_access_list_hash
 from .block_access_lists.tracker import (
+    handle_in_transaction_selfdestruct,
     set_block_access_index,
     track_balance_change,
     track_code_change,
@@ -998,9 +999,11 @@ def process_transaction(
         destroy_account(block_env.state, block_env.coinbase)
 
     for address in tx_output.accounts_to_delete:
-        # Track final state before destruction
-        track_code_change(block_env.state.change_tracker, address, Bytes())
-        track_nonce_change(block_env.state.change_tracker, address, Uint(0))
+        # EIP-7928: In-transaction self-destruct - convert storage writes to reads
+        # Note: only accounts created in same tx are in accounts_to_delete
+        handle_in_transaction_selfdestruct(
+            block_env.state.change_tracker, address
+        )
         destroy_account(block_env.state, address)
 
     block_output.block_gas_used += tx_gas_used_after_refund
