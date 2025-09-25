@@ -1001,6 +1001,8 @@ def process_transaction(
     for address in tx_output.accounts_to_delete:
         # EIP-7928: In-transaction self-destruct - convert storage writes to reads
         # Note: only accounts created in same tx are in accounts_to_delete
+        # The function will preserve balance change to 0 if the account had
+        # balance from earlier transactions
         handle_in_transaction_selfdestruct(
             block_env.state.change_tracker, address
         )

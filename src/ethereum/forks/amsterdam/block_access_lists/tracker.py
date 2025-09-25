@@ -397,8 +397,9 @@ def handle_in_transaction_selfdestruct(
     Per EIP-7928, accounts destroyed within their creation transaction must be
     included as read-only with storage writes converted to reads.
     
-    IMPORTANT: The address might have received funds in earlier transactions
-    before being deployed, so we must only remove changes from the current tx.
+    IMPORTANT: Balance changes from self-destruct MUST be preserved because the
+    account could have had balance from any previous block. The change to 0 
+    constitutes a real state diff that must be recorded in the access list.
     
     Parameters
     ----------
@@ -416,7 +417,6 @@ def handle_in_transaction_selfdestruct(
     
     # Convert storage writes from current tx to reads
     for slot in list(account_data.storage_changes.keys()):
-        # Only convert if there are writes from current transaction
         account_data.storage_changes[slot] = [
             c for c in account_data.storage_changes[slot]
             if c.block_access_index != current_index
@@ -425,11 +425,9 @@ def handle_in_transaction_selfdestruct(
             del account_data.storage_changes[slot]
             account_data.storage_reads.add(slot)
     
-    # Remove changes from current transaction only
-    account_data.balance_changes = [
-        c for c in account_data.balance_changes
-        if c.block_access_index != current_index
-    ]
+    # Balance changes are preserved
+    
+    # Remove nonce and code changes from current transaction
     account_data.nonce_changes = [
         c for c in account_data.nonce_changes
         if c.block_access_index != current_index
