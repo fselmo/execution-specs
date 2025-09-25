@@ -514,15 +514,18 @@ def move_ether(
     modify_state(state, sender_address, reduce_sender_balance)
     modify_state(state, recipient_address, increase_recipient_balance)
 
-    sender_new_balance = get_account(state, sender_address).balance
-    recipient_new_balance = get_account(state, recipient_address).balance
+    # Only track balance changes if amount > 0 to avoid duplicate tracking
+    # for in-transaction self-destructs where balance is already 0
+    if amount > U256(0):
+        sender_new_balance = get_account(state, sender_address).balance
+        recipient_new_balance = get_account(state, recipient_address).balance
 
-    track_balance_change(
-        state.change_tracker, sender_address, U256(sender_new_balance)
-    )
-    track_balance_change(
-        state.change_tracker, recipient_address, U256(recipient_new_balance)
-    )
+        track_balance_change(
+            state.change_tracker, sender_address, U256(sender_new_balance)
+        )
+        track_balance_change(
+            state.change_tracker, recipient_address, U256(recipient_new_balance)
+        )
 
 
 def set_account_balance(state: State, address: Address, amount: U256) -> None:
@@ -540,13 +543,24 @@ def set_account_balance(state: State, address: Address, amount: U256) -> None:
     amount:
         The amount that needs to set in balance.
     """
-
+    # Get pre-transaction balance to check if this is a real state change
+    pre_tx_balance = U256(0)
+    if state._snapshots:
+        original_main_trie, _ = state._snapshots[0]
+        original_account = trie_get(original_main_trie, address)
+        if original_account is not None:
+            pre_tx_balance = original_account.balance
+    
     def set_balance(account: Account) -> None:
         account.balance = amount
 
     modify_state(state, address, set_balance)
 
-    track_balance_change(state.change_tracker, address, amount)
+    # Only track if balance changed from pre-transaction state
+    # This avoids tracking redundant changes for in-transaction self-destructs
+    # where an account is created and destroyed with 0 balance
+    if pre_tx_balance != amount:
+        track_balance_change(state.change_tracker, address, amount)
 
 def increment_nonce(state: State, address: Address) -> None:
     """
