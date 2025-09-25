@@ -9,6 +9,7 @@ This module tests the complete BAL implementation including:
 """
 
 import pytest
+from unittest.mock import MagicMock, patch
 from ethereum_types.bytes import Bytes, Bytes20, Bytes32
 from ethereum_types.numeric import U64, U256, Uint
 
@@ -721,7 +722,9 @@ class TestRevertScenarios:
         
         # Mock state for storage operations
         class MockState:
-            pass
+            def __init__(self):
+                self._storage_tries = {}
+                self._snapshots = []
         state = MockState()
         
         # Track storage operations that will be reverted
