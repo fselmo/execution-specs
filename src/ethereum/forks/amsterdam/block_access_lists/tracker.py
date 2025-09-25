@@ -397,8 +397,8 @@ def handle_in_transaction_selfdestruct(
     Per EIP-7928, accounts destroyed within their creation transaction must be
     included as read-only with storage writes converted to reads.
     
-    Note: Since the account was created in the current transaction, ALL its
-    changes must be from the current transaction only.
+    IMPORTANT: The address might have received funds in earlier transactions
+    before being deployed, so we must only remove changes from the current tx.
     
     Parameters
     ----------
@@ -412,16 +412,32 @@ def handle_in_transaction_selfdestruct(
         return
     
     account_data = builder.accounts[address]
+    current_index = tracker.current_block_access_index
     
-    # Convert all storage writes to reads (all must be from current tx)
+    # Convert storage writes from current tx to reads
     for slot in list(account_data.storage_changes.keys()):
-        account_data.storage_reads.add(slot)
-    account_data.storage_changes.clear()
+        # Only convert if there are writes from current transaction
+        account_data.storage_changes[slot] = [
+            c for c in account_data.storage_changes[slot]
+            if c.block_access_index != current_index
+        ]
+        if not account_data.storage_changes[slot]:
+            del account_data.storage_changes[slot]
+            account_data.storage_reads.add(slot)
     
-    # Remove all other changes (all must be from current tx)
-    account_data.balance_changes = []
-    account_data.nonce_changes = []
-    account_data.code_changes = []
+    # Remove changes from current transaction only
+    account_data.balance_changes = [
+        c for c in account_data.balance_changes
+        if c.block_access_index != current_index
+    ]
+    account_data.nonce_changes = [
+        c for c in account_data.nonce_changes
+        if c.block_access_index != current_index
+    ]
+    account_data.code_changes = [
+        c for c in account_data.code_changes
+        if c.block_access_index != current_index
+    ]
 
 
 def finalize_transaction_changes(
