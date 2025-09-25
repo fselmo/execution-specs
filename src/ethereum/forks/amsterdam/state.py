@@ -520,11 +520,34 @@ def move_ether(
         sender_new_balance = get_account(state, sender_address).balance
         recipient_new_balance = get_account(state, recipient_address).balance
 
+        # Check if this is an in-transaction self-destruct of a zero-balance account
+        # This happens when: account created in same tx, moving all funds out, and had 0 pre-tx balance
+        is_selfdestruct_zero_balance = False
+        if sender_address in state.created_accounts:
+            # Get sender's balance BEFORE this move_ether call
+            sender_balance_before_move = sender_new_balance + amount
+            # Check if we're moving the entire balance (characteristic of self-destruct)
+            if amount == sender_balance_before_move:
+                # Check pre-tx balance
+                sender_pre_tx_balance = U256(0)
+                if state._snapshots:
+                    original_main_trie, _ = state._snapshots[0]
+                    original_account = trie_get(original_main_trie, sender_address)
+                    if original_account is not None:
+                        sender_pre_tx_balance = original_account.balance
+                # If pre-tx was 0 and post-tx will be 0, skip tracking
+                if sender_pre_tx_balance == U256(0) and sender_new_balance == U256(0):
+                    is_selfdestruct_zero_balance = True
+
+        if not is_selfdestruct_zero_balance:
+            track_balance_change(
+                state.change_tracker, sender_address, U256(sender_new_balance)
+            )
+        
         track_balance_change(
-            state.change_tracker, sender_address, U256(sender_new_balance)
-        )
-        track_balance_change(
-            state.change_tracker, recipient_address, U256(recipient_new_balance)
+            state.change_tracker,
+            recipient_address,
+            U256(recipient_new_balance),
         )
 
 
@@ -550,7 +573,7 @@ def set_account_balance(state: State, address: Address, amount: U256) -> None:
         original_account = trie_get(original_main_trie, address)
         if original_account is not None:
             pre_tx_balance = original_account.balance
-    
+
     def set_balance(account: Account) -> None:
         account.balance = amount
 
