@@ -26,6 +26,7 @@ from ...state import (
     increment_nonce,
     is_account_alive,
     move_ether,
+    move_ether_selfdestruct,
     set_account_balance,
 )
 from ...utils.address import (
@@ -565,7 +566,7 @@ def selfdestruct(evm: Evm) -> None:
         evm.message.block_env.state, originator
     ).balance
 
-    move_ether(
+    move_ether_selfdestruct(
         evm.message.block_env.state,
         originator,
         beneficiary,

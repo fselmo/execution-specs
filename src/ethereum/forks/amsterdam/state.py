@@ -520,30 +520,61 @@ def move_ether(
         sender_new_balance = get_account(state, sender_address).balance
         recipient_new_balance = get_account(state, recipient_address).balance
 
-        # Check if this is an in-transaction self-destruct of a zero-balance account
-        # This happens when: account created in same tx, moving all funds out, and had 0 pre-tx balance
-        is_selfdestruct_zero_balance = False
-        if sender_address in state.created_accounts:
-            # Get sender's balance BEFORE this move_ether call
-            sender_balance_before_move = sender_new_balance + amount
-            # Check if we're moving the entire balance (characteristic of self-destruct)
-            if amount == sender_balance_before_move:
-                # Check pre-tx balance
-                sender_pre_tx_balance = U256(0)
-                if state._snapshots:
-                    original_main_trie, _ = state._snapshots[0]
-                    original_account = trie_get(original_main_trie, sender_address)
-                    if original_account is not None:
-                        sender_pre_tx_balance = original_account.balance
-                # If pre-tx was 0 and post-tx will be 0, skip tracking
-                if sender_pre_tx_balance == U256(0) and sender_new_balance == U256(0):
-                    is_selfdestruct_zero_balance = True
+        track_balance_change(
+            state.change_tracker, sender_address, U256(sender_new_balance)
+        )
+        track_balance_change(
+            state.change_tracker,
+            recipient_address,
+            U256(recipient_new_balance),
+        )
 
-        if not is_selfdestruct_zero_balance:
+
+def move_ether_selfdestruct(
+    state: State,
+    sender_address: Address,
+    recipient_address: Address,
+    amount: U256,
+) -> None:
+    """
+    Move funds during self-destruct operation.
+    
+    Special handling for EIP-7928: Only tracks balance changes when there's 
+    an actual state change from pre-transaction to post-transaction.
+    Avoids spurious balance entries for accounts that go 0→0.
+    """
+
+    def reduce_sender_balance(sender: Account) -> None:
+        if sender.balance < amount:
+            raise AssertionError
+        sender.balance -= amount
+
+    def increase_recipient_balance(recipient: Account) -> None:
+        recipient.balance += amount
+
+    modify_state(state, sender_address, reduce_sender_balance)
+    modify_state(state, recipient_address, increase_recipient_balance)
+
+    if amount > U256(0):
+        sender_new_balance = get_account(state, sender_address).balance
+        recipient_new_balance = get_account(state, recipient_address).balance
+
+        # For self-destruct: only track sender if there's a net change from pre-tx state
+        # Get pre-transaction balance to detect 0→0 cases
+        sender_pre_tx_balance = U256(0)
+        if state._snapshots:
+            original_main_trie, _ = state._snapshots[0]
+            original_account = trie_get(original_main_trie, sender_address)
+            if original_account is not None:
+                sender_pre_tx_balance = original_account.balance
+        
+        # Only track if balance actually changed from pre-tx state
+        if sender_pre_tx_balance != sender_new_balance:
             track_balance_change(
                 state.change_tracker, sender_address, U256(sender_new_balance)
             )
         
+        # Always track recipient since they're receiving funds
         track_balance_change(
             state.change_tracker,
             recipient_address,
