@@ -993,6 +993,8 @@ def process_transaction(
     set_account_balance(block_env.state, sender, sender_balance_after_refund)
 
     # transfer miner fees
+    # Track coinbase address access in block access list
+    track_address_access(block_env.state.change_tracker, block_env.coinbase)
     coinbase_balance_after_mining_fee = get_account(
         block_env.state, block_env.coinbase
     ).balance + U256(transaction_fee)
@@ -1049,6 +1051,9 @@ def process_withdrawals(
             rlp.encode(wd),
         )
 
+        # Track withdrawal address access in block access list
+        track_address_access(block_env.state.change_tracker, wd.address)
+        
         modify_state(block_env.state, wd.address, increase_recipient_balance)
 
         # Track balance change for BAL
