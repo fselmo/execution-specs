@@ -615,6 +615,16 @@ def set_account_balance(state: State, address: Address, amount: U256) -> None:
     # where an account is created and destroyed with 0 balance
     if pre_tx_balance != amount:
         track_balance_change(state.change_tracker, address, amount)
+    elif amount == U256(0) and address in state.change_tracker.block_access_list_builder.accounts:
+        # SELFDESTRUCT: If final balance equals pre-tx balance, remove any existing
+        # balance change entry for this transaction (no net change)
+        account_data = state.change_tracker.block_access_list_builder.accounts[address]
+        current_tx_index = state.change_tracker.current_block_access_index
+
+        account_data.balance_changes = [
+            change for change in account_data.balance_changes
+            if change.block_access_index != current_tx_index
+        ]
 
 def increment_nonce(state: State, address: Address) -> None:
     """
