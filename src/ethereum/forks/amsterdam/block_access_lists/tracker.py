@@ -287,9 +287,10 @@ def capture_pre_balance(
     """
     Capture and cache the pre-transaction balance for an account.
 
-    Retrieves the balance from the beginning of the current transaction by
-    accessing the state snapshot taken before transaction execution started.
-    The value is cached to avoid repeated lookups and maintain consistency.
+    This function caches the balance on first access for each address during
+    a transaction. It must be called before any balance modifications are made
+    to ensure we capture the pre-transaction balance correctly. The cache is
+    cleared at the beginning of each transaction.
 
     This is used by finalize_transaction_changes to determine which balance
     changes should be filtered out.
@@ -310,25 +311,12 @@ def capture_pre_balance(
     """
     if address not in tracker.pre_balance_cache:
         # Import locally to avoid circular import
-        from ..state import get_account_optional
+        from ..state import get_account
 
-        # Get the account from the pre-transaction snapshot
-        if state._snapshots:
-            original_trie, _ = state._snapshots[0]
-            from ..trie import trie_get
-            original_account = trie_get(original_trie, address)
-            if original_account is not None:
-                tracker.pre_balance_cache[address] = original_account.balance
-            else:
-                # Account didn't exist at transaction start
-                tracker.pre_balance_cache[address] = U256(0)
-        else:
-            # No snapshot, use current balance (shouldn't happen during tx)
-            account = get_account_optional(state, address)
-            if account is not None:
-                tracker.pre_balance_cache[address] = account.balance
-            else:
-                tracker.pre_balance_cache[address] = U256(0)
+        # Cache the current balance on first access
+        # This should be called before any balance modifications
+        account = get_account(state, address)
+        tracker.pre_balance_cache[address] = account.balance
     return tracker.pre_balance_cache[address]
 
 

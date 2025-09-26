@@ -502,6 +502,10 @@ def move_ether(
     """
     Move funds between accounts.
     """
+    # Capture pre-transaction balances before first modification
+    from .block_access_lists.tracker import capture_pre_balance
+    capture_pre_balance(state.change_tracker, sender_address, state)
+    capture_pre_balance(state.change_tracker, recipient_address, state)
 
     def reduce_sender_balance(sender: Account) -> None:
         if sender.balance < amount:
@@ -540,6 +544,9 @@ def set_account_balance(state: State, address: Address, amount: U256) -> None:
     amount:
         The amount that needs to set in balance.
     """
+    # Capture pre-transaction balance before first modification
+    from .block_access_lists.tracker import capture_pre_balance
+    capture_pre_balance(state.change_tracker, address, state)
 
     def set_balance(account: Account) -> None:
         account.balance = amount
