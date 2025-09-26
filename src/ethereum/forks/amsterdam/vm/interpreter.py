@@ -114,6 +114,8 @@ def process_message_call(message: Message) -> MessageCallOutput:
     block_env = message.block_env
     refund_counter = U256(0)
     if message.target == Bytes0(b""):
+        # Track address access for collision detection
+        track_address_access(block_env.state.change_tracker, message.current_target)
         is_collision = account_has_code_or_nonce(
             block_env.state, message.current_target
         ) or account_has_storage(block_env.state, message.current_target)
@@ -136,6 +138,8 @@ def process_message_call(message: Message) -> MessageCallOutput:
         if delegated_address is not None:
             message.disable_precompiles = True
             message.accessed_addresses.add(delegated_address)
+            # Track delegated address access in block access list
+            track_address_access(block_env.state.change_tracker, delegated_address)
             message.code = get_account(block_env.state, delegated_address).code
             message.code_address = delegated_address
 

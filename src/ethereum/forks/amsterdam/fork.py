@@ -34,6 +34,7 @@ from .block_access_lists.builder import build_block_access_list
 from .block_access_lists.rlp_utils import compute_block_access_list_hash
 from .block_access_lists.tracker import (
     set_block_access_index,
+    track_address_access,
     track_balance_change,
     track_code_change,
     track_nonce_change,
@@ -475,6 +476,9 @@ def check_transaction(
 
     sender_address = recover_sender(block_env.chain_id, tx)
     sender_account = get_account(block_env.state, sender_address)
+    
+    # Track sender address access in block access list
+    track_address_access(block_env.state.change_tracker, sender_address)
 
     if isinstance(
         tx, (FeeMarketTransaction, BlobTransaction, SetCodeTransaction)
@@ -679,6 +683,8 @@ def process_checked_system_transaction(
     system_tx_output : `MessageCallOutput`
         Output of processing the system transaction.
     """
+    # Track system contract address access in block access list
+    track_address_access(block_env.state.change_tracker, target_address)
     system_contract_code = get_account(block_env.state, target_address).code
 
     if len(system_contract_code) == 0:
@@ -726,6 +732,8 @@ def process_unchecked_system_transaction(
     system_tx_output : `MessageCallOutput`
         Output of processing the system transaction.
     """
+    # Track system contract address access in block access list
+    track_address_access(block_env.state.change_tracker, target_address)
     system_contract_code = get_account(block_env.state, target_address).code
     return process_system_transaction(
         block_env,

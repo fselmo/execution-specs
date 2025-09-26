@@ -181,6 +181,9 @@ def set_delegation(message: Message) -> U256:
             continue
 
         message.accessed_addresses.add(authority)
+        
+        # Track authority address in the block access list
+        track_address_access(state.change_tracker, authority)
 
         authority_account = get_account(state, authority)
         authority_code = authority_account.code
@@ -197,15 +200,21 @@ def set_delegation(message: Message) -> U256:
 
         if auth.address == NULL_ADDRESS:
             code_to_set = b""
+            # Track NULL_ADDRESS access when clearing delegation
+            track_address_access(state.change_tracker, NULL_ADDRESS)
         else:
             code_to_set = EOA_DELEGATION_MARKER + auth.address
+            # Track the delegation target address in the block access list
+            track_address_access(state.change_tracker, auth.address)
         set_code(state, authority, code_to_set)
 
         increment_nonce(state, authority)
 
     if message.code_address is None:
         raise InvalidBlock("Invalid type 4 transaction: no target")
-
+    
+    # Track the target address of the transaction
+    track_address_access(state.change_tracker, message.code_address)
     message.code = get_account(state, message.code_address).code
 
     return refund_counter

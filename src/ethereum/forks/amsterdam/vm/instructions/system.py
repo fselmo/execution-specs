@@ -564,6 +564,9 @@ def selfdestruct(evm: Evm) -> None:
     originator_balance = get_account(
         evm.message.block_env.state, originator
     ).balance
+    
+    # Track beneficiary address in block access list
+    track_address_access(evm.message.block_env.state.change_tracker, beneficiary)
 
     move_ether(
         evm.message.block_env.state,
@@ -712,6 +715,9 @@ def staticcall(evm: Evm) -> None:
         access_gas_cost,
     )
     charge_gas(evm, message_call_gas.cost + extend_memory.cost)
+    
+    # Track the 'to' address in block access list
+    track_address_access(evm.message.block_env.state.change_tracker, to)
 
     # OPERATION
     evm.memory += b"\x00" * extend_memory.expand_by

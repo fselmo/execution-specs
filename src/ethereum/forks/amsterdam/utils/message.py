@@ -17,6 +17,7 @@ from ethereum_types.bytes import Bytes, Bytes0
 from ethereum_types.numeric import Uint
 
 from ..fork_types import Address
+from ..block_access_lists.tracker import track_address_access
 from ..state import get_account
 from ..transactions import Transaction
 from ..vm import BlockEnvironment, Message, TransactionEnvironment
@@ -62,6 +63,8 @@ def prepare_message(
     elif isinstance(tx.to, Address):
         current_target = tx.to
         msg_data = tx.data
+        # Track recipient address access in block access list
+        track_address_access(block_env.state.change_tracker, tx.to)
         code = get_account(block_env.state, tx.to).code
         code_address = tx.to
     else:
