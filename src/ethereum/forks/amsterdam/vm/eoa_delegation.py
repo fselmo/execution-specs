@@ -199,9 +199,8 @@ def set_delegation(message: Message) -> U256:
             refund_counter += U256(PER_EMPTY_ACCOUNT_COST - PER_AUTH_BASE_COST)
 
         if auth.address == NULL_ADDRESS:
+            # Clear the delegation - code will be set to empty
             code_to_set = b""
-            # Track NULL_ADDRESS access when clearing delegation
-            track_address_access(state.change_tracker, NULL_ADDRESS)
         else:
             code_to_set = EOA_DELEGATION_MARKER + auth.address
             # Track the delegation target address in the block access list
