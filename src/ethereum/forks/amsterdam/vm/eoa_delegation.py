@@ -13,6 +13,7 @@ from ethereum.crypto.elliptic_curve import SECP256K1N, secp256k1_recover
 from ethereum.crypto.hash import keccak256
 from ethereum.exceptions import InvalidBlock, InvalidSignatureError
 
+from ..block_access_lists.tracker import track_address_access
 from ..fork_types import Address, Authorization
 from ..state import account_exists, get_account, increment_nonce, set_code
 from ..utils.hexadecimal import hex_to_address
@@ -142,6 +143,9 @@ def access_delegation(
         evm.accessed_addresses.add(address)
         access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
     code = get_account(state, address).code
+    
+    # Track the delegated address in the block access list
+    track_address_access(state.change_tracker, address)
 
     return True, address, code, access_gas_cost
 
