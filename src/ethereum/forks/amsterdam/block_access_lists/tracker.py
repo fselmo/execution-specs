@@ -392,15 +392,16 @@ def handle_in_transaction_selfdestruct(
     tracker: StateChangeTracker, address: Address
 ) -> None:
     """
-    Handle an account that self-destructed in the same transaction it was created.
-    
+    Handle an account that self-destructed in the same transaction it was
+    created.
+
     Per EIP-7928, accounts destroyed within their creation transaction must be
     included as read-only with storage writes converted to reads.
-    
+
     IMPORTANT: Balance changes from self-destruct MUST be preserved because the
-    account could have had balance from any previous block. The change to 0 
+    account could have had balance from any previous block. The change to 0
     constitutes a real state diff that must be recorded in the access list.
-    
+
     Parameters
     ----------
     tracker :
@@ -411,10 +412,10 @@ def handle_in_transaction_selfdestruct(
     builder = tracker.block_access_list_builder
     if address not in builder.accounts:
         return
-    
+
     account_data = builder.accounts[address]
     current_index = tracker.current_block_access_index
-    
+
     # Convert storage writes from current tx to reads
     for slot in list(account_data.storage_changes.keys()):
         account_data.storage_changes[slot] = [
@@ -424,9 +425,9 @@ def handle_in_transaction_selfdestruct(
         if not account_data.storage_changes[slot]:
             del account_data.storage_changes[slot]
             account_data.storage_reads.add(slot)
-    
+
     # Balance changes are preserved
-    
+
     # Remove nonce and code changes from current transaction
     account_data.nonce_changes = [
         c for c in account_data.nonce_changes

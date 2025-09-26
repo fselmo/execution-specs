@@ -538,8 +538,8 @@ def move_ether_selfdestruct(
 ) -> None:
     """
     Move funds during self-destruct operation.
-    
-    Special handling for EIP-7928: Only tracks balance changes when there's 
+
+    Special handling for EIP-7928: Only tracks balance changes when there's
     an actual state change from pre-transaction to post-transaction.
     Avoids spurious balance entries for accounts that go 0→0.
     """
@@ -559,21 +559,21 @@ def move_ether_selfdestruct(
         sender_new_balance = get_account(state, sender_address).balance
         recipient_new_balance = get_account(state, recipient_address).balance
 
-        # For self-destruct: only track sender if there's a net change from pre-tx state
-        # Get pre-transaction balance to detect 0→0 cases
+        # For self-destruct: only track sender if there's a net change from
+        # pre-tx state. Get pre-transaction balance to detect 0→0 cases
         sender_pre_tx_balance = U256(0)
         if state._snapshots:
             original_main_trie, _ = state._snapshots[0]
             original_account = trie_get(original_main_trie, sender_address)
             if original_account is not None:
                 sender_pre_tx_balance = original_account.balance
-        
+
         # Only track if balance actually changed from pre-tx state
         if sender_pre_tx_balance != sender_new_balance:
             track_balance_change(
                 state.change_tracker, sender_address, U256(sender_new_balance)
             )
-        
+
         # Always track recipient since they're receiving funds
         track_balance_change(
             state.change_tracker,
@@ -615,10 +615,16 @@ def set_account_balance(state: State, address: Address, amount: U256) -> None:
     # where an account is created and destroyed with 0 balance
     if pre_tx_balance != amount:
         track_balance_change(state.change_tracker, address, amount)
-    elif amount == U256(0) and address in state.change_tracker.block_access_list_builder.accounts:
-        # SELFDESTRUCT: If final balance equals pre-tx balance, remove any existing
-        # balance change entry for this transaction (no net change)
-        account_data = state.change_tracker.block_access_list_builder.accounts[address]
+    elif (
+        amount == U256(0)
+        and address
+        in state.change_tracker.block_access_list_builder.accounts
+    ):
+        # SELFDESTRUCT: If final balance equals pre-tx balance, remove any
+        # existing balance change entry for this transaction (no net change)
+        account_data = state.change_tracker.block_access_list_builder.accounts[
+            address
+        ]
         current_tx_index = state.change_tracker.current_block_access_index
 
         account_data.balance_changes = [

@@ -25,7 +25,6 @@ from ...state import (
     get_account,
     increment_nonce,
     is_account_alive,
-    move_ether,
     move_ether_selfdestruct,
     set_account_balance,
 )
