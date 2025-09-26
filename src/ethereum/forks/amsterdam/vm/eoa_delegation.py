@@ -203,8 +203,8 @@ def set_delegation(message: Message) -> U256:
             code_to_set = b""
         else:
             code_to_set = EOA_DELEGATION_MARKER + auth.address
-            # Track the delegation target address in the block access list
-            track_address_access(state.change_tracker, auth.address)
+            # Note: We don't track auth.address here - it's only tracked
+            # when actually accessed via access_delegation()
         set_code(state, authority, code_to_set)
 
         increment_nonce(state, authority)
