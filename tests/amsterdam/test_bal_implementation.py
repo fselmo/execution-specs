@@ -9,6 +9,7 @@ This module tests the complete BAL implementation including:
 """
 
 import pytest
+from unittest.mock import MagicMock, patch
 from ethereum_types.bytes import Bytes, Bytes20, Bytes32
 from ethereum_types.numeric import U64, U256, Uint
 
@@ -699,7 +700,8 @@ class TestValueCalls:
 class TestRevertScenarios:
     """Test block access list behavior during reverts."""
     
-    def test_storage_write_becomes_read_on_revert(self) -> None:
+    @patch("ethereum.forks.amsterdam.state.get_storage")
+    def test_storage_write_becomes_read_on_revert(self, mock_get_storage: MagicMock) -> None:
         """Test that storage writes become reads when transaction reverts."""
         from ethereum.forks.amsterdam.block_access_lists.tracker import (
             begin_call_frame,
@@ -721,11 +723,18 @@ class TestRevertScenarios:
         
         # Mock state for storage operations
         class MockState:
-            pass
+            _storage_tries = {}
+            
         state = MockState()
+        
+        # Mock get_storage to return U256(0) for reads
+        mock_get_storage.return_value = U256(0)
         
         # Track storage operations that will be reverted
         track_storage_read(tracker, address, slot1, state)  # Read slot 0x01
+        
+        # Mock get_storage to return old value for slot2
+        mock_get_storage.return_value = U256(10)  # Different from new value
         
         # Storage write to slot 0x02 (will be reverted)
         track_storage_write(tracker, address, slot2, U256(42), state)

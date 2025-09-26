@@ -290,7 +290,7 @@ def capture_pre_balance(
     Retrieves the balance from the beginning of the current transaction by
     accessing the state snapshot taken before transaction execution started.
     The value is cached to avoid repeated lookups and maintain consistency.
-    
+
     This is used by finalize_transaction_changes to determine which balance
     changes should be filtered out.
 
@@ -311,7 +311,7 @@ def capture_pre_balance(
     if address not in tracker.pre_balance_cache:
         # Import locally to avoid circular import
         from ..state import get_account_optional
-        
+
         # Get the account from the pre-transaction snapshot
         if state._snapshots:
             original_trie, _ = state._snapshots[0]
@@ -454,13 +454,13 @@ def handle_in_transaction_selfdestruct(
 ) -> None:
     """
     Handle an account that self-destructed in the same transaction it was created.
-    
+
     Per EIP-7928, accounts destroyed within their creation transaction must be
     included as read-only with storage writes converted to reads. Nonce and code
     changes from the current transaction are also removed.
-    
+
     Note: Balance changes are handled separately by finalize_transaction_changes.
-    
+
     Parameters
     ----------
     tracker :
@@ -471,10 +471,10 @@ def handle_in_transaction_selfdestruct(
     builder = tracker.block_access_list_builder
     if address not in builder.accounts:
         return
-    
+
     account_data = builder.accounts[address]
     current_index = tracker.current_block_access_index
-    
+
     # Convert storage writes from current tx to reads
     for slot in list(account_data.storage_changes.keys()):
         account_data.storage_changes[slot] = [
@@ -484,7 +484,7 @@ def handle_in_transaction_selfdestruct(
         if not account_data.storage_changes[slot]:
             del account_data.storage_changes[slot]
             account_data.storage_reads.add(slot)
-    
+
     # Remove nonce and code changes from current transaction
     account_data.nonce_changes = [
         c for c in account_data.nonce_changes
@@ -505,12 +505,12 @@ def finalize_transaction_changes(
     This method is called at the end of each transaction execution to filter
     out spurious balance changes. It removes all balance changes for addresses
     where the post-transaction balance equals the pre-transaction balance.
-    
+
     This is crucial for handling cases like:
     - In-transaction self-destructs where an account with 0 balance is created
       and destroyed, resulting in no net balance change
     - Round-trip transfers where an account receives and sends equal amounts
-    
+
     Only actual state changes are recorded in the Block Access List.
 
     Parameters
@@ -522,20 +522,20 @@ def finalize_transaction_changes(
     """
     # Import locally to avoid circular import
     from ..state import get_account
-    
+
     builder = tracker.block_access_list_builder
     current_index = tracker.current_block_access_index
-    
+
     # Check each address that had balance changes in this transaction
     for address in list(builder.accounts.keys()):
         account_data = builder.accounts[address]
-        
+
         # Get the pre-transaction balance
         pre_balance = capture_pre_balance(tracker, address, state)
-        
+
         # Get the current (post-transaction) balance
         post_balance = get_account(state, address).balance
-        
+
         # If pre-tx balance equals post-tx balance, remove all balance changes
         # for this address in the current transaction
         if pre_balance == post_balance:
