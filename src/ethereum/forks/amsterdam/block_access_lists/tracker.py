@@ -441,13 +441,15 @@ def handle_in_transaction_selfdestruct(
     tracker: StateChangeTracker, address: Address
 ) -> None:
     """
-    Handle an account that self-destructed in the same transaction it was created.
+    Handle an account that self-destructed in the same transaction it was
+    created.
 
     Per EIP-7928, accounts destroyed within their creation transaction must be
-    included as read-only with storage writes converted to reads. Nonce and code
-    changes from the current transaction are also removed.
+    included as read-only with storage writes converted to reads. Nonce and
+    code changes from the current transaction are also removed.
 
-    Note: Balance changes are handled separately by finalize_transaction_changes.
+    Note: Balance changes are handled separately by
+          finalize_transaction_changes.
 
     Parameters
     ----------

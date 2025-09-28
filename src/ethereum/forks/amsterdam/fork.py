@@ -37,8 +37,6 @@ from .block_access_lists.tracker import (
     handle_in_transaction_selfdestruct,
     set_block_access_index,
     track_balance_change,
-    track_code_change,
-    track_nonce_change,
 )
 from .blocks import Block, Header, Log, Receipt, Withdrawal, encode_receipt
 from .bloom import logs_bloom
@@ -1000,9 +998,9 @@ def process_transaction(
         destroy_account(block_env.state, block_env.coinbase)
 
     for address in tx_output.accounts_to_delete:
-        # EIP-7928: In-transaction self-destruct - convert storage writes to reads
-        # and remove nonce/code changes. Only accounts created in same tx are in
-        # accounts_to_delete per EIP-6780.
+        # EIP-7928: In-transaction self-destruct - convert storage writes to
+        # reads and remove nonce/code changes. Only accounts created in same
+        # tx are in accounts_to_delete per EIP-6780.
         handle_in_transaction_selfdestruct(
             block_env.state.change_tracker, address
         )
@@ -1010,7 +1008,10 @@ def process_transaction(
 
     # EIP-7928: Finalize transaction changes
     # Remove balance changes where post-tx balance equals pre-tx balance
-    finalize_transaction_changes(block_env.state.change_tracker, block_env.state)
+    finalize_transaction_changes(
+        block_env.state.change_tracker,
+        block_env.state,
+    )
 
     block_output.block_gas_used += tx_gas_used_after_refund
     block_output.blob_gas_used += tx_blob_gas_used
