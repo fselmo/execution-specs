@@ -13,6 +13,7 @@ from ethereum.crypto.elliptic_curve import SECP256K1N, secp256k1_recover
 from ethereum.crypto.hash import keccak256
 from ethereum.exceptions import InvalidBlock, InvalidSignatureError
 
+from ..block_access_lists import track_address_access
 from ..fork_types import Address, Authorization
 from ..state import account_exists, get_account, increment_nonce, set_code
 from ..utils.hexadecimal import hex_to_address
@@ -180,6 +181,9 @@ def set_delegation(message: Message) -> U256:
 
         authority_account = get_account(state, authority)
         authority_code = authority_account.code
+        
+        # EIP-7928: Track authority account access in BAL even if delegation fails
+        track_address_access(state.change_tracker, authority)
 
         if authority_code and not is_valid_delegation(authority_code):
             continue
