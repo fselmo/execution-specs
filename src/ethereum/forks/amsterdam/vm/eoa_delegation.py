@@ -181,8 +181,9 @@ def set_delegation(message: Message) -> U256:
 
         authority_account = get_account(state, authority)
         authority_code = authority_account.code
-        
-        # EIP-7928: Track authority account access in BAL even if delegation fails
+
+        # EIP-7928: Track authority account access in BAL even if delegation
+        # fails
         track_address_access(state.change_tracker, authority)
 
         if authority_code and not is_valid_delegation(authority_code):
