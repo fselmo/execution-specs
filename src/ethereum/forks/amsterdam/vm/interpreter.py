@@ -139,6 +139,12 @@ def process_message_call(message: Message) -> MessageCallOutput:
             message.code = get_account(block_env.state, delegated_address).code
             message.code_address = delegated_address
 
+            # EIP-7928: Track delegation target when loaded as call target
+            track_address_access(
+                block_env.state.change_tracker,
+                delegated_address,
+            )
+
         evm = process_message(message)
 
     if evm.error:
