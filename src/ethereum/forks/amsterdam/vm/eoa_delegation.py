@@ -13,7 +13,7 @@ from ethereum.crypto.elliptic_curve import SECP256K1N, secp256k1_recover
 from ethereum.crypto.hash import keccak256
 from ethereum.exceptions import InvalidBlock, InvalidSignatureError
 
-from ..block_access_lists import track_address_access
+from ..block_access_lists.tracker import track_address_access
 from ..fork_types import Address, Authorization
 from ..state import account_exists, get_account, increment_nonce, set_code
 from ..utils.hexadecimal import hex_to_address
