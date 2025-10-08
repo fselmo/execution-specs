@@ -494,10 +494,6 @@ def callcode(evm: Evm) -> None:
     )
     charge_gas(evm, message_call_gas.cost + extend_memory.cost)
 
-    track_address_access(
-        evm.message.block_env.state.change_tracker, code_address
-    )
-
     # OPERATION
     evm.memory += b"\x00" * extend_memory.expand_by
     sender_balance = get_account(
@@ -635,10 +631,6 @@ def delegatecall(evm: Evm) -> None:
         U256(0), gas, Uint(evm.gas_left), extend_memory.cost, access_gas_cost
     )
     charge_gas(evm, message_call_gas.cost + extend_memory.cost)
-
-    track_address_access(
-        evm.message.block_env.state.change_tracker, code_address
-    )
 
     # OPERATION
     evm.memory += b"\x00" * extend_memory.expand_by
