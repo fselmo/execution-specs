@@ -100,6 +100,15 @@ def sstore(evm: Evm) -> None:
     )
     current_value = get_storage(state, evm.message.current_target, key)
 
+    # Track the implicit SLOAD that occurs in SSTORE
+    # This must happen BEFORE charge_gas() so reads are recorded even if OOG
+    track_storage_read(
+        state.change_tracker,
+        evm.message.current_target,
+        key,
+        evm.message.block_env.state,
+    )
+
     gas_cost = Uint(0)
 
     if (evm.message.current_target, key) not in evm.accessed_storage_keys:
