@@ -604,7 +604,12 @@ def set_code(state: State, address: Address, code: Bytes) -> None:
 
     modify_state(state, address, write_code)
 
-    track_code_change(state.change_tracker, address, code)
+    # Only track code changes if it's not setting empty code on a
+    # newly created address. For newly created addresses, setting
+    # code to b"" is not a meaningful state change since the address
+    # had no code to begin with.
+    if not (code == b"" and address in state.created_accounts):
+        track_code_change(state.change_tracker, address, code)
 
 
 def get_storage_original(state: State, address: Address, key: Bytes32) -> U256:
