@@ -36,6 +36,7 @@ from .block_access_lists.tracker import (
     finalize_transaction_changes,
     handle_in_transaction_selfdestruct,
     set_block_access_index,
+    track_address_access,
     track_balance_change,
 )
 from .blocks import Block, Header, Log, Receipt, Withdrawal, encode_receipt
@@ -988,6 +989,11 @@ def process_transaction(
     coinbase_balance_after_mining_fee = get_account(
         block_env.state, block_env.coinbase
     ).balance + U256(transaction_fee)
+
+    # EIP-7928: Track coinbase in BAL even when transaction_fee is 0
+    # The coinbase is accessed during fee calculation, so must appear in BAL
+    track_address_access(block_env.state.change_tracker, block_env.coinbase)
+
     if coinbase_balance_after_mining_fee != 0:
         set_account_balance(
             block_env.state,
