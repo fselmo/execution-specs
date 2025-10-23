@@ -36,6 +36,7 @@ from .block_access_lists.tracker import (
     finalize_transaction_changes,
     handle_in_transaction_selfdestruct,
     set_block_access_index,
+    track_address_access,
     track_balance_change,
 )
 from .blocks import Block, Header, Log, Receipt, Withdrawal, encode_receipt
@@ -985,6 +986,10 @@ def process_transaction(
     set_account_balance(block_env.state, sender, sender_balance_after_refund)
 
     # transfer miner fees
+    # EIP-7928: Always track coinbase access, even for zero rewards
+    # This ensures coinbase appears in BAL as read-only for zero-value rewards
+    track_address_access(block_env.state.change_tracker, block_env.coinbase)
+    
     coinbase_balance_after_mining_fee = get_account(
         block_env.state, block_env.coinbase
     ).balance + U256(transaction_fee)
