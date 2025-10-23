@@ -989,7 +989,7 @@ def process_transaction(
     # EIP-7928: Always track coinbase access, even for zero rewards
     # This ensures coinbase appears in BAL as read-only for zero-value rewards
     track_address_access(block_env.state.change_tracker, block_env.coinbase)
-    
+
     coinbase_balance_after_mining_fee = get_account(
         block_env.state, block_env.coinbase
     ).balance + U256(transaction_fee)
