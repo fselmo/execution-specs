@@ -526,3 +526,53 @@ def test_bal_withdrawal_and_new_contract(
             oracle: Account(balance=15 * GWEI, code=code),
         },
     )
+
+
+@pytest.mark.parametrize(
+    "initial_balance",
+    [
+        pytest.param(5 * GWEI, id="existing_account"),
+        pytest.param(0, id="nonexistent_account"),
+    ],
+)
+def test_bal_zero_withdrawal(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+    initial_balance: int,
+) -> None:
+    """
+    Ensure BAL handles zero-amount withdrawal correctly.
+
+    Charlie either exists with initial balance or is non-existent.
+    Block with 0 transactions and 1 zero-amount withdrawal to Charlie.
+    Charlie appears in BAL but with empty changes, balance unchanged.
+    """
+    if initial_balance > 0:
+        charlie = pre.fund_eoa(amount=initial_balance)
+    else:
+        charlie = Address(0xCC)
+
+    block = Block(
+        txs=[],
+        withdrawals=[
+            Withdrawal(
+                index=0,
+                validator_index=0,
+                address=charlie,
+                amount=0,
+            )
+        ],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                charlie: BalAccountExpectation.empty(),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            charlie: Account(balance=initial_balance),
+        },
+    )
