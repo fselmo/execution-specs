@@ -792,11 +792,12 @@ def apply_body(
         data=block_env.block_hashes[-1],  # The parent hash
     )
 
-    for i, tx in enumerate(map(decode_transaction, transactions)):
+    decoded_txs = list(map(decode_transaction, transactions))
+    for i, tx in enumerate(decoded_txs):
         process_transaction(block_env, block_output, tx, Uint(i))
 
     # EIP-7928: Post-execution uses block_access_index len(transactions) + 1
-    post_execution_index = ulen(transactions) + Uint(1)
+    post_execution_index = Uint(len(decoded_txs)) + Uint(1)
     set_block_access_index(
         block_env.state.change_tracker, post_execution_index
     )
