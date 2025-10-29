@@ -495,22 +495,25 @@ def handle_in_transaction_selfdestruct(
     ]
 
 
-def finalize_transaction_changes(
+def normalize_balance_changes(
     tracker: StateChangeTracker, state: "State"
 ) -> None:
     """
-    Finalize changes for the current transaction.
+    Normalize balance changes for the current block access index.
 
-    This method is called at the end of each transaction execution to filter
-    out spurious balance changes. It removes all balance changes for addresses
-    where the post-transaction balance equals the pre-transaction balance.
+    This method filters out spurious balance changes by removing all balance
+    changes for addresses where the post-execution balance equals the
+    pre-execution balance.
 
     This is crucial for handling cases like:
     - In-transaction self-destructs where an account with 0 balance is created
       and destroyed, resulting in no net balance change
     - Round-trip transfers where an account receives and sends equal amounts
+    - Zero-amount withdrawals where the balance doesn't actually change
 
-    Only actual state changes are recorded in the Block Access List.
+    This should be called at the end of any operation that tracks balance
+    changes (transactions, withdrawals, etc.). Only actual state changes are
+    recorded in the Block Access List.
 
     Parameters
     ----------
