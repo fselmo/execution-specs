@@ -7,15 +7,18 @@ from execution_testing import (
     Alloc,
     BalAccountExpectation,
     BalBalanceChange,
+    BalCodeChange,
     BalNonceChange,
     BalStorageChange,
     BalStorageSlot,
     Block,
     BlockAccessListExpectation,
     BlockchainTestFiller,
+    Initcode,
     Op,
     Transaction,
     Withdrawal,
+    compute_create_address,
 )
 
 from .spec import ref_spec_7928
@@ -459,5 +462,67 @@ def test_bal_withdrawal_and_selfdestruct(
             alice: Account(nonce=1),
             bob: Account(balance=100 * GWEI),
             oracle: Account(balance=50 * GWEI),
+        },
+    )
+
+
+def test_bal_withdrawal_and_new_contract(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+) -> None:
+    """
+    Ensure BAL captures withdrawal to newly created contract.
+
+    Alice deploys Oracle contract with 5 gwei initial balance.
+    Oracle receives withdrawal of 10 gwei in same block.
+    Oracle ends with 15 gwei (5 from deployment + 10 from withdrawal).
+    """
+    alice = pre.fund_eoa()
+
+    code = Op.STOP
+    initcode = Initcode(deploy_code=code)
+    oracle = compute_create_address(alice, 0)
+
+    tx = Transaction(
+        sender=alice,
+        to=None,
+        data=initcode,
+        value=5 * GWEI,
+        gas_limit=1_000_000,
+        gas_price=0xA,
+    )
+
+    block = Block(
+        txs=[tx],
+        withdrawals=[
+            Withdrawal(
+                index=0,
+                validator_index=0,
+                address=oracle,
+                amount=10,
+            )
+        ],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                alice: BalAccountExpectation(
+                    nonce_changes=[BalNonceChange(tx_index=1, post_nonce=1)],
+                ),
+                oracle: BalAccountExpectation(
+                    code_changes=[BalCodeChange(tx_index=1, post_code=code)],
+                    balance_changes=[
+                        BalBalanceChange(tx_index=1, post_balance=5 * GWEI),
+                        BalBalanceChange(tx_index=2, post_balance=15 * GWEI),
+                    ],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            alice: Account(nonce=1),
+            oracle: Account(balance=15 * GWEI, code=code),
         },
     )
