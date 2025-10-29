@@ -31,11 +31,11 @@ def test_bal_withdrawal_empty_block(
     """
     Ensure BAL captures withdrawal balance changes in empty block.
 
-    Charlie starts with 0 balance.
+    Charlie starts with 1 gwei balance (existing account).
     Block with 0 transactions and 1 withdrawal of 10 gwei to Charlie.
-    Charlie ends with 10 gwei balance.
+    Charlie ends with 11 gwei balance.
     """
-    charlie = pre.fund_eoa(amount=0)
+    charlie = pre.fund_eoa(amount=1 * ONE_GWEI)
 
     block = Block(
         txs=[],
@@ -52,7 +52,7 @@ def test_bal_withdrawal_empty_block(
                 charlie: BalAccountExpectation(
                     balance_changes=[
                         BalBalanceChange(
-                            tx_index=1, post_balance=10 * ONE_GWEI
+                            tx_index=1, post_balance=11 * ONE_GWEI
                         )
                     ],
                 ),
@@ -64,7 +64,7 @@ def test_bal_withdrawal_empty_block(
         pre=pre,
         blocks=[block],
         post={
-            charlie: Account(balance=10 * ONE_GWEI),
+            charlie: Account(balance=11 * ONE_GWEI),
         },
     )
 
