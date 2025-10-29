@@ -6,9 +6,11 @@ from execution_testing import (
     Alloc,
     BalAccountExpectation,
     BalBalanceChange,
+    BalNonceChange,
     Block,
     BlockAccessListExpectation,
     BlockchainTestFiller,
+    Transaction,
     Withdrawal,
 )
 
@@ -62,6 +64,71 @@ def test_bal_withdrawal_empty_block(
         pre=pre,
         blocks=[block],
         post={
+            charlie: Account(balance=10 * ONE_GWEI),
+        },
+    )
+
+
+def test_bal_withdrawal_with_transaction(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+) -> None:
+    """
+    Ensure BAL captures both transaction and withdrawal balance changes.
+
+    Alice starts with 1 ETH, Bob starts with 0, Charlie starts with 0.
+    Alice sends 5 wei to Bob.
+    Charlie receives 10 gwei withdrawal.
+    Bob ends with 5 wei, Charlie ends with 10 gwei.
+    """
+    alice = pre.fund_eoa()
+    bob = pre.fund_eoa(amount=0)
+    charlie = pre.fund_eoa(amount=0)
+
+    tx = Transaction(
+        sender=alice,
+        to=bob,
+        value=5,
+        gas_price=0xA,
+    )
+
+    block = Block(
+        txs=[tx],
+        withdrawals=[
+            Withdrawal(
+                index=0,
+                validator_index=0,
+                address=charlie,
+                amount=10,
+            )
+        ],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                alice: BalAccountExpectation(
+                    nonce_changes=[BalNonceChange(tx_index=1, post_nonce=1)],
+                ),
+                bob: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(tx_index=1, post_balance=5)
+                    ],
+                ),
+                charlie: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(
+                            tx_index=2, post_balance=10 * ONE_GWEI
+                        )
+                    ],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            alice: Account(nonce=1),
+            bob: Account(balance=5),
             charlie: Account(balance=10 * ONE_GWEI),
         },
     )
