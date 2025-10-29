@@ -575,6 +575,8 @@ def test_bal_zero_withdrawal(
         pre=pre,
         blocks=[block],
         post={
-            charlie: Account(balance=initial_balance),
+            charlie: Account(balance=initial_balance)
+            if initial_balance > 0
+            else Account.NONEXISTENT,
         },
     )
