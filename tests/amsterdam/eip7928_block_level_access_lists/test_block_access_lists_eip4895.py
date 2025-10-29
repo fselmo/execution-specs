@@ -11,6 +11,7 @@ from execution_testing import (
     Block,
     BlockAccessListExpectation,
     BlockchainTestFiller,
+    Op,
     Transaction,
     Withdrawal,
 )
@@ -176,5 +177,59 @@ def test_bal_withdrawal_to_nonexistent_account(
         blocks=[block],
         post={
             charlie: Account(balance=10 * ONE_GWEI),
+        },
+    )
+
+
+def test_bal_withdrawal_no_evm_execution(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+) -> None:
+    """
+    Ensure BAL captures withdrawal without triggering EVM execution.
+
+    Oracle contract starts with 0 balance and storage slot 0x01 = 0x42.
+    Oracle's code writes 0xFF to slot 0x01 when called.
+    Block with 0 transactions and 1 withdrawal of 10 gwei to Oracle.
+    Storage slot 0x01 remains 0x42 (EVM never executes).
+    """
+    oracle = pre.deploy_contract(
+        code=Op.SSTORE(0x01, 0xFF),
+        storage={0x01: 0x42},
+    )
+
+    block = Block(
+        txs=[],
+        withdrawals=[
+            Withdrawal(
+                index=0,
+                validator_index=0,
+                address=oracle,
+                amount=10,
+            )
+        ],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                oracle: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(
+                            tx_index=1, post_balance=10 * ONE_GWEI
+                        )
+                    ],
+                    storage_reads=[],
+                    storage_changes=[],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            oracle: Account(
+                balance=10 * ONE_GWEI,
+                storage={0x01: 0x42},
+            ),
         },
     )
