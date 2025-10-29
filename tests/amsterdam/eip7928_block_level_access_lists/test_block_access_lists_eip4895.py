@@ -25,7 +25,7 @@ REFERENCE_SPEC_VERSION = ref_spec_7928.version
 
 pytestmark = pytest.mark.valid_from("Amsterdam")
 
-ONE_GWEI = 10**9
+GWEI = 10**9
 
 
 def test_bal_withdrawal_empty_block(
@@ -39,7 +39,7 @@ def test_bal_withdrawal_empty_block(
     Block with 0 transactions and 1 withdrawal of 10 gwei to Charlie.
     Charlie ends with 11 gwei balance.
     """
-    charlie = pre.fund_eoa(amount=1 * ONE_GWEI)
+    charlie = pre.fund_eoa(amount=1 * GWEI)
 
     block = Block(
         txs=[],
@@ -55,9 +55,7 @@ def test_bal_withdrawal_empty_block(
             account_expectations={
                 charlie: BalAccountExpectation(
                     balance_changes=[
-                        BalBalanceChange(
-                            tx_index=1, post_balance=11 * ONE_GWEI
-                        )
+                        BalBalanceChange(tx_index=1, post_balance=11 * GWEI)
                     ],
                 ),
             }
@@ -68,7 +66,7 @@ def test_bal_withdrawal_empty_block(
         pre=pre,
         blocks=[block],
         post={
-            charlie: Account(balance=11 * ONE_GWEI),
+            charlie: Account(balance=11 * GWEI),
         },
     )
 
@@ -118,9 +116,7 @@ def test_bal_withdrawal_and_transaction(
                 ),
                 charlie: BalAccountExpectation(
                     balance_changes=[
-                        BalBalanceChange(
-                            tx_index=2, post_balance=10 * ONE_GWEI
-                        )
+                        BalBalanceChange(tx_index=2, post_balance=10 * GWEI)
                     ],
                 ),
             }
@@ -133,7 +129,7 @@ def test_bal_withdrawal_and_transaction(
         post={
             alice: Account(nonce=1),
             bob: Account(balance=5),
-            charlie: Account(balance=10 * ONE_GWEI),
+            charlie: Account(balance=10 * GWEI),
         },
     )
 
@@ -165,9 +161,7 @@ def test_bal_withdrawal_to_nonexistent_account(
             account_expectations={
                 charlie: BalAccountExpectation(
                     balance_changes=[
-                        BalBalanceChange(
-                            tx_index=1, post_balance=10 * ONE_GWEI
-                        )
+                        BalBalanceChange(tx_index=1, post_balance=10 * GWEI)
                     ],
                 ),
             }
@@ -178,7 +172,7 @@ def test_bal_withdrawal_to_nonexistent_account(
         pre=pre,
         blocks=[block],
         post={
-            charlie: Account(balance=10 * ONE_GWEI),
+            charlie: Account(balance=10 * GWEI),
         },
     )
 
@@ -214,9 +208,7 @@ def test_bal_withdrawal_no_evm_execution(
             account_expectations={
                 oracle: BalAccountExpectation(
                     balance_changes=[
-                        BalBalanceChange(
-                            tx_index=1, post_balance=10 * ONE_GWEI
-                        )
+                        BalBalanceChange(tx_index=1, post_balance=10 * GWEI)
                     ],
                     storage_reads=[],
                     storage_changes=[],
@@ -230,7 +222,7 @@ def test_bal_withdrawal_no_evm_execution(
         blocks=[block],
         post={
             oracle: Account(
-                balance=10 * ONE_GWEI,
+                balance=10 * GWEI,
                 storage={0x01: 0x42},
             ),
         },
@@ -288,9 +280,7 @@ def test_bal_withdrawal_and_state_access_same_account(
                         )
                     ],
                     balance_changes=[
-                        BalBalanceChange(
-                            tx_index=2, post_balance=10 * ONE_GWEI
-                        )
+                        BalBalanceChange(tx_index=2, post_balance=10 * GWEI)
                     ],
                 ),
             }
@@ -303,7 +293,7 @@ def test_bal_withdrawal_and_state_access_same_account(
         post={
             alice: Account(nonce=1),
             oracle: Account(
-                balance=10 * ONE_GWEI,
+                balance=10 * GWEI,
                 storage={0x01: 0x42, 0x02: 0x99},
             ),
         },
@@ -315,7 +305,7 @@ def test_bal_withdrawal_and_value_transfer_same_address(
     blockchain_test: BlockchainTestFiller,
 ) -> None:
     """
-    Ensure BAL captures both transaction value transfer and withdrawal to same address.
+    Ensure BAL captures both value transfer and withdrawal to same address.
 
     Alice starts with 1 ETH, Bob starts with 0.
     Alice sends 5 gwei to Bob.
@@ -328,7 +318,7 @@ def test_bal_withdrawal_and_value_transfer_same_address(
     tx = Transaction(
         sender=alice,
         to=bob,
-        value=5 * ONE_GWEI,
+        value=5 * GWEI,
         gas_price=0xA,
     )
 
@@ -349,8 +339,8 @@ def test_bal_withdrawal_and_value_transfer_same_address(
                 ),
                 bob: BalAccountExpectation(
                     balance_changes=[
-                        BalBalanceChange(tx_index=1, post_balance=5 * ONE_GWEI),
-                        BalBalanceChange(tx_index=2, post_balance=15 * ONE_GWEI),
+                        BalBalanceChange(tx_index=1, post_balance=5 * GWEI),
+                        BalBalanceChange(tx_index=2, post_balance=15 * GWEI),
                     ],
                 ),
             }
@@ -362,6 +352,45 @@ def test_bal_withdrawal_and_value_transfer_same_address(
         blocks=[block],
         post={
             alice: Account(nonce=1),
-            bob: Account(balance=15 * ONE_GWEI),
+            bob: Account(balance=15 * GWEI),
+        },
+    )
+
+
+def test_bal_multiple_withdrawals_same_address(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+) -> None:
+    """
+    Ensure BAL accumulates multiple withdrawals to same address.
+
+    Charlie starts with 0 balance.
+    Block empty block with 3 withdrawals to Charlie: 5 gwei, 10 gwei, 15 gwei.
+    Charlie ends with 30 gwei balance (cumulative).
+    """
+    charlie = pre.fund_eoa(amount=0)
+
+    block = Block(
+        txs=[],
+        withdrawals=[
+            Withdrawal(index=i, validator_index=i, address=charlie, amount=amt)
+            for i, amt in enumerate([5, 10, 15])
+        ],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                charlie: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(tx_index=1, post_balance=30 * GWEI)
+                    ],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            charlie: Account(balance=30 * GWEI),
         },
     )
