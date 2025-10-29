@@ -394,3 +394,70 @@ def test_bal_multiple_withdrawals_same_address(
             charlie: Account(balance=30 * GWEI),
         },
     )
+
+
+def test_bal_withdrawal_and_selfdestruct(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+) -> None:
+    """
+    Ensure BAL captures withdrawal to self-destructed contract address.
+
+    Oracle contract starts with 100 gwei balance.
+    Alice triggers Oracle to self-destruct, sending balance to Bob.
+    Oracle receives withdrawal of 50 gwei after self-destructing.
+    Oracle ends with 50 gwei (funded by withdrawal).
+    """
+    alice = pre.fund_eoa()
+    bob = pre.fund_eoa(amount=0)
+    oracle = pre.deploy_contract(
+        balance=100 * GWEI,
+        code=Op.SELFDESTRUCT(bob),
+    )
+
+    tx = Transaction(
+        sender=alice,
+        to=oracle,
+        gas_limit=1_000_000,
+        gas_price=0xA,
+    )
+
+    block = Block(
+        txs=[tx],
+        withdrawals=[
+            Withdrawal(
+                index=0,
+                validator_index=0,
+                address=oracle,
+                amount=50,
+            )
+        ],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                alice: BalAccountExpectation(
+                    nonce_changes=[BalNonceChange(tx_index=1, post_nonce=1)],
+                ),
+                bob: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(tx_index=1, post_balance=100 * GWEI)
+                    ],
+                ),
+                oracle: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(tx_index=1, post_balance=0),
+                        BalBalanceChange(tx_index=2, post_balance=50 * GWEI),
+                    ],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            alice: Account(nonce=1),
+            bob: Account(balance=100 * GWEI),
+            oracle: Account(balance=50 * GWEI),
+        },
+    )
