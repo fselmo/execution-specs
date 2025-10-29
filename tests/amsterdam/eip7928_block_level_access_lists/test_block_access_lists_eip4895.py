@@ -2,6 +2,7 @@
 
 import pytest
 from execution_testing import (
+    EOA,
     Account,
     Address,
     Alloc,
@@ -94,7 +95,8 @@ def test_bal_withdrawal_and_transaction(
         sender=alice,
         to=bob,
         value=5,
-        gas_price=0xA,
+        max_fee_per_gas=50,
+        max_priority_fee_per_gas=5,
     )
 
     block = Block(
@@ -481,7 +483,7 @@ def test_bal_withdrawal_and_new_contract(
 
     code = Op.STOP
     initcode = Initcode(deploy_code=code)
-    oracle = compute_create_address(alice, 0)
+    oracle = compute_create_address(address=alice)
 
     tx = Transaction(
         sender=alice,
@@ -508,7 +510,7 @@ def test_bal_withdrawal_and_new_contract(
                     nonce_changes=[BalNonceChange(tx_index=1, post_nonce=1)],
                 ),
                 oracle: BalAccountExpectation(
-                    code_changes=[BalCodeChange(tx_index=1, post_code=code)],
+                    code_changes=[BalCodeChange(tx_index=1, new_code=code)],
                     balance_changes=[
                         BalBalanceChange(tx_index=1, post_balance=5 * GWEI),
                         BalBalanceChange(tx_index=2, post_balance=15 * GWEI),
@@ -550,7 +552,7 @@ def test_bal_zero_withdrawal(
     if initial_balance > 0:
         charlie = pre.fund_eoa(amount=initial_balance)
     else:
-        charlie = Address(0xCC)
+        charlie = EOA(0xCC)
 
     block = Block(
         txs=[],
