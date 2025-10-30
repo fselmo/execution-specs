@@ -1522,13 +1522,6 @@ def test_bal_coinbase_zero_tip(
     )
 
 
-@pytest.mark.parametrize_by_fork(
-    "precompile",
-    lambda fork: [
-        pytest.param(addr, id=f"0x{int.from_bytes(addr, 'big'):02x}")
-        for addr in fork.precompiles(block_number=0, timestamp=0)
-    ],
-)
 @pytest.mark.parametrize(
     "value",
     [
@@ -1536,6 +1529,7 @@ def test_bal_coinbase_zero_tip(
         pytest.param(0, id="no_value"),
     ],
 )
+@pytest.mark.with_all_precompiles
 def test_bal_precompile_funded(
     pre: Alloc,
     blockchain_test: BlockchainTestFiller,
@@ -1551,12 +1545,66 @@ def test_bal_precompile_funded(
     """
     alice = pre.fund_eoa()
 
+    addr_int = int.from_bytes(precompile, "big")
+
+    # Map precompile addresses to their required minimal input sizes
+    # - Most precompiles accept zero-padded input of appropriate length
+    # - For 0x0a (POINT_EVALUATION), use a known valid input from mainnet
+    if addr_int == 0x0A:
+        # Valid point evaluation input from mainnet tx:
+        # https://etherscan.io/tx/0xcb3dc8f3b14f1cda0c16a619a112102a8ec70dce1b3f1b28272227cf8d5fbb0e
+        tx_data = (
+            bytes.fromhex(
+                # versioned_hash (32)
+                "018156B94FE9735E573BAB36DAD05D60FEB720D424CCD20AAF719343C31E4246"
+            )
+            + bytes.fromhex(
+                # z (32)
+                "019123BCB9D06356701F7BE08B4494625B87A7B02EDC566126FB81F6306E915F"
+            )
+            + bytes.fromhex(
+                # y (32)
+                "6C2EB1E94C2532935B8465351BA1BD88EABE2B3FA1AADFF7D1CD816E8315BD38"
+            )
+            + bytes.fromhex(
+                # kzg_commitment (48)
+                "A9546D41993E10DF2A7429B8490394EA9EE62807BAE6F326D1044A51581306F58D4B9DFD5931E044688855280FF3799E"
+            )
+            + bytes.fromhex(
+                # kzg_proof (48)
+                "A2EA83D9391E0EE42E0C650ACC7A1F842A7D385189485DDB4FD54ADE3D9FD50D608167DCA6C776AAD4B8AD5C20691BFE"
+            )
+        )
+    else:
+        precompile_min_input = {
+            0x01: 128,  # ECRECOVER
+            0x02: 0,  # SHA256 (accepts empty)
+            0x03: 0,  # RIPEMD160 (accepts empty)
+            0x04: 0,  # IDENTITY (accepts empty)
+            0x05: 96,  # MODEXP
+            0x06: 128,  # BN256ADD
+            0x07: 96,  # BN256MUL
+            0x08: 0,  # BN256PAIRING (empty is valid)
+            0x09: 213,  # BLAKE2F
+            0x0B: 256,  # BLS12_G1_ADD
+            0x0C: 160,  # BLS12_G1_MSM
+            0x0D: 512,  # BLS12_G2_ADD
+            0x0E: 288,  # BLS12_G2_MSM
+            0x0F: 384,  # BLS12_PAIRING
+            0x10: 64,  # BLS12_MAP_FP_TO_G1
+            0x11: 128,  # BLS12_MAP_FP2_TO_G2
+            0x100: 160,  # P256VERIFY
+        }
+
+        input_size = precompile_min_input.get(addr_int, 0)
+        tx_data = bytes([0x00] * input_size if input_size > 0 else [])
+
     tx = Transaction(
         sender=alice,
         to=precompile,
         value=value,
-        gas_limit=100_000,
-        gas_price=0xA,
+        gas_limit=5_000_000,
+        data=tx_data,
     )
 
     block = Block(
