@@ -331,9 +331,7 @@ def track_balance_change(
     Track a balance change for an account.
 
     Records the new balance after any balance-affecting operation, including
-    transfers, gas payments, block rewards, and withdrawals. The balance is
-    encoded as a 16-byte value (uint128) which is sufficient for the total
-    ETH supply.
+    transfers, gas payments, block rewards, and withdrawals.
 
     Parameters
     ----------
