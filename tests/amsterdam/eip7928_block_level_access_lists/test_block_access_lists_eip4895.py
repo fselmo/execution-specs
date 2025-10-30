@@ -15,6 +15,7 @@ from execution_testing import (
     Block,
     BlockAccessListExpectation,
     BlockchainTestFiller,
+    Fork,
     Initcode,
     Op,
     Transaction,
@@ -578,5 +579,55 @@ def test_bal_zero_withdrawal(
             charlie: Account(balance=initial_balance)
             if initial_balance > 0
             else Account.NONEXISTENT,
+        },
+    )
+
+
+@pytest.mark.parametrize_by_fork(
+    "precompile",
+    lambda fork: [
+        pytest.param(addr, id=f"0x{int.from_bytes(addr, 'big'):02x}")
+        for addr in fork.precompiles(block_number=0, timestamp=0)
+    ],
+)
+def test_bal_withdrawal_to_precompiles(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+    precompile: Address,
+) -> None:
+    """
+    Ensure BAL captures withdrawal to precompile addresses.
+
+    Block with 0 transactions and 1 withdrawal of 10 gwei to precompile.
+    Precompile ends with 10 gwei balance.
+    """
+    block = Block(
+        txs=[],
+        withdrawals=[
+            Withdrawal(
+                index=0,
+                validator_index=0,
+                address=precompile,
+                amount=10,
+            )
+        ],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                precompile: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(tx_index=1, post_balance=10 * GWEI)
+                    ],
+                    storage_reads=[],
+                    storage_changes=[],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            precompile: Account(balance=10 * GWEI),
         },
     )
