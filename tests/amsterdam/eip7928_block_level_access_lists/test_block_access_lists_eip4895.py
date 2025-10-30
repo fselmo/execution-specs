@@ -631,3 +631,49 @@ def test_bal_withdrawal_to_precompiles(
             precompile: Account(balance=10 * GWEI),
         },
     )
+
+
+def test_bal_withdrawal_largest_amount(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+) -> None:
+    """
+    Ensure BAL captures withdrawal with largest amount.
+
+    Block with 0 transactions and 1 withdrawal of maximum
+    uint64 value (2^64-1)Gwei to Charlie.
+    Charlie ends with (2^64-1) Gwei.
+    """
+    charlie = pre.fund_eoa(amount=0)
+    max_amount = 2**64 - 1
+
+    block = Block(
+        txs=[],
+        withdrawals=[
+            Withdrawal(
+                index=0,
+                validator_index=0,
+                address=charlie,
+                amount=max_amount,
+            )
+        ],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                charlie: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(
+                            tx_index=1, post_balance=max_amount * GWEI
+                        )
+                    ],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            charlie: Account(balance=max_amount * GWEI),
+        },
+    )
