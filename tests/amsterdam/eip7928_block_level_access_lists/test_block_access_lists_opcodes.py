@@ -15,6 +15,7 @@ preventing consensus issues.
 """
 
 from enum import Enum
+from typing import Callable
 
 import pytest
 from execution_testing import (
@@ -685,7 +686,7 @@ def test_bal_storage_write_read_same_frame(
 def test_bal_storage_write_read_cross_frame(
     pre: Alloc,
     blockchain_test: BlockchainTestFiller,
-    call_opcode,
+    call_opcode: Callable[[Bytecode], Bytecode],
 ) -> None:
     """
     Ensure BAL captures write precedence over read across call frames.
