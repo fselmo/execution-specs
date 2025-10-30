@@ -1641,3 +1641,58 @@ def test_bal_precompile_call(
             alice: Account(nonce=1),
         },
     )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(0, id="zero_value"),
+        pytest.param(10**18, id="positive_value"),
+    ],
+)
+def test_bal_nonexistent_value_transfer(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+    value: int,
+) -> None:
+    """
+    Ensure BAL captures non-existent account on value transfer.
+
+    Alice sends value directly to non-existent Bob.
+    """
+    alice = pre.fund_eoa()
+    bob = Address(0xB0B)
+
+    tx = Transaction(
+        sender=alice,
+        to=bob,
+        value=value,
+        gas_limit=100_000,
+    )
+
+    block = Block(
+        txs=[tx],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                alice: BalAccountExpectation(
+                    nonce_changes=[BalNonceChange(tx_index=1, post_nonce=1)],
+                ),
+                bob: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(tx_index=1, post_balance=value)
+                    ]
+                    if value > 0
+                    else [],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            alice: Account(nonce=1),
+            bob: Account(balance=value) if value > 0 else Account.NONEXISTENT,
+        },
+    )
