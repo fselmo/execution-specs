@@ -1696,3 +1696,156 @@ def test_bal_nonexistent_value_transfer(
             bob: Account(balance=value) if value > 0 else Account.NONEXISTENT,
         },
     )
+
+
+@pytest.mark.parametrize(
+    "account_access_opcode,opcode_type",
+    [
+        pytest.param(
+            lambda target_addr, value: Op.BALANCE(target_addr),
+            "read_only",
+            id="balance",
+        ),
+        pytest.param(
+            lambda target_addr, value: Op.EXTCODESIZE(target_addr),
+            "read_only",
+            id="extcodesize",
+        ),
+        pytest.param(
+            lambda target_addr, value: Op.EXTCODECOPY(target_addr, 0, 0, 32),
+            "read_only",
+            id="extcodecopy",
+        ),
+        pytest.param(
+            lambda target_addr, value: Op.EXTCODEHASH(target_addr),
+            "read_only",
+            id="extcodehash",
+        ),
+        pytest.param(
+            lambda target_addr, value: Op.STATICCALL(
+                0, target_addr, 0, 0, 0, 0
+            ),
+            "read_only",
+            id="staticcall",
+        ),
+        pytest.param(
+            lambda target_addr, value: Op.DELEGATECALL(
+                0, target_addr, 0, 0, 0, 0
+            ),
+            "read_only",
+            id="delegatecall",
+        ),
+        pytest.param(
+            lambda target_addr, value: Op.CALL(
+                100_000, target_addr, value, 0, 0, 0, 0
+            ),
+            "call_transfer",
+            id="call",
+        ),
+        pytest.param(
+            lambda target_addr, value: Op.CALLCODE(
+                100_000, target_addr, value, 0, 0, 0, 0
+            ),
+            "callcode_transfer",
+            id="callcode",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(0, id="zero_value"),
+        pytest.param(10**18, id="positive_value"),
+    ],
+)
+def test_bal_nonexistent_account_access(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+    account_access_opcode: Callable[[Address, int], Op],
+    opcode_type: str,
+    value: int,
+) -> None:
+    """
+    Ensure BAL captures non-existent account access.
+
+    Alice calls Oracle contract which access non-existent Bob.
+    - CALL: Transfers value from Oracle to Bob
+    - Others: Read-only access
+    """
+    alice = pre.fund_eoa()
+    bob = Address(0xB0B)
+    oracle_balance = 2 * 10**18
+
+    # Skip value transfer tests for read-only opcodes
+    if value > 0 and opcode_type == "read_only":
+        pytest.skip("Opcode does not support value transfer")
+
+    oracle_code = account_access_opcode(bob, value)
+    oracle = pre.deploy_contract(code=oracle_code, balance=oracle_balance)
+
+    tx = Transaction(
+        sender=alice,
+        to=oracle,
+        gas_limit=1_000_000,
+    )
+
+    # Calculate expected balances based on opcode type
+    if opcode_type == "call_transfer" and value > 0:
+        # CALL: Oracle loses value, Bob gains value
+        oracle_final_balance = oracle_balance - value
+        bob_final_balance = value
+        bob_has_balance_change = True
+        oracle_has_balance_change = True
+    elif opcode_type == "callcode_transfer" and value > 0:
+        # CALLCODE: Self-transfer (net zero), Bob just accessed for code
+        oracle_final_balance = oracle_balance
+        bob_final_balance = 0
+        bob_has_balance_change = False
+        oracle_has_balance_change = False
+    else:
+        # Read-only or zero value
+        oracle_final_balance = oracle_balance
+        bob_final_balance = 0
+        bob_has_balance_change = False
+        oracle_has_balance_change = False
+
+    block = Block(
+        txs=[tx],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                alice: BalAccountExpectation(
+                    nonce_changes=[BalNonceChange(tx_index=1, post_nonce=1)],
+                ),
+                oracle: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(
+                            tx_index=1, post_balance=oracle_final_balance
+                        )
+                    ]
+                    if oracle_has_balance_change
+                    else [],
+                ),
+                bob: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(
+                            tx_index=1, post_balance=bob_final_balance
+                        )
+                    ]
+                    if bob_has_balance_change
+                    else [],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            alice: Account(nonce=1),
+            oracle: Account(balance=oracle_final_balance),
+            bob: Account(balance=bob_final_balance)
+            if bob_has_balance_change
+            else Account.NONEXISTENT,
+        },
+    )
