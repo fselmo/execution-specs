@@ -1543,7 +1543,7 @@ def test_bal_precompile_funded(
     value: int,
 ) -> None:
     """
-    Ensure BAL records precompile value transfer with or without balance change.
+    Ensure BAL records precompile value transfer.
 
     Alice sends value to precompile (pure value transfer).
     If value > 0: BAL must include balance_changes.
@@ -1702,36 +1702,32 @@ def test_bal_nonexistent_value_transfer(
     "account_access_opcode,opcode_type",
     [
         pytest.param(
-            lambda target_addr, value: Op.BALANCE(target_addr),
+            lambda target_addr, _: Op.BALANCE(target_addr),
             "read_only",
             id="balance",
         ),
         pytest.param(
-            lambda target_addr, value: Op.EXTCODESIZE(target_addr),
+            lambda target_addr, _: Op.EXTCODESIZE(target_addr),
             "read_only",
             id="extcodesize",
         ),
         pytest.param(
-            lambda target_addr, value: Op.EXTCODECOPY(target_addr, 0, 0, 32),
+            lambda target_addr, _: Op.EXTCODECOPY(target_addr, 0, 0, 32),
             "read_only",
             id="extcodecopy",
         ),
         pytest.param(
-            lambda target_addr, value: Op.EXTCODEHASH(target_addr),
+            lambda target_addr, _: Op.EXTCODEHASH(target_addr),
             "read_only",
             id="extcodehash",
         ),
         pytest.param(
-            lambda target_addr, value: Op.STATICCALL(
-                0, target_addr, 0, 0, 0, 0
-            ),
+            lambda target_addr, _: Op.STATICCALL(0, target_addr, 0, 0, 0, 0),
             "read_only",
             id="staticcall",
         ),
         pytest.param(
-            lambda target_addr, value: Op.DELEGATECALL(
-                0, target_addr, 0, 0, 0, 0
-            ),
+            lambda target_addr, _: Op.DELEGATECALL(0, target_addr, 0, 0, 0, 0),
             "read_only",
             id="delegatecall",
         ),

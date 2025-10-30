@@ -21,6 +21,7 @@ from execution_testing import (
     Account,
     Alloc,
     BalAccountExpectation,
+    BalNonceChange,
     BalStorageChange,
     BalStorageSlot,
     Block,
@@ -604,5 +605,62 @@ def test_bal_extcodecopy_and_oog(
             alice: Account(nonce=1),
             extcodecopy_contract: Account(),
             target_contract: Account(),
+        },
+    )
+
+
+def test_bal_storage_write_read_same_frame(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+) -> None:
+    """
+    Ensure BAL captures write precedence over read in same call frame.
+
+    Oracle writes to slot 0x01, then reads from slot 0x01 in same call.
+    The write shadows the read - only the write appears in BAL.
+    """
+    alice = pre.fund_eoa()
+
+    oracle_code = (
+        Op.SSTORE(0x01, 0x42)  # Write 0x42 to slot 0x01
+        + Op.SLOAD(0x01)  # Read from slot 0x01
+        + Op.STOP
+    )
+    oracle = pre.deploy_contract(code=oracle_code, storage={0x01: 0x99})
+
+    tx = Transaction(
+        sender=alice,
+        to=oracle,
+        gas_limit=1_000_000,
+    )
+
+    block = Block(
+        txs=[tx],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                alice: BalAccountExpectation(
+                    nonce_changes=[BalNonceChange(tx_index=1, post_nonce=1)],
+                ),
+                oracle: BalAccountExpectation(
+                    storage_changes=[
+                        BalStorageSlot(
+                            slot=0x01,
+                            slot_changes=[
+                                BalStorageChange(tx_index=1, post_value=0x42)
+                            ],
+                        )
+                    ],
+                    storage_reads=[],  # Empty! Write shadows the read
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            alice: Account(nonce=1),
+            oracle: Account(storage={0x01: 0x42}),
         },
     )
