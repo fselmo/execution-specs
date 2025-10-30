@@ -97,7 +97,7 @@ class StateChangeTracker:
     """
     Cache of pre-transaction balance values, keyed by address.
     This cache is cleared at the start of each transaction and used by
-    finalize_transaction_changes to filter out balance changes where
+    normalize_balance_changes to filter out balance changes where
     the final balance equals the initial balance.
     """
 
@@ -293,7 +293,7 @@ def capture_pre_balance(
     to ensure we capture the pre-transaction balance correctly. The cache is
     cleared at the beginning of each transaction.
 
-    This is used by finalize_transaction_changes to determine which balance
+    This is used by normalize_balance_changes to determine which balance
     changes should be filtered out.
 
     Parameters
@@ -454,7 +454,7 @@ def handle_in_transaction_selfdestruct(
     code changes from the current transaction are also removed.
 
     Note: Balance changes are handled separately by
-          finalize_transaction_changes.
+          normalize_balance_changes.
 
     Parameters
     ----------
