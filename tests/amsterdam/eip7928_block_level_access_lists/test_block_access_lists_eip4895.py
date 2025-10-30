@@ -15,7 +15,9 @@ from execution_testing import (
     Block,
     BlockAccessListExpectation,
     BlockchainTestFiller,
+    Environment,
     Fork,
+    Header,
     Initcode,
     Op,
     Transaction,
@@ -676,4 +678,90 @@ def test_bal_withdrawal_largest_amount(
         post={
             charlie: Account(balance=max_amount * GWEI),
         },
+    )
+
+
+def test_bal_withdrawal_to_coinbase(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+    fork: Fork,
+) -> None:
+    """
+    Ensure BAL captures withdrawal to coinbase address.
+
+    Block with 1 transaction and 1 withdrawal to coinbase/fee recipient.
+    Coinbase receives both transaction fees and withdrawal.
+    """
+    alice = pre.fund_eoa()
+    bob = pre.fund_eoa(amount=0)
+    coinbase = pre.fund_eoa(amount=0)
+
+    intrinsic_gas_calculator = fork.transaction_intrinsic_cost_calculator()
+    intrinsic_gas = intrinsic_gas_calculator()
+    tx_gas_limit = intrinsic_gas + 1000
+    gas_price = 0xA
+
+    tx = Transaction(
+        sender=alice,
+        to=bob,
+        value=5,
+        gas_limit=tx_gas_limit,
+        gas_price=gas_price,
+    )
+
+    # Calculate tip to coinbase
+    genesis_env = Environment(base_fee_per_gas=0x7)
+    base_fee_per_gas = fork.base_fee_per_gas_calculator()(
+        parent_base_fee_per_gas=int(genesis_env.base_fee_per_gas or 0),
+        parent_gas_used=0,
+        parent_gas_limit=genesis_env.gas_limit,
+    )
+    tip_to_coinbase = (gas_price - base_fee_per_gas) * intrinsic_gas
+    coinbase_final_balance = tip_to_coinbase + (10 * GWEI)
+
+    block = Block(
+        txs=[tx],
+        fee_recipient=coinbase,
+        header_verify=Header(base_fee_per_gas=base_fee_per_gas),
+        withdrawals=[
+            Withdrawal(
+                index=0,
+                validator_index=0,
+                address=coinbase,
+                amount=10,
+            )
+        ],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                alice: BalAccountExpectation(
+                    nonce_changes=[BalNonceChange(tx_index=1, post_nonce=1)],
+                ),
+                bob: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(tx_index=1, post_balance=5)
+                    ],
+                ),
+                coinbase: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(
+                            tx_index=1, post_balance=tip_to_coinbase
+                        ),
+                        BalBalanceChange(
+                            tx_index=2, post_balance=coinbase_final_balance
+                        ),
+                    ],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            alice: Account(nonce=1),
+            bob: Account(balance=5),
+            coinbase: Account(balance=coinbase_final_balance),
+        },
+        genesis_environment=genesis_env,
     )
