@@ -1520,3 +1520,124 @@ def test_bal_coinbase_zero_tip(
         },
         genesis_environment=genesis_env,
     )
+
+
+@pytest.mark.parametrize_by_fork(
+    "precompile",
+    lambda fork: [
+        pytest.param(addr, id=f"0x{int.from_bytes(addr, 'big'):02x}")
+        for addr in fork.precompiles(block_number=0, timestamp=0)
+    ],
+)
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(10**18, id="with_value"),
+        pytest.param(0, id="no_value"),
+    ],
+)
+def test_bal_precompile_funded(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+    precompile: Address,
+    value: int,
+) -> None:
+    """
+    Ensure BAL records precompile value transfer with or without balance change.
+
+    Alice sends value to precompile (pure value transfer).
+    If value > 0: BAL must include balance_changes.
+    If value = 0: BAL must have empty balance_changes.
+    """
+    alice = pre.fund_eoa()
+
+    tx = Transaction(
+        sender=alice,
+        to=precompile,
+        value=value,
+        gas_limit=100_000,
+        gas_price=0xA,
+    )
+
+    block = Block(
+        txs=[tx],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                alice: BalAccountExpectation(
+                    nonce_changes=[BalNonceChange(tx_index=1, post_nonce=1)],
+                ),
+                precompile: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(tx_index=1, post_balance=value)
+                    ]
+                    if value > 0
+                    else [],
+                    storage_reads=[],
+                    storage_changes=[],
+                    code_changes=[],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            alice: Account(nonce=1),
+        },
+    )
+
+
+@pytest.mark.parametrize_by_fork(
+    "precompile",
+    lambda fork: [
+        pytest.param(addr, id=f"0x{int.from_bytes(addr, 'big'):02x}")
+        for addr in fork.precompiles(block_number=0, timestamp=0)
+    ],
+)
+def test_bal_precompile_call(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+    precompile: Address,
+) -> None:
+    """
+    Ensure BAL records precompile when called via contract.
+
+    Alice calls Oracle contract which calls precompile.
+    BAL must include precompile with no balance/storage/code changes.
+    """
+    alice = pre.fund_eoa()
+
+    # Oracle contract that calls the precompile
+    oracle = pre.deploy_contract(
+        code=Op.CALL(100_000, precompile, 0, 0, 0, 0, 0) + Op.STOP
+    )
+
+    tx = Transaction(
+        sender=alice,
+        to=oracle,
+        gas_limit=200_000,
+        gas_price=0xA,
+    )
+
+    block = Block(
+        txs=[tx],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                alice: BalAccountExpectation(
+                    nonce_changes=[BalNonceChange(tx_index=1, post_nonce=1)],
+                ),
+                oracle: BalAccountExpectation.empty(),
+                precompile: BalAccountExpectation.empty(),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            alice: Account(nonce=1),
+        },
+    )
