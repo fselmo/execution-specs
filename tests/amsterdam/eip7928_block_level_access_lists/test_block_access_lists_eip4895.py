@@ -765,3 +765,46 @@ def test_bal_withdrawal_to_coinbase(
         },
         genesis_environment=genesis_env,
     )
+
+
+def test_bal_withdrawal_to_coinbase_empty_block(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+) -> None:
+    """
+    Ensure BAL captures withdrawal to coinbase when there are no transactions.
+
+    Empty block with 1 withdrawal of 10 gwei to coinbase/fee recipient.
+    Coinbase receives only withdrawal (no transaction fees).
+    """
+    coinbase = pre.fund_eoa(amount=0)
+
+    block = Block(
+        txs=[],
+        fee_recipient=coinbase,
+        withdrawals=[
+            Withdrawal(
+                index=0,
+                validator_index=0,
+                address=coinbase,
+                amount=10,
+            )
+        ],
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                coinbase: BalAccountExpectation(
+                    balance_changes=[
+                        BalBalanceChange(tx_index=1, post_balance=10 * GWEI)
+                    ],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            coinbase: Account(balance=10 * GWEI),
+        },
+    )
