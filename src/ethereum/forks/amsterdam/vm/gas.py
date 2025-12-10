@@ -118,6 +118,22 @@ class MessageCallGas:
     sub_call: Uint
 
 
+def check_gas(evm: Evm, amount: Uint) -> None:
+    """
+    Checks if `evm.gas_left` is at least `amount`.
+
+    Parameters
+    ----------
+    evm :
+        The current EVM.
+    amount :
+        The amount of gas the current operation requires.
+
+    """
+    if evm.gas_left < amount:
+        raise OutOfGasError
+
+
 def charge_gas(evm: Evm, amount: Uint) -> None:
     """
     Subtracts `amount` from `evm.gas_left`.

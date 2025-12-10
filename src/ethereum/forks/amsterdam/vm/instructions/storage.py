@@ -21,7 +21,7 @@ from ...state import (
     set_transient_storage,
 )
 from .. import Evm
-from ..exceptions import OutOfGasError, WriteInStaticContext
+from ..exceptions import WriteInStaticContext
 from ..gas import (
     GAS_CALL_STIPEND,
     GAS_COLD_SLOAD,
@@ -30,6 +30,7 @@ from ..gas import (
     GAS_STORAGE_UPDATE,
     GAS_WARM_ACCESS,
     charge_gas,
+    check_gas,
 )
 from ..stack import pop, push
 
@@ -52,8 +53,8 @@ def sload(evm: Evm) -> None:
     if (evm.message.current_target, key) in evm.accessed_storage_keys:
         charge_gas(evm, GAS_WARM_ACCESS)
     else:
-        evm.accessed_storage_keys.add((evm.message.current_target, key))
         charge_gas(evm, GAS_COLD_SLOAD)
+        evm.accessed_storage_keys.add((evm.message.current_target, key))
 
     # OPERATION
     value = get_storage(
@@ -76,11 +77,16 @@ def sstore(evm: Evm) -> None:
         The current EVM frame.
 
     """
+    # check static context before accessing storage
+    if evm.message.is_static:
+        raise WriteInStaticContext
+
     # STACK
     key = pop(evm.stack).to_be_bytes32()
     new_value = pop(evm.stack)
-    if evm.gas_left <= GAS_CALL_STIPEND:
-        raise OutOfGasError
+
+    # check we have at least the stipend gas
+    check_gas(evm, GAS_CALL_STIPEND + Uint(1))
 
     state = evm.message.block_env.state
     original_value = get_storage_original(
@@ -124,8 +130,6 @@ def sstore(evm: Evm) -> None:
                 )
 
     charge_gas(evm, gas_cost)
-    if evm.message.is_static:
-        raise WriteInStaticContext
     set_storage(state, evm.message.current_target, key, new_value)
 
     # PROGRAM COUNTER
@@ -169,14 +173,15 @@ def tstore(evm: Evm) -> None:
         The current EVM frame.
 
     """
+    if evm.message.is_static:
+        raise WriteInStaticContext
+
     # STACK
     key = pop(evm.stack).to_be_bytes32()
     new_value = pop(evm.stack)
 
     # GAS
     charge_gas(evm, GAS_WARM_ACCESS)
-    if evm.message.is_static:
-        raise WriteInStaticContext
     set_transient_storage(
         evm.message.tx_env.transient_storage,
         evm.message.current_target,
