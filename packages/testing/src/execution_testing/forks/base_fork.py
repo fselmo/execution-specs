@@ -2,6 +2,7 @@
 
 from abc import ABC, ABCMeta, abstractmethod
 from typing import (
+    TYPE_CHECKING,
     Any,
     ClassVar,
     Dict,
@@ -17,12 +18,16 @@ from typing import (
     Union,
 )
 
+if TYPE_CHECKING:
+    from execution_testing.base_types import Alloc
+    from execution_testing.gas import GasResult
+
 from execution_testing.base_types import (
     AccessList,
     Address,
     BlobSchedule,
 )
-from execution_testing.base_types.conversions import BytesConvertible
+from execution_testing.base_types.conversions import BytesConvertible, to_bytes
 from execution_testing.vm import EVMCodeType, Opcodes
 
 from .base_decorators import prefer_transition_to_method
@@ -172,6 +177,40 @@ class ExcessBlobGasCalculator(Protocol):
         """
         Return the excess blob gas given the parent's excess blob gas and blob
         gas used.
+        """
+        pass
+
+
+class ExecutionGasCalculator(Protocol):
+    """
+    A protocol to calculate the execution gas cost of bytecode at a given fork.
+
+    The calculator takes the test's pre-state (Alloc) directly, ensuring that
+    gas calculation uses the same state as the actual test execution.
+    """
+
+    def __call__(
+        self,
+        *,
+        code: BytesConvertible,
+        pre: "Alloc",
+        target: Address,
+        calldata: bytes = b"",
+        value: int = 0,
+    ) -> "GasResult":
+        """
+        Calculate exact execution gas cost by running bytecode through the fork's
+        spec EVM.
+
+        Args:
+            code: Bytecode to execute
+            pre: Pre-state allocation from the test (used to build EVM state)
+            target: Target contract address (must exist in pre)
+            calldata: Call data to pass to the contract
+            value: Value to send with call (in wei)
+
+        Returns:
+            GasResult with total_gas, refund, per_opcode breakdown, and any error
         """
         pass
 
@@ -860,6 +899,27 @@ class BaseFork(ABC, metaclass=BaseForkMeta):
         return cls.__name__
 
     @classmethod
+    def spec_module_name(cls) -> str:
+        """
+        Return the Python spec module name for this fork.
+
+        This is used by the execution gas calculator to dynamically load the
+        correct spec modules (ethereum.forks.<module_name>).
+
+        Override in forks that don't have their own spec module.
+        E.g., ConstantinopleFix returns 'constantinople'.
+        E.g., MuirGlacier returns 'istanbul'.
+
+        Default implementation converts CamelCase to snake_case.
+        """
+        import re
+
+        name = cls.__name__
+        # Insert underscore before uppercase letters and lowercase everything
+        s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+        return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+
+    @classmethod
     def fork_at(
         cls, *, block_number: int = 0, timestamp: int = 0
     ) -> Type["BaseFork"]:
@@ -932,3 +992,67 @@ class BaseFork(ABC, metaclass=BaseForkMeta):
     def children(cls) -> Set[Type["BaseFork"]]:
         """Return the children forks."""
         return set(cls._children)
+
+    @classmethod
+    def execution_gas_calculator(
+        cls, *, block_number: int = 0, timestamp: int = 0
+    ) -> ExecutionGasCalculator:
+        """
+        Return a callable that calculates execution gas for this fork.
+
+        Like transaction_intrinsic_cost_calculator, this returns a callable
+        that can be overridden per-fork to handle fork-specific EVM setup.
+
+        The returned calculator uses the test's pre-state (Alloc) directly,
+        ensuring gas calculation uses the same state as actual test execution.
+
+        Example:
+            # In a test
+            gas_calc = fork.execution_gas_calculator()
+            result = gas_calc(
+                code=Op.SSTORE(slot, 0) + Op.STOP,
+                pre=pre,
+                target=contract_address,
+            )
+            tx = Transaction(gas_limit=result.total_gas + 21000, ...)
+        """
+        from execution_testing.gas import run_bytecode_with_pre
+
+        # Capture fork class and block/timestamp for the closure
+        fork_cls = cls
+        bn = block_number
+        ts = timestamp
+
+        def fn(
+            *,
+            code: BytesConvertible,
+            pre: "Alloc",
+            target: Address,
+            calldata: bytes = b"",
+            value: int = 0,
+        ) -> "GasResult":
+            """
+            Calculate exact execution gas by running bytecode through spec EVM.
+
+            Args:
+                code: Bytecode to execute
+                pre: Pre-state allocation from the test (Alloc object)
+                target: Target contract address (must exist in pre)
+                calldata: Call data to pass to the contract
+                value: Value to send with call (in wei)
+
+            Returns:
+                GasResult with total_gas, refund, per_opcode breakdown, error
+            """
+            return run_bytecode_with_pre(
+                fork_cls=fork_cls,
+                code=to_bytes(code),
+                pre=pre,
+                target=bytes(target),
+                block_number=bn,
+                timestamp=ts,
+                calldata=calldata,
+                value=value,
+            )
+
+        return fn

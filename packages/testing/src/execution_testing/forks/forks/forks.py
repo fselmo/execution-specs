@@ -1064,7 +1064,12 @@ class Constantinople(Byzantium):
 class ConstantinopleFix(Constantinople, solc_name="constantinople"):
     """Constantinople Fix fork."""
 
-    pass
+    @classmethod
+    def spec_module_name(cls) -> str:
+        """ConstantinopleFix uses Constantinople's spec module."""
+        if cls is ConstantinopleFix:
+            return "constantinople"
+        return super().spec_module_name()
 
 
 class Istanbul(ConstantinopleFix):
@@ -1116,7 +1121,12 @@ class Istanbul(ConstantinopleFix):
 class MuirGlacier(Istanbul, solc_name="istanbul", ignore=True):
     """Muir Glacier fork."""
 
-    pass
+    @classmethod
+    def spec_module_name(cls) -> str:
+        """MuirGlacier uses Istanbul's spec module."""
+        if cls is MuirGlacier:
+            return "istanbul"
+        return super().spec_module_name()
 
 
 class Berlin(Istanbul):
@@ -1387,13 +1397,23 @@ class London(Berlin):
 class ArrowGlacier(London, solc_name="london", ignore=True):
     """Arrow Glacier fork."""
 
-    pass
+    @classmethod
+    def spec_module_name(cls) -> str:
+        """ArrowGlacier uses London's spec module."""
+        if cls is ArrowGlacier:
+            return "london"
+        return super().spec_module_name()
 
 
 class GrayGlacier(ArrowGlacier, solc_name="london", ignore=True):
     """Gray Glacier fork."""
 
-    pass
+    @classmethod
+    def spec_module_name(cls) -> str:
+        """GrayGlacier uses London's spec module."""
+        if cls is GrayGlacier:
+            return "london"
+        return super().spec_module_name()
 
 
 class Paris(
