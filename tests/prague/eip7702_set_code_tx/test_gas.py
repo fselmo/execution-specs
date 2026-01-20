@@ -34,6 +34,7 @@ from execution_testing import (
     TransactionReceipt,
     extend_with_defaults,
 )
+from execution_testing.forks import Amsterdam
 
 from .helpers import AddressType, ChainIDType
 from .spec import Spec, ref_spec_7702
@@ -927,10 +928,18 @@ def test_gas_cost(
         # case.
         discount_gas = max_discount
 
-    gas_used = tx_gas_limit - discount_gas
+    gas_after_refund = tx_gas_limit - discount_gas
 
     sender_account = pre[sender]
     assert sender_account is not None
+
+    if fork >= Amsterdam:
+        expected_receipt = TransactionReceipt(
+            gas_used=tx_gas_limit,  # before refund
+            gas_spent=gas_after_refund,  # after refund
+        )
+    else:
+        expected_receipt = TransactionReceipt(gas_used=gas_after_refund)
 
     tx = Transaction(
         gas_limit=tx_gas_limit,
@@ -940,7 +949,7 @@ def test_gas_cost(
         authorization_list=authorization_list,
         access_list=access_list,
         sender=sender,
-        expected_receipt=TransactionReceipt(gas_used=gas_used),
+        expected_receipt=expected_receipt,
     )
 
     state_test(

@@ -17,7 +17,7 @@ from execution_testing import (
     Transaction,
     TransactionReceipt,
 )
-from execution_testing.forks import Prague
+from execution_testing.forks import Amsterdam, Prague
 
 from .helpers import DataTestType
 from .spec import ref_spec_7623
@@ -82,12 +82,21 @@ class TestGasConsumption:
         state_test: StateTestFiller,
         pre: Alloc,
         tx: Transaction,
+        fork: Fork,
     ) -> None:
         """
         Test executing a transaction that fully consumes its execution gas
         allocation.
         """
-        tx.expected_receipt = TransactionReceipt(gas_used=tx.gas_limit)
+        # No refunds in this test (full gas consumption via INVALID opcode)
+        # gas_before_refund = gas_after_refund = tx.gas_limit
+        if fork >= Amsterdam:
+            tx.expected_receipt = TransactionReceipt(
+                gas_used=tx.gas_limit,
+                gas_spent=tx.gas_limit,
+            )
+        else:
+            tx.expected_receipt = TransactionReceipt(gas_used=tx.gas_limit)
         state_test(
             pre=pre,
             post={},
@@ -159,11 +168,22 @@ class TestGasConsumptionBelowDataFloor:
         pre: Alloc,
         tx: Transaction,
         tx_floor_data_cost: int,
+        fork: Fork,
     ) -> None:
         """
         Test executing a transaction that almost consumes the floor data cost.
         """
-        tx.expected_receipt = TransactionReceipt(gas_used=tx_floor_data_cost)
+        # No refunds in this test, floor data cost applies
+        # gas_before_refund = gas_after_refund = tx_floor_data_cost
+        if fork >= Amsterdam:
+            tx.expected_receipt = TransactionReceipt(
+                gas_used=tx_floor_data_cost,
+                gas_spent=tx_floor_data_cost,
+            )
+        else:
+            tx.expected_receipt = TransactionReceipt(
+                gas_used=tx_floor_data_cost
+            )
         state_test(
             pre=pre,
             post={},

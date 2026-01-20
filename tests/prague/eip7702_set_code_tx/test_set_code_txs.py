@@ -2986,15 +2986,15 @@ def test_set_code_to_precompile_not_enough_gas_for_precompile_execution(
         Spec.PER_EMPTY_ACCOUNT_COST - Spec.PER_AUTH_BASE_COST,
         intrinsic_gas // 5,  # max discount EIP-3529
     )
+    gas_after_refund = intrinsic_gas - discount
 
     if fork >= Amsterdam:
         expected_receipt = TransactionReceipt(
-            gas_spent=intrinsic_gas - discount
+            gas_used=intrinsic_gas,  # before refund
+            gas_spent=gas_after_refund,  # after refund
         )
     else:
-        expected_receipt = TransactionReceipt(
-            gas_used=intrinsic_gas - discount
-        )
+        expected_receipt = TransactionReceipt(gas_used=gas_after_refund)
 
     tx = Transaction(
         sender=pre.fund_eoa(),
