@@ -11,6 +11,7 @@ from .builder import (
     add_storage_write,
     add_touched_account,
     build_block_access_list,
+    validate_block_access_list_gas_limit,
 )
 from .rlp_utils import (
     compute_block_access_list_hash,
@@ -28,4 +29,5 @@ __all__ = [
     "build_block_access_list",
     "compute_block_access_list_hash",
     "rlp_encode_block_access_list",
+    "validate_block_access_list_gas_limit",
 ]

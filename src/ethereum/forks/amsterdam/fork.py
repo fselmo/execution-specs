@@ -29,7 +29,10 @@ from ethereum.exceptions import (
 )
 
 from . import vm
-from .block_access_lists.builder import build_block_access_list
+from .block_access_lists.builder import (
+    build_block_access_list,
+    validate_block_access_list_gas_limit,
+)
 from .block_access_lists.rlp_utils import compute_block_access_list_hash
 from .blocks import Block, Header, Log, Receipt, Withdrawal, encode_receipt
 from .bloom import logs_bloom
@@ -832,6 +835,12 @@ def apply_body(
     # Build block access list from block_env.state_changes
     block_output.block_access_list = build_block_access_list(
         block_env.state_changes
+    )
+
+    # Validate block access list gas limit constraint (EIP-7928)
+    validate_block_access_list_gas_limit(
+        block_access_list=block_output.block_access_list,
+        block_gas_limit=block_env.block_gas_limit,
     )
 
     return block_output

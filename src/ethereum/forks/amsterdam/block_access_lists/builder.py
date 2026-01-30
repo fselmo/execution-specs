@@ -17,9 +17,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Set
 
 from ethereum_types.bytes import Bytes
-from ethereum_types.numeric import U64, U256
+from ethereum_types.numeric import U64, U256, Uint
 
+from ..exceptions import BlockAccessListGasLimitExceededError
 from ..fork_types import Address
+from ..transactions import TX_ACCESS_LIST_STORAGE_KEY_COST
 from .rlp_types import (
     AccountChanges,
     BalanceChange,
@@ -517,3 +519,53 @@ def build_block_access_list(
         add_code_change(builder, address, block_access_index, new_code)
 
     return _build_from_builder(builder)
+
+
+def validate_block_access_list_gas_limit(
+    block_access_list: BlockAccessList,
+    block_gas_limit: Uint,
+) -> None:
+    """
+    Validate that the block access list does not exceed the gas limit.
+
+    The constraint is:
+    ``bal_items <= block_gas_limit // ITEM_COST``
+
+    Where ``bal_items = storage_keys + addresses`` and
+    ``ITEM_COST = GAS_WARM_ACCESS + TX_ACCESS_LIST_STORAGE_KEY_COST``.
+
+    Parameters
+    ----------
+    block_access_list :
+        The block access list to validate.
+    block_gas_limit :
+        The gas limit of the block.
+
+    Raises
+    ------
+    BlockAccessListGasLimitExceededError :
+        If the block access list exceeds the gas limit constraint.
+
+    """
+    from ..vm.gas import GAS_WARM_ACCESS
+
+    count_bal_items = Uint(0)
+    for account in block_access_list:
+        # Count each address as one item
+        count_bal_items += Uint(1)
+
+        # Collect unique storage keys across both
+        # reads and writes
+        unique_slots: Set[U256] = set()
+        for slot_change in account.storage_changes:
+            unique_slots.add(slot_change.slot)
+        for slot in account.storage_reads:
+            unique_slots.add(slot)
+
+        # Count each unique storage key as one item
+        count_bal_items += Uint(len(unique_slots))
+
+    item_cost = GAS_WARM_ACCESS + TX_ACCESS_LIST_STORAGE_KEY_COST
+
+    if bal_items > block_gas_limit // item_cost:
+        raise BlockAccessListGasLimitExceededError
