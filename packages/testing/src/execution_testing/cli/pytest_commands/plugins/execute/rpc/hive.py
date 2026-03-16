@@ -35,6 +35,7 @@ from execution_testing.test_types import (
 )
 
 from ...consume.simulators.helpers.ruleset import ruleset
+from ...shared.benchmarking import BENCHMARKING_MAX_GAS, GasBenchmarkValues
 from .chain_builder_eth_rpc import ChainBuilderEthRPC, TestingRPC
 
 
@@ -120,11 +121,18 @@ def base_pre(
 
 @pytest.fixture(scope="session")
 def base_pre_genesis(
+    request: pytest.FixtureRequest,
     session_fork: Fork,
     base_pre: Alloc,
 ) -> Tuple[Alloc, FixtureHeader]:
     """Create a genesis block from the blockchain test definition."""
-    env = Environment().set_fork_requirements(session_fork)
+    gas_benchmark_values = GasBenchmarkValues.from_config(request.config)
+    if gas_benchmark_values is not None:
+        env = Environment(
+            gas_limit=BENCHMARKING_MAX_GAS
+        ).set_fork_requirements(session_fork)
+    else:
+        env = Environment().set_fork_requirements(session_fork)
     assert env.withdrawals is None or len(env.withdrawals) == 0, (
         "withdrawals must be empty at genesis"
     )
