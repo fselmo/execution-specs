@@ -3521,16 +3521,20 @@ class Amsterdam(BPO2):
     def valid_opcodes(
         cls, *, block_number: int = 0, timestamp: int = 0
     ) -> List[Opcodes]:
-        """Add SLOTNUM opcode for Amsterdam (EIP-7843)."""
-        return [Opcodes.SLOTNUM] + super(Amsterdam, cls).valid_opcodes(
-            block_number=block_number, timestamp=timestamp
-        )
+        """Return list of Opcodes that are valid to work on this fork."""
+        del block_number, timestamp
+        return [
+            Opcodes.SLOTNUM,
+            Opcodes.SWAPN,
+            Opcodes.DUPN,
+            Opcodes.EXCHANGE,
+        ] + super(Amsterdam, cls).valid_opcodes()
 
     @classmethod
     def opcode_gas_map(
         cls, *, block_number: int = 0, timestamp: int = 0
     ) -> Dict[OpcodeBase, int | Callable[[OpcodeBase], int]]:
-        """Add SLOTNUM opcode gas cost for Amsterdam (EIP-7843)."""
+        """Add Amsterdam opcodes gas costs."""
         gas_costs = cls.gas_costs(
             block_number=block_number, timestamp=timestamp
         )
@@ -3540,6 +3544,9 @@ class Amsterdam(BPO2):
         return {
             **base_map,
             Opcodes.SLOTNUM: gas_costs.GAS_BASE,
+            Opcodes.SWAPN: gas_costs.GAS_VERY_LOW,
+            Opcodes.DUPN: gas_costs.GAS_VERY_LOW,
+            Opcodes.EXCHANGE: gas_costs.GAS_VERY_LOW,
         }
 
     @classmethod
