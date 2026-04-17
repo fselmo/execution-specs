@@ -53,6 +53,8 @@ dependencies = [
     "tenacity>=9.0.0,<10",
     "Jinja2>=3,<4",
     "ijson>=3.3,<4",
+    "psutil>=7.0,<8",
+    "pytest-split>=0.10.0,<1",
 ]
 
 [project.urls]
@@ -69,6 +71,7 @@ test = [
 lint = [
     "ruff==0.13.2",
     "mypy==1.20.0",
+    "types-psutil>=7.0,<8",
     "types-requests>=2.31,<2.33",
 ]
 dev = [

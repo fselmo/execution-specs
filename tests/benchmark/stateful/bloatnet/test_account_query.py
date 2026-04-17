@@ -101,6 +101,7 @@ def generate_account_query_params() -> List[ParameterSet]:
     return params
 
 
+@pytest.mark.heavy_state
 @pytest.mark.parametrize(
     "opcode,access_warm,mem_size,code_size,value_sent",
     generate_account_query_params(),

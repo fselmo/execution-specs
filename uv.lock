@@ -1066,6 +1066,7 @@ dependencies = [
     { name = "jinja2" },
     { name = "joblib" },
     { name = "platformdirs" },
+    { name = "psutil" },
     { name = "pydantic" },
     { name = "pyjwt" },
     { name = "pytest" },
@@ -1074,6 +1075,7 @@ dependencies = [
     { name = "pytest-json-report" },
     { name = "pytest-metadata" },
     { name = "pytest-regex" },
+    { name = "pytest-split" },
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "questionary" },
@@ -1092,11 +1094,13 @@ dev = [
     { name = "mypy" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "types-psutil" },
     { name = "types-requests" },
 ]
 lint = [
     { name = "mypy" },
     { name = "ruff" },
+    { name = "types-psutil" },
     { name = "types-requests" },
 ]
 test = [
@@ -1120,6 +1124,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3,<4" },
     { name = "joblib", specifier = ">=1.4.2" },
     { name = "platformdirs", specifier = ">=4.2,<5" },
+    { name = "psutil", specifier = ">=7.0,<8" },
     { name = "pydantic", specifier = ">=2.12.3,<3" },
     { name = "pyjwt", specifier = ">=2.3.0,<3" },
     { name = "pytest", specifier = ">=8,<9" },
@@ -1128,6 +1133,7 @@ requires-dist = [
     { name = "pytest-json-report", specifier = ">=1.5.0,<2" },
     { name = "pytest-metadata", specifier = ">=3,<4" },
     { name = "pytest-regex", specifier = ">=0.2.0,<0.3" },
+    { name = "pytest-split", specifier = ">=0.10.0,<1" },
     { name = "pytest-xdist", specifier = ">=3.3.1,<4" },
     { name = "pyyaml", specifier = ">=6.0.2,<7" },
     { name = "questionary", specifier = ">=2.1.0,<3" },
@@ -1146,11 +1152,13 @@ dev = [
     { name = "mypy", specifier = "==1.20.0" },
     { name = "pytest-cov", specifier = ">=4.1.0,<5" },
     { name = "ruff", specifier = "==0.13.2" },
+    { name = "types-psutil", specifier = ">=7.0,<8" },
     { name = "types-requests", specifier = ">=2.31,<2.33" },
 ]
 lint = [
     { name = "mypy", specifier = "==1.20.0" },
     { name = "ruff", specifier = "==0.13.2" },
+    { name = "types-psutil", specifier = ">=7.0,<8" },
     { name = "types-requests", specifier = ">=2.31,<2.33" },
 ]
 test = [{ name = "pytest-cov", specifier = ">=4.1.0,<5" }]
@@ -2526,6 +2534,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pytest-split"
+version = "0.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2f/16/8af4c5f2ceb3640bb1f78dfdf5c184556b10dfe9369feaaad7ff1c13f329/pytest_split-0.11.0.tar.gz", hash = "sha256:8ebdb29cc72cc962e8eb1ec07db1eeb98ab25e215ed8e3216f6b9fc7ce0ec2b5", size = 13421, upload-time = "2026-02-03T09:14:31.469Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ae/a1/d4423657caaa8be9b31e491592b49cebdcfd434d3e74512ce71f6ec39905/pytest_split-0.11.0-py3-none-any.whl", hash = "sha256:899d7c0f5730da91e2daf283860eb73b503259cb416851a65599368849c7f382", size = 11911, upload-time = "2026-02-03T09:14:33.708Z" },
+]
+
+[[package]]
 name = "pytest-xdist"
 version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3056,6 +3076,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a6/2f/5ec6be52952de47e79b1d250c00a922365a76503e3c75605c1cd890c61aa/trie-3.1.0.tar.gz", hash = "sha256:b31fd3376d6dccfe8ad13b525e233f2c268d5c48afb90a4de09672423d4b1026", size = 72800, upload-time = "2025-01-29T17:51:26.309Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/85/79/e6e105236eb1bb0c3ac82c968c143de456a3192c17d60df2f8c528eb3323/trie-3.1.0-py3-none-any.whl", hash = "sha256:dfc3e6ac0e76f0efa900ec1bfd082f0f1ba87f95cbfd81cc12338b03f4c679c4", size = 38940, upload-time = "2025-01-29T17:51:24.21Z" },
+]
+
+[[package]]
+name = "types-psutil"
+version = "7.2.2.20260408"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/44/14/279fd5defebbd560ede04aecd38f7651cccee7336f2264d0889d8c9a9d43/types_psutil-7.2.2.20260408.tar.gz", hash = "sha256:e8053450685965b8cd52afb62569073d00ea9967ae78bb45dff5f606847f97f2", size = 26556, upload-time = "2026-04-08T04:27:44.349Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/af/40/2fd92a4a1ee088c4dbcc44c977908d9869838d9cd2a2fa2e001352f56694/types_psutil-7.2.2.20260408-py3-none-any.whl", hash = "sha256:0c334f6f6bc9e9c24fca5c7d1f0b6971c961a0a2e3956dc5ce704722c01f9762", size = 32861, upload-time = "2026-04-08T04:27:42.929Z" },
 ]
 
 [[package]]

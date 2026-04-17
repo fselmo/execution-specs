@@ -790,6 +790,7 @@ def test_fixture_output_based_on_command_line_args(
         file
         for file in all_files
         if file.name not in expected_additional_files
+        and not file.name.startswith("per_test_rss")
     ]
     for fixture_file, fixture_count in zip(
         expected_fixture_files, expected_fixture_counts
@@ -943,6 +944,7 @@ def test_fill_variables(
         file
         for file in all_files
         if file.name not in expected_additional_files
+        and not file.name.startswith("per_test_rss")
     ]
     for fixture_file, fixture_count in zip(
         expected_fixture_files, expected_fixture_counts

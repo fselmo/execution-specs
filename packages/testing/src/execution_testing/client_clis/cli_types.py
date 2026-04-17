@@ -460,6 +460,7 @@ class LazyAllocStr(LazyAlloc[str]):
         return Alloc.model_validate_json(self.raw)
 
 
+@dataclass(kw_only=True)
 class LazyAllocFile(LazyAlloc[Path]):
     """
     Lazy allocation backed by a filesystem path.
@@ -469,7 +470,15 @@ class LazyAllocFile(LazyAlloc[Path]):
     in-flight account dict in memory at a time, avoiding the multi-GB peak
     that `LazyAllocStr` incurs by holding the full JSON string alongside the
     validated `Alloc`.
+
+    `_temp_dir` optionally pins the `TemporaryDirectory` that owns the backing
+    file — keeping the directory reachable for as long as the `LazyAllocFile`
+    is alive. Chained t8n calls rely on this so the next invocation can read
+    `raw` directly via `--input.alloc=<path>` instead of re-serializing the
+    full alloc through Python memory.
     """
+
+    _temp_dir: Any = None
 
     def validate(self) -> Alloc:
         """Validate the alloc by streaming entries from the backing file."""
@@ -538,18 +547,30 @@ class TransitionToolInput:
 
         return input_paths
 
-    def model_dump_json(self, **model_dump_config: Any) -> str:
-        """Dump the model in string JSON format."""
-        if isinstance(self.alloc, Alloc):
-            alloc_contents = self.alloc.model_dump_json(**model_dump_config)
-        elif isinstance(self.alloc, LazyAllocStr):
-            alloc_contents = self.alloc.raw
-        elif isinstance(self.alloc, LazyAllocFile):
-            alloc_contents = self.alloc.get().model_dump_json(
-                **model_dump_config
-            )
-        else:
-            raise Exception(f"Invalid alloc type: {type(self.alloc)}")
+    def model_dump_json(
+        self, omit_alloc: bool = False, **model_dump_config: Any
+    ) -> str:
+        """
+        Dump the model in string JSON format.
+
+        When `omit_alloc=True` the alloc field is skipped — used by callers
+        that route the alloc to t8n directly via `--input.alloc=<path>` and
+        want to avoid re-serializing the full alloc through Python memory.
+        """
+        alloc_contents: str | None = None
+        if not omit_alloc:
+            if isinstance(self.alloc, Alloc):
+                alloc_contents = self.alloc.model_dump_json(
+                    **model_dump_config
+                )
+            elif isinstance(self.alloc, LazyAllocStr):
+                alloc_contents = self.alloc.raw
+            elif isinstance(self.alloc, LazyAllocFile):
+                alloc_contents = self.alloc.get().model_dump_json(
+                    **model_dump_config
+                )
+            else:
+                raise Exception(f"Invalid alloc type: {type(self.alloc)}")
 
         env_contents = self.env.model_dump_json(**model_dump_config)
         txs_contents = (
@@ -560,10 +581,11 @@ class TransitionToolInput:
             + "]"
         )
         input_contents: Dict[str, str] = {
-            "alloc": alloc_contents,
             "env": env_contents,
             "txs": txs_contents,
         }
+        if alloc_contents is not None:
+            input_contents = {"alloc": alloc_contents, **input_contents}
         if self.blob_params is not None:
             input_contents["blobParams"] = self.blob_params.model_dump_json(
                 **model_dump_config

@@ -254,3 +254,63 @@ def test_dump_files_to_directory_copies_lazy_alloc_file(
     dump_files_to_directory(dump_dir, {"output/alloc.json": lazy})
 
     assert (dump_dir / "output" / "alloc.json").read_text() == source_text
+
+
+def test_lazy_alloc_file_pins_backing_temp_dir() -> None:
+    """
+    When a `LazyAllocFile` is handed a `TemporaryDirectory`, that directory
+    must stay alive as long as the lazy alloc does — otherwise chained
+    t8n calls would find the backing file deleted before they read it.
+    """
+    import gc
+    import tempfile
+
+    td = tempfile.TemporaryDirectory()
+    td_name = td.name
+    alloc_path = Path(td.name) / "alloc.json"
+    alloc_path.write_text(TEST_ALLOC.model_dump_json())
+
+    lazy = LazyAllocFile(
+        raw=alloc_path,
+        _state_root=TEST_ALLOC_STATE_ROOT,
+        _temp_dir=td,
+    )
+    del td
+    gc.collect()
+
+    assert Path(td_name).exists(), (
+        "temp dir was cleaned up while LazyAllocFile still holds it"
+    )
+    assert lazy.get() == TEST_ALLOC
+
+
+def test_transition_tool_input_model_dump_json_omit_alloc(
+    tmp_path: Path,
+) -> None:
+    """
+    When the caller routes a `LazyAllocFile` directly to t8n via
+    `--input.alloc=<path>`, `model_dump_json(omit_alloc=True)` must emit a
+    JSON payload without the `alloc` field so t8n doesn't receive the
+    alloc through stdin redundantly.
+    """
+    source = tmp_path / "source_alloc.json"
+    source.write_text(TEST_ALLOC.model_dump_json())
+    lazy = LazyAllocFile(raw=source, _state_root=TEST_ALLOC_STATE_ROOT)
+
+    input_data = TransitionToolInput(
+        alloc=lazy, txs=[], env=Environment()
+    )
+
+    dumped = input_data.model_dump_json(
+        omit_alloc=True, by_alias=True, exclude_none=True
+    )
+    parsed = json.loads(dumped)
+    assert "alloc" not in parsed
+    assert "env" in parsed
+    assert "txs" in parsed
+
+    dumped_full = input_data.model_dump_json(
+        by_alias=True, exclude_none=True
+    )
+    parsed_full = json.loads(dumped_full)
+    assert "alloc" in parsed_full

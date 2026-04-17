@@ -225,6 +225,13 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "heavy_state: Marks a benchmark test that builds deep per-worker "
+        "state (>~4 GiB peak RSS) and should be routed to the dedicated "
+        "low-concurrency CI cell. Heavy tests are excluded from light "
+        "pytest-split cells and included in the heavy cell.",
+    )
+    config.addinivalue_line(
+        "markers",
         "pre_alloc_group: Control shared pre-allocation grouping (use "
         '"separate" for isolated group or custom string for named groups)',
     )

@@ -94,6 +94,7 @@ from ..shared.helpers import (
 from ..spec_version_checker.spec_version_checker import (
     get_ref_spec_from_module,
 )
+from .rss_profile import merge_partial_rss_files
 
 if TYPE_CHECKING:
     from .pre_alloc import Alloc
@@ -138,6 +139,7 @@ def _merge_on_exit() -> None:
         meta_dir = _fixture_output_dir / ".meta"
         if meta_dir.exists() and any(meta_dir.glob("partial_index*.jsonl")):
             merge_partial_indexes(_fixture_output_dir, quiet_mode=True)
+        merge_partial_rss_files(_fixture_output_dir)
 
 
 @dataclass(kw_only=True)
@@ -2228,6 +2230,17 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     merge_partial_fixture_files(fixture_output.directory)
     _log_timing(
         f"merge_partial_fixture_files: done in {time.time() - t0:.1f}s"
+    )
+
+    # Merge per-worker RSS metrics into a single per_test_rss.json. The
+    # rss_profile plugin writes per-worker partials during each worker's
+    # own session finish; master merges them here so the next benchmark
+    # release's heavy_state classifier can pick them up.
+    _log_timing("merge_partial_rss_files: starting...")
+    t0 = time.time()
+    merge_partial_rss_files(fixture_output.directory)
+    _log_timing(
+        f"merge_partial_rss_files: done in {time.time() - t0:.1f}s"
     )
 
     # Remove any lock files that may have been created.
