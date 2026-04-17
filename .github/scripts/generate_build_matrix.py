@@ -98,11 +98,31 @@ def build_matrix(
     """
     Build the matrix for a single feature.
 
-    Return (build_entries, combine_labels).  Split features produce
-    one entry per fork range and a space-separated label string for
-    the combine step.  Unsplit features produce a single entry with
-    empty labels.
+    Return (build_entries, combine_labels).  Features are split one of
+    two ways, mutually exclusively:
+
+    * ``splits:`` — one entry per explicit split label (e.g. memory-
+      heavy vs. light pytest-split groups). The entry carries an
+      ``extra_args`` string appended to the ``fill`` invocation.
+    * ``--until`` + fork ranges — one entry per applicable fork range.
+
+    Unsplit features produce a single entry with empty labels.
     """
+    splits = feature.get("splits") or []
+    if splits:
+        build = [
+            {
+                "feature": name,
+                "label": s["label"],
+                "from_fork": "",
+                "until_fork": "",
+                "extra_args": s.get("extra-args", ""),
+            }
+            for s in splits
+        ]
+        labels = " ".join(s["label"] for s in splits)
+        return build, labels
+
     until = parse_until_fork(feature["fill-params"])
     if until and fork_ranges:
         ranges = applicable_ranges(fork_ranges, until)
@@ -113,6 +133,7 @@ def build_matrix(
                     "label": r["label"],
                     "from_fork": r["from"],
                     "until_fork": r["until"],
+                    "extra_args": "",
                 }
                 for r in ranges
             ]
@@ -125,6 +146,7 @@ def build_matrix(
             "label": "",
             "from_fork": "",
             "until_fork": "",
+            "extra_args": "",
         }
     ], ""
 

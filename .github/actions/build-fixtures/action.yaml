@@ -11,7 +11,10 @@ inputs:
     description: "Fill until this fork (inclusive). Empty for unsplit builds."
     default: ""
   split_label:
-    description: "Label for this fork-range split. Empty for unsplit builds."
+    description: "Label for this split. Empty for unsplit builds."
+    default: ""
+  extra_args:
+    description: "Extra fill args (e.g. `-m heavy_state -n 4`) appended per split."
     default: ""
 runs:
   using: "composite"
@@ -37,29 +40,131 @@ runs:
       if: inputs.split_label == ''
       shell: bash
       run: sudo apt-get install -y pigz
-    - name: Generate fixtures using fill
+    - name: Ensure gh CLI is available
+      if: inputs.extra_args != ''
       shell: bash
       run: |
-        IS_SPLIT="${{ inputs.split_label }}"
+        # Install a pinned `gh` via its official release tarball when the
+        # runner doesn't already provide it. Direct download avoids the
+        # apt mirror flakiness we occasionally hit on the self-hosted
+        # runners.
+        if command -v gh >/dev/null 2>&1; then
+          exit 0
+        fi
+        GH_VERSION=2.60.1
+        TMPDIR=$(mktemp -d)
+        trap 'rm -rf "$TMPDIR"' EXIT
+        curl -fsSL \
+          "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+          | tar -xz -C "$TMPDIR"
+        mkdir -p "$HOME/.local/bin"
+        install -m 755 \
+          "$TMPDIR/gh_${GH_VERSION}_linux_amd64/bin/gh" \
+          "$HOME/.local/bin/gh"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    - name: Download prior release's per-test RSS metrics
+      if: inputs.extra_args != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        RELEASE_NAME: ${{ inputs.release_name }}
+      run: |
+        # Find the most recent non-draft release whose tag matches
+        # `tests-<feature>@v*` and pull its `per_test_rss.json` asset so
+        # the heavy_state classifier can auto-route this run's tests.
+        # Missing asset (bootstrap) is not an error: classifier falls
+        # back to marker-only routing.
+        TAG_PREFIX="tests-${RELEASE_NAME}@v"
+        PREV_TAG=$(gh release list \
+          --repo "$REPO" \
+          --json tagName,isDraft \
+          --jq ".[] | select(.isDraft == false) | select(.tagName | startswith(\"$TAG_PREFIX\")) | .tagName" \
+          --limit 100 | head -n 1)
+        if [ -n "$PREV_TAG" ]; then
+          echo "Downloading per_test_rss.json from $PREV_TAG"
+          gh release download "$PREV_TAG" \
+            --repo "$REPO" \
+            --pattern per_test_rss.json \
+            --clobber \
+            --dir . || echo "No per_test_rss.json asset on $PREV_TAG; bootstrap mode"
+        else
+          echo "No prior release for ${TAG_PREFIX}*; bootstrap mode"
+        fi
+        if [ -f per_test_rss.json ]; then
+          echo "PER_TEST_RSS_CACHE=$GITHUB_WORKSPACE/per_test_rss.json" >> "$GITHUB_ENV"
+        fi
+    - name: Generate fixtures using fill
+      shell: bash
+      env:
+        # Pass action inputs through env so shell reads them as opaque
+        # strings. Literal `${{ ... }}` interpolation into a shell script
+        # breaks for inputs containing shell metacharacters (e.g. the
+        # embedded `"` in `-m "not heavy_state"`).
+        IS_SPLIT: ${{ inputs.split_label }}
+        RAW_EXTRA_ARGS: ${{ inputs.extra_args }}
+        FROM_FORK: ${{ inputs.from_fork }}
+        UNTIL_FORK: ${{ inputs.until_fork }}
+        RELEASE_NAME: ${{ inputs.release_name }}
+        FILL_PARAMS: ${{ steps.properties.outputs.fill-params }}
+        EVM_IMPL: ${{ steps.evm-builder.outputs.impl }}
+        EVM_BIN: ${{ steps.evm-builder.outputs.evm-bin }}
+        X_DIST: ${{ steps.evm-builder.outputs.x-dist }}
+      run: |
+        # Parse extra_args as a shell-quoted token list so args like
+        # `-m "not heavy_state"` survive with their quote boundaries
+        # intact. The input comes from the repo's own feature.yaml,
+        # so trusted for `eval`.
+        EXTRA_ARR=()
+        if [ -n "$RAW_EXTRA_ARGS" ]; then
+          eval "EXTRA_ARR=( $RAW_EXTRA_ARGS )"
+        fi
 
         if [ -n "$IS_SPLIT" ]; then
-          OUTPUT_ARG="--output=fixtures_${{ inputs.release_name }}"
-          FORK_ARGS="--generate-all-formats --from=${{ inputs.from_fork }} --until=${{ inputs.until_fork }}"
+          OUTPUT_ARG="--output=fixtures_${RELEASE_NAME}"
+          if [ -n "$FROM_FORK" ]; then
+            FORK_ARGS="--from=${FROM_FORK} --until=${UNTIL_FORK}"
+          else
+            FORK_ARGS=""
+          fi
         else
-          OUTPUT_ARG="--output=fixtures_${{ inputs.release_name }}.tar.gz"
+          OUTPUT_ARG="--output=fixtures_${RELEASE_NAME}.tar.gz"
           FORK_ARGS=""
         fi
 
+        # When extra_args drives concurrency (e.g. per-split `-n 4`),
+        # skip the default `-n <x-dist>`. Otherwise use the evm-builder
+        # default.
+        if [ ${#EXTRA_ARR[@]} -gt 0 ]; then
+          NPROC_ARG=""
+        else
+          NPROC_ARG="-n ${X_DIST}"
+        fi
+
+        # Split FILL_PARAMS the same way shell would split an unquoted
+        # variable — we need it tokenized because it contains multiple
+        # flags and paths, but we've kept it as a single env string for
+        # safe injection.
+        # shellcheck disable=SC2206
+        FILL_PARAMS_ARR=( $FILL_PARAMS )
+
         # Allow exit code 5 (NO_TESTS_COLLECTED) for fork ranges with no tests.
         EXIT_CODE=0
-        if [ "${{ steps.evm-builder.outputs.impl }}" = "eels" ]; then
-          uv run fill -n ${{ steps.evm-builder.outputs.x-dist }} ${{ steps.properties.outputs.fill-params }} $FORK_ARGS $OUTPUT_ARG --build-name ${{ inputs.release_name }} --no-html --durations=100 --log-level=DEBUG || EXIT_CODE=$?
+        if [ "$EVM_IMPL" = "eels" ]; then
+          uv run fill $NPROC_ARG "${FILL_PARAMS_ARR[@]}" $FORK_ARGS $OUTPUT_ARG --build-name "$RELEASE_NAME" --no-html --durations=100 --log-level=DEBUG "${EXTRA_ARR[@]}" || EXIT_CODE=$?
         else
-          uv run fill -n ${{ steps.evm-builder.outputs.x-dist }} --evm-bin=${{ steps.evm-builder.outputs.evm-bin }} ${{ steps.properties.outputs.fill-params }} $FORK_ARGS $OUTPUT_ARG --build-name ${{ inputs.release_name }} --no-html --durations=100 --log-level=DEBUG || EXIT_CODE=$?
+          uv run fill $NPROC_ARG --evm-bin="$EVM_BIN" "${FILL_PARAMS_ARR[@]}" $FORK_ARGS $OUTPUT_ARG --build-name "$RELEASE_NAME" --no-html --durations=100 --log-level=DEBUG "${EXTRA_ARR[@]}" || EXIT_CODE=$?
         fi
         if [ "$EXIT_CODE" -ne 0 ] && [ "$EXIT_CODE" -ne 5 ]; then
           exit "$EXIT_CODE"
         fi
+    - name: Upload per-split RSS metrics
+      if: inputs.split_label != ''
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      with:
+        name: rss_metrics__${{ inputs.split_label }}
+        path: fixtures_${{ inputs.release_name }}/.meta/per_test_rss.json
+        if-no-files-found: ignore
     - name: Generate Benchmark Genesis Files
       if: inputs.split_label == '' && contains(inputs.release_name, 'benchmark')
       uses: ./.github/actions/build-benchmark-genesis

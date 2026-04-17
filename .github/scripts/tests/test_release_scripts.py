@@ -56,17 +56,37 @@ class TestGenerateBuildMatrix:
         assert all(e["until_fork"] != "" for e in matrix)
 
     def test_unsplit_feature_produces_single_entry(self):
-        """Verify a feature without fork-ranges produces one entry."""
-        result = run_script(BUILD_MATRIX_SCRIPT, "benchmark")
+        """
+        Verify a feature without fork-ranges or splits produces one entry.
+        """
+        result = run_script(BUILD_MATRIX_SCRIPT, "benchmark_fast")
         assert result.returncode == 0
         out = parse_matrix_output(result.stdout)
         matrix = json.loads(out["build_matrix"])
         assert len(matrix) == 1
-        assert out["feature_name"] == "benchmark"
+        assert out["feature_name"] == "benchmark_fast"
         assert out["combine_labels"] == ""
         assert matrix[0]["label"] == ""
         assert matrix[0]["from_fork"] == ""
         assert matrix[0]["until_fork"] == ""
+        assert matrix[0]["extra_args"] == ""
+
+    def test_splits_feature_expands_to_one_entry_per_label(self):
+        """Verify a feature with `splits:` emits one entry per split label."""
+        result = run_script(BUILD_MATRIX_SCRIPT, "benchmark")
+        assert result.returncode == 0
+        out = parse_matrix_output(result.stdout)
+        matrix = json.loads(out["build_matrix"])
+        labels = [e["label"] for e in matrix]
+        assert labels == ["heavy", "light"]
+        assert out["combine_labels"] == " ".join(labels)
+        heavy = next(e for e in matrix if e["label"] == "heavy")
+        assert "-m heavy_state" in heavy["extra_args"]
+        light = next(e for e in matrix if e["label"] == "light")
+        assert '-m "not heavy_state"' in light["extra_args"]
+        for entry in matrix:
+            assert entry["from_fork"] == ""
+            assert entry["until_fork"] == ""
 
     def test_feature_only_can_be_requested_explicitly(self):
         """Verify feature_only entries work when named directly."""

@@ -297,9 +297,7 @@ def test_transition_tool_input_model_dump_json_omit_alloc(
     source.write_text(TEST_ALLOC.model_dump_json())
     lazy = LazyAllocFile(raw=source, _state_root=TEST_ALLOC_STATE_ROOT)
 
-    input_data = TransitionToolInput(
-        alloc=lazy, txs=[], env=Environment()
-    )
+    input_data = TransitionToolInput(alloc=lazy, txs=[], env=Environment())
 
     dumped = input_data.model_dump_json(
         omit_alloc=True, by_alias=True, exclude_none=True
@@ -309,8 +307,6 @@ def test_transition_tool_input_model_dump_json_omit_alloc(
     assert "env" in parsed
     assert "txs" in parsed
 
-    dumped_full = input_data.model_dump_json(
-        by_alias=True, exclude_none=True
-    )
+    dumped_full = input_data.model_dump_json(by_alias=True, exclude_none=True)
     parsed_full = json.loads(dumped_full)
     assert "alloc" in parsed_full

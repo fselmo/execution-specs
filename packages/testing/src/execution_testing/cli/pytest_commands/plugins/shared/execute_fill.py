@@ -227,8 +227,9 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "heavy_state: Marks a benchmark test that builds deep per-worker "
         "state (>~4 GiB peak RSS) and should be routed to the dedicated "
-        "low-concurrency CI cell. Heavy tests are excluded from light "
-        "pytest-split cells and included in the heavy cell.",
+        "low-concurrency CI cell. The release workflow runs heavy_state "
+        "tests on a reduced-worker runner; everything else runs on the "
+        "standard full-parallelism runner.",
     )
     config.addinivalue_line(
         "markers",

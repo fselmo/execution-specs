@@ -2239,9 +2239,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     _log_timing("merge_partial_rss_files: starting...")
     t0 = time.time()
     merge_partial_rss_files(fixture_output.directory)
-    _log_timing(
-        f"merge_partial_rss_files: done in {time.time() - t0:.1f}s"
-    )
+    _log_timing(f"merge_partial_rss_files: done in {time.time() - t0:.1f}s")
 
     # Remove any lock files that may have been created.
     lock_files = list(fixture_output.directory.rglob("*.lock"))

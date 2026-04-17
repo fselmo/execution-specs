@@ -54,7 +54,6 @@ dependencies = [
     "Jinja2>=3,<4",
     "ijson>=3.3,<4",
     "psutil>=7.0,<8",
-    "pytest-split>=0.10.0,<1",
 ]
 
 [project.urls]

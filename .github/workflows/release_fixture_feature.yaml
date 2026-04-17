@@ -67,6 +67,7 @@ jobs:
           from_fork: ${{ matrix.from_fork }}
           until_fork: ${{ matrix.until_fork }}
           split_label: ${{ matrix.label }}
+          extra_args: ${{ matrix.extra_args }}
 
   combine:
     name: combine (${{ needs.setup.outputs.feature_name }})
@@ -82,11 +83,15 @@ jobs:
         run: sudo apt-get install -y pigz
       - name: Download and merge split artifacts
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          COMBINE_LABELS: ${{ needs.setup.outputs.combine_labels }}
         run: |
           mkdir -p combined
-          for label in ${{ needs.setup.outputs.combine_labels }}; do
+          for label in $COMBINE_LABELS; do
             echo "Downloading: fixtures__${label}"
-            if gh run download ${{ github.run_id }} -n "fixtures__${label}" --dir "split_artifacts/fixtures__${label}"; then
+            if gh run download "$RUN_ID" -n "fixtures__${label}" --dir "split_artifacts/fixtures__${label}"; then
               cp -r "split_artifacts/fixtures__${label}"/* combined/
             else
               echo "No artifact for ${label} (no tests collected, skipping)"
@@ -94,13 +99,13 @@ jobs:
           done
           echo "Combined directory contents:"
           find combined -maxdepth 3 -type d | head -30 || true
-        env:
-          GH_TOKEN: ${{ github.token }}
       - name: Merge split index files
         shell: bash
+        env:
+          COMBINE_LABELS: ${{ needs.setup.outputs.combine_labels }}
         run: |
           SPLIT_DIRS=()
-          for label in ${{ needs.setup.outputs.combine_labels }}; do
+          for label in $COMBINE_LABELS; do
             dir="split_artifacts/fixtures__${label}"
             if [ -d "$dir" ]; then
               SPLIT_DIRS+=("$dir")
@@ -109,12 +114,70 @@ jobs:
           if [ ${#SPLIT_DIRS[@]} -gt 0 ]; then
             uv run python .github/scripts/merge_index_files.py combined/.meta/index.json "${SPLIT_DIRS[@]}"
           fi
+      - name: Merge per-split RSS metrics
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          COMBINE_LABELS: ${{ needs.setup.outputs.combine_labels }}
+        run: |
+          # Download all `rss_metrics__<label>` artifacts into per-label
+          # directories, then merge them into a single per_test_rss.json
+          # keyed on nodeid (max wins when a nodeid appears in multiple
+          # cells — conservative budget for the next release).
+          mkdir -p rss_artifacts
+          for label in $COMBINE_LABELS; do
+            gh run download "$RUN_ID" \
+              -n "rss_metrics__${label}" \
+              --dir "rss_artifacts/${label}" \
+              || echo "No rss_metrics__${label} (bootstrap or no tests)"
+          done
+          uv run python - <<'PY'
+          import json
+          from pathlib import Path
+
+          merged: dict[str, int] = {}
+          for partial in Path("rss_artifacts").rglob("per_test_rss.json"):
+              try:
+                  data = json.loads(partial.read_text())
+              except (OSError, json.JSONDecodeError):
+                  print(f"Skipping unreadable {partial}")
+                  continue
+              for nodeid, rss in data.items():
+                  if int(rss) > merged.get(nodeid, 0):
+                      merged[nodeid] = int(rss)
+
+          # Drop per-split RSS noise from combined/.meta/ so the release
+          # tarball doesn't ship stale per-worker partials or a single
+          # split's half of the merged map.
+          meta = Path("combined/.meta")
+          if meta.exists():
+              for stale in meta.glob("per_test_rss*.json"):
+                  stale.unlink()
+
+          if merged:
+              blob = json.dumps(merged, indent=2, sort_keys=True)
+              Path("per_test_rss.json").write_text(blob)
+              if meta.exists():
+                  (meta / "per_test_rss.json").write_text(blob)
+              print(f"Merged {len(merged)} nodeids into per_test_rss.json")
+          else:
+              print("No RSS metrics to merge (bootstrap run)")
+          PY
+      - name: Upload combined RSS metrics
+        if: hashFiles('per_test_rss.json') != ''
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: per_test_rss_${{ needs.setup.outputs.feature_name }}
+          path: per_test_rss.json
       - name: Free disk space
-        run: rm -rf split_artifacts/
+        run: rm -rf split_artifacts/ rss_artifacts/
       - name: Create release tarball
         shell: bash
+        env:
+          FEATURE_NAME: ${{ needs.setup.outputs.feature_name }}
         run: |
-          uv run -q .github/scripts/create_release_tarball.py combined fixtures_${{ needs.setup.outputs.feature_name }}.tar.gz
+          uv run -q .github/scripts/create_release_tarball.py combined "fixtures_${FEATURE_NAME}.tar.gz"
       - name: Upload combined fixture tarball
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -135,14 +198,21 @@ jobs:
 
       - name: Download release artifacts
         shell: bash
-        run: |
-          gh run download ${{ github.run_id }} -p "fixtures_*" --dir ./artifacts
-          rm -rf ./artifacts/fixtures__*/
-          gh run download ${{ github.run_id }} -p "benchmark_genesis_*" --dir ./artifacts || true
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          gh run download "$RUN_ID" -p "fixtures_*" --dir ./artifacts
+          rm -rf ./artifacts/fixtures__*/
+          gh run download "$RUN_ID" -p "benchmark_genesis_*" --dir ./artifacts || true
+          gh run download "$RUN_ID" -p "per_test_rss_*" --dir ./artifacts || true
 
       - name: Draft release on EELS (canonical)
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          FEATURE_NAME: ${{ needs.setup.outputs.feature_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           FEATURE_PREFIX="${TAG_NAME%%@*}"
           PREV_TAG=$(
@@ -158,13 +228,25 @@ jobs:
           if [ -n "$PREV_TAG" ]; then
             RELEASE_ARGS+=(--notes-start-tag "$PREV_TAG")
           fi
-          gh release create "$TAG_NAME" "${RELEASE_ARGS[@]}" ./artifacts/**/*.tar.gz
+          # Collect assets fresh here rather than round-tripping through a
+          # step output — avoids the multiline-output + mapfile dance and
+          # any quoting surprises in interpolated paths.
+          ASSETS=()
+          while IFS= read -r f; do ASSETS+=("$f"); done < <(
+            find ./artifacts -type f \( -name '*.tar.gz' -o -name 'per_test_rss.json' \)
+          )
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "No release assets found under ./artifacts" >&2
+            exit 1
+          fi
+          gh release create "$TAG_NAME" "${RELEASE_ARGS[@]}" "${ASSETS[@]}"
+
+      - name: Draft release on EEST (mirror)
+        shell: bash
         env:
           TAG_NAME: ${{ github.ref_name }}
           FEATURE_NAME: ${{ needs.setup.outputs.feature_name }}
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Draft release on EEST (mirror)
+          GH_TOKEN: ${{ secrets.EEST_RELEASE_TOKEN }}
         run: |
           EEST_TAG="${TAG_NAME#tests-}"
           RELEASE_ARGS=(--repo ethereum/execution-spec-tests --draft)
@@ -172,8 +254,12 @@ jobs:
             RELEASE_ARGS+=(--prerelease)
           fi
           RELEASE_ARGS+=(--notes "This release is mirrored from [ethereum/execution-specs ${TAG_NAME}](https://github.com/ethereum/execution-specs/releases/tag/${TAG_NAME}).")
-          gh release create "$EEST_TAG" "${RELEASE_ARGS[@]}" ./artifacts/**/*.tar.gz
-        env:
-          TAG_NAME: ${{ github.ref_name }}
-          FEATURE_NAME: ${{ needs.setup.outputs.feature_name }}
-          GH_TOKEN: ${{ secrets.EEST_RELEASE_TOKEN }}
+          ASSETS=()
+          while IFS= read -r f; do ASSETS+=("$f"); done < <(
+            find ./artifacts -type f \( -name '*.tar.gz' -o -name 'per_test_rss.json' \)
+          )
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "No release assets found under ./artifacts" >&2
+            exit 1
+          fi
+          gh release create "$EEST_TAG" "${RELEASE_ARGS[@]}" "${ASSETS[@]}"

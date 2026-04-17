@@ -5,12 +5,22 @@ mainnet:
 
 benchmark:
   evm-type: benchmark
-  fill-params: --fork=Osaka --gas-benchmark-values 1,5,10,30,60,100,150 ./tests/benchmark/compute --maxprocesses=30 --dist=worksteal
+  fill-params: --fork=Osaka --generate-all-formats --gas-benchmark-values 1,5,10,30,60,100,150 ./tests/benchmark/compute
   feature_only: true
+  # Carve memory-heavy tests into their own low-concurrency runner so the
+  # rest can use full parallelism without contending for RAM.
+  # `per_test_rss.json` from the prior release auto-routes tests
+  # >= 4 GiB peak RSS into the heavy cell; manually tagged tests
+  # (`@pytest.mark.heavy_state`) are the bootstrap signal.
+  splits:
+    - label: heavy
+      extra-args: -m heavy_state -n 4
+    - label: light
+      extra-args: -m "not heavy_state" -n auto --maxprocesses=30
 
 benchmark_fast:
   evm-type: benchmark
-  fill-params: --fork=Osaka --gas-benchmark-values 100 ./tests/benchmark/compute
+  fill-params: --fork=Osaka --generate-all-formats --gas-benchmark-values 100 ./tests/benchmark/compute
   feature_only: true
 
 bal:
