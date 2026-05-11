@@ -27,6 +27,7 @@ STATE_BYTES_PER_AUTH_BASE = 23
 # EIP-8037 regular gas base costs.
 PER_AUTH_BASE_COST = 7_500
 REGULAR_GAS_CREATE = 9_000
+ACCOUNT_WRITE = 6_700
 
 SYSTEM_MAX_SSTORES_PER_CALL = 16
 
@@ -93,11 +94,13 @@ class EIP8037(BaseFork):
             OPCODE_CREATE_BASE=REGULAR_GAS_CREATE,
             TX_CREATE=(REGULAR_GAS_CREATE + new_acct),
             AUTH_PER_EMPTY_ACCOUNT=(
-                PER_AUTH_BASE_COST
+                ACCOUNT_WRITE
+                + PER_AUTH_BASE_COST
                 + (STATE_BYTES_PER_NEW_ACCOUNT + STATE_BYTES_PER_AUTH_BASE)
                 * cpsb
             ),
-            REFUND_AUTH_PER_EXISTING_ACCOUNT=new_acct,
+            REFUND_AUTH_PER_EXISTING_ACCOUNT=ACCOUNT_WRITE,
+            STATE_REFUND_AUTH_PER_EXISTING_ACCOUNT=new_acct,
         )
 
     @classmethod

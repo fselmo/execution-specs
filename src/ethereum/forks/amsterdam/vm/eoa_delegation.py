@@ -22,6 +22,7 @@ from ..state_tracker import (
 )
 from ..utils.hexadecimal import hex_to_address
 from ..vm.gas import (
+    ACCOUNT_WRITE,
     COST_PER_STATE_BYTE,
     STATE_BYTES_PER_AUTH_BASE,
     STATE_BYTES_PER_NEW_ACCOUNT,
@@ -159,15 +160,16 @@ def calculate_delegation_cost(
     return True, delegated_address, delegation_gas_cost
 
 
-def set_delegation(message: Message) -> Uint:
+def set_delegation(message: Message) -> Tuple[Uint, Uint]:
     """
     Set the delegation code for the authorities in the message.
 
     Refills the `STATE_BYTES_PER_NEW_ACCOUNT × CPSB` portion of
-    intrinsic state gas when the authority's account leaf already
-    exists, and the `STATE_BYTES_PER_AUTH_BASE × CPSB` portion when
-    its code slot already holds a delegation indicator. The total is
-    returned so block accounting can subtract it from `tx_state_gas`.
+    intrinsic state gas to `state_gas_reservoir` when the authority's
+    account leaf already exists, plus the `STATE_BYTES_PER_AUTH_BASE
+    × CPSB` portion when its code slot already holds a delegation
+    indicator. Returns `ACCOUNT_WRITE` per existing-leaf auth to the
+    caller for crediting to the refund counter.
 
     Parameters
     ----------
@@ -177,11 +179,15 @@ def set_delegation(message: Message) -> Uint:
     Returns
     -------
     auth_state_refund : `Uint`
-        Total state gas refunded across all processed authorizations.
+        Total state gas refilled across all processed authorizations.
+    auth_regular_refund : `Uint`
+        Total regular gas (`ACCOUNT_WRITE` per existing-leaf auth) to
+        be credited to the transaction's refund counter.
 
     """
     tx_state = message.tx_env.state
     auth_state_refund = Uint(0)
+    auth_regular_refund = Uint(0)
     for auth in message.tx_env.authorizations:
         if auth.chain_id not in (message.block_env.chain_id, U256(0)):
             continue
@@ -210,6 +216,7 @@ def set_delegation(message: Message) -> Uint:
             refund = STATE_BYTES_PER_NEW_ACCOUNT * COST_PER_STATE_BYTE
             message.state_gas_reservoir += refund
             auth_state_refund += refund
+            auth_regular_refund += ACCOUNT_WRITE
 
         # Existing delegation indicator: overwrite in place, no new
         # state bytes added.
@@ -234,4 +241,4 @@ def set_delegation(message: Message) -> Uint:
         get_account(tx_state, message.code_address).code_hash,
     )
 
-    return auth_state_refund
+    return auth_state_refund, auth_regular_refund

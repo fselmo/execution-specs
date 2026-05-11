@@ -98,6 +98,9 @@ def build_refund_tx(
                     authorization_count=refunds_count,
                 )
                 auth_state_refund = (
+                    gsc.STATE_REFUND_AUTH_PER_EXISTING_ACCOUNT * refunds_count
+                )
+                refund_counter += (
                     gsc.REFUND_AUTH_PER_EXISTING_ACCOUNT * refunds_count
                 )
             case _:

@@ -135,6 +135,7 @@ class Frontier(
             # Refunds
             REFUND_STORAGE_CLEAR=4_800,
             REFUND_AUTH_PER_EXISTING_ACCOUNT=0,
+            STATE_REFUND_AUTH_PER_EXISTING_ACCOUNT=0,
             # Precompiles
             PRECOMPILE_ECRECOVER=3_000,
             PRECOMPILE_SHA256_BASE=60,

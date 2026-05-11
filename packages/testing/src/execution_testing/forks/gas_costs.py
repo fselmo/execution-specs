@@ -60,6 +60,7 @@ class GasCosts:
     # Refunds
     REFUND_STORAGE_CLEAR: int
     REFUND_AUTH_PER_EXISTING_ACCOUNT: int
+    STATE_REFUND_AUTH_PER_EXISTING_ACCOUNT: int
 
     # Precompiles
     PRECOMPILE_ECRECOVER: int

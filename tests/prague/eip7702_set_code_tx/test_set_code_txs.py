@@ -2797,9 +2797,15 @@ def test_nonce_overflow_after_first_authorization(
     )
     entry_address = pre.deploy_contract(entry_code)
 
-    gas_limit = 200_000
     if fork.is_eip_enabled(8037):
-        gas_limit = 500_000  # TODO: auto gas limit will remove this
+        gas_limit_cap = fork.transaction_gas_limit_cap()
+        assert gas_limit_cap is not None
+        intrinsic_state_gas = fork.transaction_intrinsic_state_gas(
+            authorization_count=len(authorization_list),
+        )
+        gas_limit = gas_limit_cap + intrinsic_state_gas
+    else:
+        gas_limit = 200_000
 
     tx = Transaction(
         gas_limit=gas_limit,

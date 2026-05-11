@@ -621,6 +621,7 @@ def calculate_intrinsic_cost(tx: Transaction) -> IntrinsicGasCost:
     minimum gas cost used by the transaction based on the calldata size.
     """
     from .vm.gas import (
+        ACCOUNT_WRITE,
         COST_PER_STATE_BYTE,
         PER_AUTH_BASE_COST,
         REGULAR_GAS_CREATE,
@@ -659,7 +660,9 @@ def calculate_intrinsic_cost(tx: Transaction) -> IntrinsicGasCost:
     auth_regular_gas = Uint(0)
     auth_state_gas = Uint(0)
     if isinstance(tx, SetCodeTransaction):
-        auth_regular_gas = PER_AUTH_BASE_COST * ulen(tx.authorizations)
+        auth_regular_gas = (ACCOUNT_WRITE + PER_AUTH_BASE_COST) * ulen(
+            tx.authorizations
+        )
         auth_state_gas = (
             (STATE_BYTES_PER_NEW_ACCOUNT + STATE_BYTES_PER_AUTH_BASE)
             * COST_PER_STATE_BYTE

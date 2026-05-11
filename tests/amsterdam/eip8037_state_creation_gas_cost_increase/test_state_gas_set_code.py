@@ -339,6 +339,7 @@ def test_auth_refund_block_gas_accounting(
     """
     gas_limit_cap = fork.transaction_gas_limit_cap()
     assert gas_limit_cap is not None
+    gas_costs = fork.gas_costs()
     intrinsic_state_gas = fork.transaction_intrinsic_state_gas(
         authorization_count=1,
     )
@@ -346,10 +347,13 @@ def test_auth_refund_block_gas_accounting(
         authorization_list_or_count=1,
     )
     intrinsic_regular = total_intrinsic - intrinsic_state_gas
-    new_account_refund = fork.gas_costs().REFUND_AUTH_PER_EXISTING_ACCOUNT
+    new_account_refund = gas_costs.STATE_REFUND_AUTH_PER_EXISTING_ACCOUNT
     # Per-auth intrinsic state gas covers NEW_ACCOUNT + AUTH_BASE; the
     # AUTH_BASE portion is what's left after stripping NEW_ACCOUNT.
     auth_base_refund = intrinsic_state_gas - new_account_refund
+    regular_refund_per_existing_leaf = (
+        gas_costs.REFUND_AUTH_PER_EXISTING_ACCOUNT
+    )
 
     contract_old = pre.deploy_contract(code=Op.STOP)
     contract_new = pre.deploy_contract(code=Op.STOP)
@@ -357,16 +361,19 @@ def test_auth_refund_block_gas_accounting(
     if signer_pre_state == "nonexistent":
         signer = pre.fund_eoa(amount=0)
         pre_nonce = 0
-        auth_refund = 0
+        state_refund = 0
+        regular_refund = 0
     elif signer_pre_state == "existing_leaf":
         signer = pre.fund_eoa()
         pre_nonce = 0
-        auth_refund = new_account_refund
+        state_refund = new_account_refund
+        regular_refund = regular_refund_per_existing_leaf
     elif signer_pre_state == "existing_delegation":
         # `fund_eoa(delegation=...)` sets the authority's nonce to 1.
         signer = pre.fund_eoa(delegation=contract_old)
         pre_nonce = 1
-        auth_refund = new_account_refund + auth_base_refund
+        state_refund = new_account_refund + auth_base_refund
+        regular_refund = regular_refund_per_existing_leaf
     else:
         raise ValueError(f"unknown signer_pre_state: {signer_pre_state!r}")
 
@@ -391,11 +398,20 @@ def test_auth_refund_block_gas_accounting(
             else Spec7702.delegation_designation(auth_target)
         ),
     )
+    # Header gas_used reflects the state-side refill but not the
+    # regular-side refund (which flows through refund_counter, applied
+    # only to cumulative_gas_used and capped at 1/5 by EIP-3529).
     header_gas_used = max(
         intrinsic_regular,
-        intrinsic_state_gas - auth_refund,
+        intrinsic_state_gas - state_refund,
     )
-    receipt_cumulative_gas_used = total_intrinsic - auth_refund
+    gas_used_pre_regular_refund = total_intrinsic - state_refund
+    effective_regular_refund = min(
+        regular_refund, gas_used_pre_regular_refund // 5
+    )
+    receipt_cumulative_gas_used = (
+        gas_used_pre_regular_refund - effective_regular_refund
+    )
 
     tx = Transaction(
         to=contract_new,
@@ -1093,7 +1109,9 @@ def test_existing_account_auth_header_gas_used_reflects_refund(
         authorization_list_or_count=num_auths,
     )
     intrinsic_regular = total_intrinsic - intrinsic_state_gas
-    auth_refund = fork.gas_costs().REFUND_AUTH_PER_EXISTING_ACCOUNT * num_auths
+    auth_refund = (
+        fork.gas_costs().STATE_REFUND_AUTH_PER_EXISTING_ACCOUNT * num_auths
+    )
 
     contract = pre.deploy_contract(code=Op.STOP)
 
@@ -1143,7 +1161,7 @@ def test_mixed_auths_header_gas_used_reflects_existing_refunds(
     authorizations.
 
     Each existing authority contributes
-    `REFUND_AUTH_PER_EXISTING_ACCOUNT` to `state_refund`; new
+    `STATE_REFUND_AUTH_PER_EXISTING_ACCOUNT` to `state_refund`; new
     authorities contribute none. Header gas_used is
     `max(intrinsic_regular, intrinsic_state - num_existing * refund)`.
     """
@@ -1158,7 +1176,7 @@ def test_mixed_auths_header_gas_used_reflects_existing_refunds(
     )
     intrinsic_regular = total_intrinsic - intrinsic_state_gas
     auth_refund = (
-        fork.gas_costs().REFUND_AUTH_PER_EXISTING_ACCOUNT * num_existing
+        fork.gas_costs().STATE_REFUND_AUTH_PER_EXISTING_ACCOUNT * num_existing
     )
 
     contract = pre.deploy_contract(code=Op.STOP)
@@ -1232,7 +1250,7 @@ def test_existing_auth_refund_survives_top_level_revert(
         authorization_list_or_count=1,
     )
     intrinsic_regular = total_intrinsic - intrinsic_state_gas
-    auth_refund = fork.gas_costs().REFUND_AUTH_PER_EXISTING_ACCOUNT
+    auth_refund = fork.gas_costs().STATE_REFUND_AUTH_PER_EXISTING_ACCOUNT
 
     sstore_op = Op.SSTORE(
         key=0,
@@ -1318,7 +1336,7 @@ def test_auth_state_gas_in_header_after_failure(
     intrinsic_total = intrinsic_cost(authorization_list_or_count=1)
     intrinsic_regular = intrinsic_total - auth_intrinsic_state
     auth_refund = (
-        fork.gas_costs().REFUND_AUTH_PER_EXISTING_ACCOUNT
+        fork.gas_costs().STATE_REFUND_AUTH_PER_EXISTING_ACCOUNT
         if authority_exists
         else 0
     )
@@ -1405,7 +1423,11 @@ def test_auth_sender_billing_after_failure(
     intrinsic_cost = fork.transaction_intrinsic_cost_calculator()
     intrinsic_total = intrinsic_cost(authorization_list_or_count=1)
     intrinsic_regular = intrinsic_total - auth_intrinsic_state
-    new_account_refund = fork.gas_costs().REFUND_AUTH_PER_EXISTING_ACCOUNT
+    gas_costs = fork.gas_costs()
+    new_account_refund = gas_costs.STATE_REFUND_AUTH_PER_EXISTING_ACCOUNT
+    regular_refund_per_existing_leaf = (
+        gas_costs.REFUND_AUTH_PER_EXISTING_ACCOUNT
+    )
 
     delegate = pre.deploy_contract(code=Op.STOP)
     target = pre.deploy_contract(code=Op.REVERT(0, 0))
@@ -1418,11 +1440,20 @@ def test_auth_sender_billing_after_failure(
     tx_gas = gas_limit_cap + auth_intrinsic_state
 
     revert_gas = (Op.REVERT(0, 0)).gas_cost(fork)
-    auth_refund = new_account_refund if authority_exists else 0
-    expected_cumulative = intrinsic_total + revert_gas - auth_refund
+    state_refund = new_account_refund if authority_exists else 0
+    regular_refund = (
+        regular_refund_per_existing_leaf if authority_exists else 0
+    )
+    gas_used_pre_regular_refund = intrinsic_total + revert_gas - state_refund
+    effective_regular_refund = min(
+        regular_refund, gas_used_pre_regular_refund // 5
+    )
+    expected_cumulative = (
+        gas_used_pre_regular_refund - effective_regular_refund
+    )
     expected_gas_used = max(
         intrinsic_regular + revert_gas,
-        auth_intrinsic_state - auth_refund,
+        auth_intrinsic_state - state_refund,
     )
 
     tx = Transaction(
