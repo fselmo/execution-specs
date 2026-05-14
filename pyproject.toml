@@ -294,6 +294,7 @@ markers = [
     "eels_base_coverage: Minimized subset selected to preserve high EELS line-coverage parity (select with '-m eels_base_coverage')",
     "repricing: marks tests for gas repricing analysis",
     "stub_parametrize: parametrize test from address stubs by prefix",
+    "regression(name): marks a test as reproducing a specific historic bug",
 ]
 
 [tool.coverage.run]
@@ -301,6 +302,9 @@ omit = [
     "*/ethereum/*_glacier/*",
     "*/ethereum/dao_fork/*",
 ]
+# Per-test context attribution is set by pytest-cov's `--cov-context=test`
+# flag at runtime; leave `dynamic_context` unset here so it doesn't
+# override the test-node-id contexts pytest-cov produces.
 
 [tool.docc]
 context = [
