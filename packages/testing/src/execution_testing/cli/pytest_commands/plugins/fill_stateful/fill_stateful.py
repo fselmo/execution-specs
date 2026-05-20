@@ -367,7 +367,6 @@ def client_backend(
     default_max_fee_per_gas: int | None,
     default_max_priority_fee_per_gas: int | None,
     default_max_fee_per_blob_gas: int | None,
-    request: pytest.FixtureRequest,
 ) -> ClientBackend:
     """
     Create the ClientBackend; snapshot/start block populated later.

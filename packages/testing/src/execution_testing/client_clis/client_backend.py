@@ -17,7 +17,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 from execution_testing.base_types import Bytes, Hash
 from execution_testing.exceptions import ExceptionBase, ExceptionMapper
 from execution_testing.forks import Fork, TransitionFork
-from execution_testing.rpc import EngineRPC, EthRPC, TestingRPC
+from execution_testing.rpc import EngineRPC, EthRPC, TestingRPC, Web3RPC
 from execution_testing.rpc.rpc_types import (
     ForkchoiceState,
     PayloadAttributes,
@@ -124,9 +124,20 @@ class ClientBackend:
         self.max_fee_per_gas = 0
         self.max_priority_fee_per_gas = 0
         self.max_fee_per_blob_gas = 0
+        # Captured once at session start so the fixture's
+        # ``_info.filling-transition-tool`` field traces back to the EL
+        # build that filled it (e.g. ``Geth/v1.17.4-...``).
+        try:
+            self._client_version: str | None = Web3RPC(
+                eth_rpc.url
+            ).client_version()
+        except Exception:  # pragma: no cover — clients without web3 namespace
+            self._client_version = None
 
     def version(self) -> str:
-        """Return an identifier for this backend."""
+        """Return an identifier for this backend (used in fixture _info)."""
+        if self._client_version:
+            return f"ClientBackend[{self._client_version}; fork={self.fork}]"
         return f"ClientBackend[fork={self.fork}]"
 
     def shutdown(self) -> None:
@@ -252,7 +263,15 @@ class ClientBackend:
         parent_beacon_block_root: Hash | None,
         block_fork: Fork,
     ) -> None:
-        """Advance the chain with engine_newPayload + forkchoiceUpdated."""
+        """
+        Advance the chain with engine_newPayload + forkchoiceUpdated.
+
+        Both calls retry through transient ``SYNCING`` responses (geth
+        occasionally returns SYNCING under back-to-back chain-advance
+        load); a stuck-SYNCING client surfaces as a ``*TimeoutError`` so
+        the session aborts cleanly instead of silently dropping the
+        payload.
+        """
         new_payload_version = block_fork.engine_new_payload_version()
         fcu_version = block_fork.engine_forkchoice_updated_version()
         assert new_payload_version is not None
@@ -268,7 +287,7 @@ class ClientBackend:
         if payload_response.execution_requests is not None:
             new_payload_args.append(payload_response.execution_requests)
 
-        new_payload_response = self.engine_rpc.new_payload(
+        new_payload_response = self.engine_rpc.new_payload_with_retry(
             *new_payload_args, version=new_payload_version
         )
         assert new_payload_response.status == PayloadStatusEnum.VALID, (
@@ -276,12 +295,11 @@ class ClientBackend:
             f"{new_payload_response.status}"
         )
 
-        fcu_response = self.engine_rpc.forkchoice_updated(
-            ForkchoiceState(
+        fcu_response = self.engine_rpc.forkchoice_updated_with_retry(
+            forkchoice_state=ForkchoiceState(
                 head_block_hash=payload_response.execution_payload.block_hash
             ),
-            None,
-            version=fcu_version,
+            forkchoice_version=fcu_version,
         )
         assert fcu_response.payload_status.status == PayloadStatusEnum.VALID, (
             "engine_forkchoiceUpdated rejected the built payload: "

@@ -1492,6 +1492,11 @@ class BlockchainTest(BaseTest):
             start_block_hash=start_block_hash,
             setup_payloads=setup_payloads,
             payloads=execution_payloads,
+            benchmark_gas_used=(
+                HexNumber(benchmark_gas_used)
+                if benchmark_gas_used is not None
+                else None
+            ),
         )
         return FillResult(
             fixture=fixture,
