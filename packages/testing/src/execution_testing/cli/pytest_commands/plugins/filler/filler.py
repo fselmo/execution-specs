@@ -1736,6 +1736,11 @@ def base_test_parametrizer(cls: Type[BaseTest]) -> Any:
                     ]
                 if fill_result.metadata:
                     fill_metadata.update(fill_result.metadata)
+                if self._invariant_violations:
+                    fill_metadata["invariant_violations"] = [
+                        violation.model_dump()
+                        for violation in self._invariant_violations
+                    ]
 
                 fixture.fill_info(
                     t8n.version(),
