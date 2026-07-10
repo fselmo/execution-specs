@@ -211,7 +211,7 @@ known consensus bugs re-found in 12 hours.
 | ----- | ---- | ---------- | ------ | ----------- |
 | 1 | `tests_property/` + strategy library (gap 2) | — | M | `just test-spec-properties` green in CI |
 | 1' | Fill-time invariant checker (gap 1) | — | M | warnings-clean full `just fill` |
-| 2 | Generator → fuzzer_bridge + ddmin + corpus (gap 3) | 1 | M | `fuzz generate --seed N` replayable |
+| 2 | Generator → fuzzer_bridge + ddmin + corpus (gap 3) | 1 | M | **landed** — `fuzz --fork --count` replayable |
 | 2' | Cross-fork differential gate (gap 5) | 2 | S–M | zero-divergence gate on fork copy |
 | 3 | Differential harness, EELS vs. client t8ns (gap 4) | 2 | M–L | nightly run, dedup'd divergence report |
 | 4 | Coverage feedback + corpus distillation (gap 6) | 2, 3 | M | distilled corpus + gap report |
@@ -258,6 +258,33 @@ Warning-noise measurements on unmutated fills (`--invariant-checks`):
 Signal-to-noise is high enough that after modeling selfdestruct burns
 (needs per-tx destroyed-account info from the t8n), the checker can
 plausibly flip to default-on hard-fail per fork.
+
+## Generator + fuzz engine (phase 2, landed)
+
+`uv run fuzz --fork Osaka --count N [--corpus DIR]` generates seeded
+`FuzzerOutput` cases, fills them through EELS with the invariant oracle
+enabled, and saves any violating/crashing case to the corpus, minimized
+via delta-debugging. Every case is reproducible from
+`(fork, GENERATOR_VERSION, seed)`.
+
+The generator is *stack-aware*: it tracks a virtual stack height and
+pushes operands before each opcode, which is what keeps generated
+programs executing real logic instead of reverting on underflow.
+Measured on Osaka (in-process EELS, no coverage):
+
+- ~60 cases/s single-core;
+- 200/200 generated transactions accepted (none intrinsically invalid);
+- 100% of accepted transactions execute non-trivial logic (mean ~279k
+  gas/tx), versus the "random bytecode reverts immediately" failure mode
+  the plan flagged;
+- 100/100 clean seeds produce zero false invariant violations.
+
+End-to-end bug-finding, verified: the +1-wei coinbase mutation is caught
+on every seed and delta-debugged from 5 transactions / 6 accounts down
+to the minimal 1 transaction / 2 accounts that still triggers it. This
+closes the loop from "generate" to "minimized, reproducible,
+corpus-persisted finding" — the input to phase 3 (differential) and
+phase 5 (distillation to canonical fixtures).
 
 ## Honest limits
 
