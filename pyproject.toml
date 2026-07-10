@@ -197,6 +197,7 @@ optimized = [
 
 [dependency-groups]
 test = [
+    "hypothesis>=6.100,<7",
     "pytest>=8,<9",
     "pytest-cov>=4.1.0,<5",
     "pytest-xdist>=3.3.1,<4",
@@ -493,7 +494,7 @@ warn_unused_configs = true
 warn_redundant_casts = true
 ignore_missing_imports = false
 mypy_path = ["src", "packages/testing/src", "packages/testing/stubs"]
-files = ["src", "tests", "packages"]
+files = ["src", "tests", "tests_property", "packages"]
 enable_error_code = [
     "truthy-iterable",
     "unused-awaitable",
