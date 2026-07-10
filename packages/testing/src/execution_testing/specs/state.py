@@ -61,6 +61,7 @@ from .base import BaseTest, FillResult, OpMode
 from .blockchain import Block, BlockchainTest, Header
 from .debugging import print_traces
 from .helpers import verify_transactions
+from .invariants import check_block_invariants, invariant_checks_enabled
 
 logger = get_logger(__name__)
 
@@ -395,6 +396,19 @@ class StateTest(BaseTest):
             pprint(transition_tool_output.result)
             pprint(output_alloc)
             raise e
+
+        if invariant_checks_enabled():
+            self._invariant_violations.extend(
+                check_block_invariants(
+                    fork=fork,
+                    pre_alloc=pre_alloc,
+                    post_alloc=output_alloc,
+                    result=transition_tool_output.result,
+                    env=env,
+                    txs=[tx],
+                    reward=0,  # Reward on state tests is always zero
+                )
+            )
 
         gas_optimization: int | None = None
 
