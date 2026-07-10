@@ -123,8 +123,9 @@ via `sys.monitoring` scoped to `ethereum.*` (the Justfile already sets
 `COVERAGE_CORE=sysmon`); (c) optional HypoFuzz nightly for the property
 suite. Cheaper novelty signals worth using at full speed: `OpcodeCount`
 (the EELS t8n supports it), exception-class novelty, gas histograms.
-Later: mutation testing of EELS ("does any fixture kill this mutant of the
-gas formula?") — a much stronger metric than branch coverage.
+Mutation testing of EELS ("does any fixture kill this mutant of the gas
+formula?") — a much stronger metric than branch coverage — has landed; see
+below.
 
 ### 7. No corpus-to-canonical-fixture lifecycle
 
@@ -285,6 +286,41 @@ to the minimal 1 transaction / 2 accounts that still triggers it. This
 closes the loop from "generate" to "minimized, reproducible,
 corpus-persisted finding" — the input to phase 3 (differential) and
 phase 5 (distillation to canonical fixtures).
+
+## Mutation testing of the spec (landed)
+
+`uv run mutate --module <spec file> --test <path> --fork <fork>` mutates a
+spec source file one operator at a time (comparison swaps, arithmetic swaps,
+boolean flips; constant tweaks opt-in), and for each mutant runs a targeted
+`fill` with the invariant checks enabled. A mutant is *killed* if a test
+fails, a new invariant fires, or the run times out; a *survivor* is a spec
+error the conformance suite cannot tell apart from correct behavior — a
+coverage gap. The original source is always restored.
+
+This measures test-suite strength directly, which branch coverage cannot:
+the +1-wei coinbase bug earlier passed 1185/1185 tests at 100% branch
+coverage. Killed mutants exit fast under `-x`; only survivors pay the full
+run, so cost scales with survivor count.
+
+Demonstrated discrimination on `frontier/vm/gas.py` (same 12 mutants,
+same seed):
+
+| Test set | Mutation score |
+| --- | --- |
+| `tests/frontier/opcodes/` | 5/12 (42%) |
+| `tests/frontier/` | 10/12 (83%) |
+
+Widening the test set killed five more of the *same* mutants, confirming the
+score is a property of the suite, not the tool. Two mutants survive the full
+Frontier suite, both in memory-expansion gas
+(`size_in_words * MEMORY_PER_WORD` and `total_cost - already_paid`): the
+Frontier tests never assert an exact memory-expansion gas cost, so those
+coefficient errors go unnoticed. That is a concrete, actionable gap and the
+kind of work item a test-writing agent can act on.
+
+The runner also distinguishes *killed by invariant only* — a mutant the test
+suite misses but the fill-time invariant layer catches — quantifying what
+the invariant checker adds on top of the frozen fixtures.
 
 ## Honest limits
 
