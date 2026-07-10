@@ -214,7 +214,7 @@ known consensus bugs re-found in 12 hours.
 | 1' | Fill-time invariant checker (gap 1) | — | M | warnings-clean full `just fill` |
 | 2 | Generator → fuzzer_bridge + ddmin + corpus (gap 3) | 1 | M | **landed** — `fuzz --fork --count` replayable |
 | 2' | Cross-fork differential gate (gap 5) | 2 | S–M | zero-divergence gate on fork copy |
-| 3 | Differential harness, EELS vs. client t8ns (gap 4) | 2 | M–L | nightly run, dedup'd divergence report |
+| 3 | Differential harness, EELS vs. client t8ns (gap 4) | 2 | M–L | **landed** — `fuzz-differential --evm-bin` vs geth |
 | 4 | Coverage feedback + corpus distillation (gap 6) | 2, 3 | M | distilled corpus + gap report |
 | 5 | Distillation → canonical fixtures (gap 7) | 2, 3 | M | first fuzz-found frozen fixture PR |
 | 6 | Agentic skills + rubric + triage (gap 8) | 1, 3 | M | first agent-mined property merged |
@@ -321,6 +321,36 @@ kind of work item a test-writing agent can act on.
 The runner also distinguishes *killed by invariant only* — a mutant the test
 suite misses but the fill-time invariant layer catches — quantifying what
 the invariant checker adds on top of the frozen fixtures.
+
+## Cross-client differential (landed)
+
+`uv run fuzz-differential --fork Osaka --evm-bin <path> --count N
+[--corpus DIR]` runs each generated case through EELS in-process *and* a
+client transition tool (geth's `evm`), then compares the transition
+results field by field — state root, receipts root, logs hash, gas used,
+withdrawals/blob/requests/BAL hashes, and the rejected-transaction set.
+Any disagreement, or one tool failing where the other succeeds, is a
+finding: on adversarial input two implementations that must agree do
+not. Divergences are delta-debug minimized and saved to the corpus.
+
+This is the only layer that catches *self-consistent* spec bugs — a
+mispriced gas constant, say — that relational properties and
+single-operator mutation testing both miss, because a wrong-but-coherent
+EELS agrees with itself. A client that computes the value differently
+does not.
+
+Verified end-to-end against geth (`evm` built from source):
+
+- clean run: 30/30 generated Osaka cases agree, ~5 cases/s including the
+  client subprocess;
+- with a +1-wei coinbase bug injected into EELS only, every case
+  diverges on `state_root` (EELS root vs geth root both printed), and
+  minimizes to 1 transaction / 2 accounts.
+
+The comparison is client-agnostic (any `TransitionTool`); geth is the
+first wired client because its `evm t8n` is readily built. Because EELS
+is slow, the intended scaling is the tiered model in the north star:
+native clients pre-filter at high throughput, EELS adjudicates.
 
 ## Honest limits
 
