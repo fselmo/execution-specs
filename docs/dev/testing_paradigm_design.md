@@ -348,9 +348,23 @@ Verified end-to-end against geth (`evm` built from source):
   minimizes to 1 transaction / 2 accounts.
 
 The comparison is client-agnostic (any `TransitionTool`); geth is the
-first wired client because its `evm t8n` is readily built. Because EELS
-is slow, the intended scaling is the tiered model in the north star:
-native clients pre-filter at high throughput, EELS adjudicates.
+first wired client because its `evm t8n` is readily built.
+
+**Throughput.** Each seed is independent, so `fuzz-differential -j N`
+runs them across worker processes, each building EELS and the client
+tool once. Output order stays deterministic regardless of worker count,
+and minimization of divergent cases runs in the main process. Measured
+on a 16-core machine: 100 seeds went 17.8s → 4.3s (`-j 8`), and 500
+seeds run at ~48 cases/s (`-j 12`) versus ~5.6 serial — roughly an
+8–9× wall-clock win once worker startup amortizes. Parallel divergence
+detection was verified with an injected EELS bug: workers re-import the
+mutated spec and all cases diverge and minimize correctly.
+
+Parallelism raises the EELS-in-loop ceiling by the core count; the next
+order-of-magnitude still needs the tiered model in the north star
+(native clients pre-filter at high throughput, EELS adjudicates only
+flagged cases), which in turn needs a second native client wired in to
+form a real pre-filter.
 
 ## Distillation to reviewable tests (landed)
 
