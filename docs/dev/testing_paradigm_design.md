@@ -397,6 +397,39 @@ stripped the contract's code, since the divergence rode on the fee payment,
 not the code — the distilled test is a minimal value transfer, exactly the
 minimized case.)
 
+## In-file fuzz authoring (landed)
+
+The north star's "one authoring artifact, two execution modes" now has a
+concrete surface: a public strategy library, `execution_testing.fuzzing`,
+exposing `fuzzed_bytecode(rng)` and `fuzzed_calldata(rng)` — the same
+stack-aware helpers the generator uses. A test author writes an ordinary
+seed-parametrized test in the normal idiom:
+
+```python
+@pytest.mark.valid_from("Osaka")
+@pytest.mark.parametrize("seed", range(8))
+def test_fuzzed_contract_execution(state_test, pre, seed):
+    rng = random.Random(seed)
+    contract = pre.deploy_contract(code=fuzzed_bytecode(rng))
+    sender = pre.fund_eoa()
+    tx = Transaction(sender=sender, to=contract, gas_limit=1_000_000,
+                     data=fuzzed_calldata(rng))
+    state_test(env=Environment(), pre=pre, post={}, tx=tx)  # EELS fills post
+```
+
+`post={}` embodies the governing principle: the author chooses inputs, the
+reference spec computes the expected state, and `--invariant-checks`
+validates it. Under `fill` this is a plain parametrized test — N seeds fill
+N deterministic fixtures that clients then consume (differential by
+consumption); under a fuzzing service the identical artifact is driven over
+an unbounded seed range. No new test-runner machinery was needed: it reuses
+`StateTest`, the `pre` fixture's `deploy_contract`/`fund_eoa`, the existing
+formats, and the invariant checker. The generator was refactored to draw
+from the same library, so authors and the generator never drift.
+
+Verified: an example suite (`tests/fuzzing/test_fuzzed_execution.py`) fills
+8 seeds × 3 formats = 24 fixtures, invariant-clean.
+
 ## Honest limits
 
 - **EELS throughput bounds in-process fuzzing.** The design answer is
