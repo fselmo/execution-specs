@@ -22,10 +22,9 @@ from execution_testing.base_types import (
     HexNumber,
 )
 from execution_testing.forks import Fork
+from execution_testing.fuzzing import fuzzed_bytecode, fuzzed_calldata
 from execution_testing.test_types import Environment
 from execution_testing.test_types.account_types import EOA
-from execution_testing.vm import Bytecode
-from execution_testing.vm import Opcodes as Op
 
 from .models import (
     FuzzerAccountInput,
@@ -33,62 +32,11 @@ from .models import (
     FuzzerTransactionInput,
 )
 
+# Contract bodies and calldata come from the shared strategy library
+# (`execution_testing.fuzzing`), the same helpers test authors use. Bump
+# this whenever generation logic changes so old seeds are not silently
+# reinterpreted.
 GENERATOR_VERSION = 1
-
-# Opcode palette for generated contract bodies, grouped so the generator can
-# bias toward operations that keep execution interesting. Dynamic jumps are
-# deliberately excluded: without a control-flow model they almost always hit
-# an invalid jump destination and abort, which defeats the purpose.
-_ARITHMETIC = [
-    Op.ADD,
-    Op.MUL,
-    Op.SUB,
-    Op.DIV,
-    Op.MOD,
-    Op.EXP,
-    Op.LT,
-    Op.GT,
-    Op.EQ,
-    Op.ISZERO,
-    Op.AND,
-    Op.OR,
-    Op.XOR,
-    Op.NOT,
-    Op.SHL,
-    Op.SHR,
-    Op.SAR,
-    Op.BYTE,
-    Op.SIGNEXTEND,
-]
-_MEMORY = [Op.MSTORE, Op.MSTORE8, Op.MLOAD, Op.MSIZE]
-_STORAGE = [Op.SSTORE, Op.SLOAD]
-_ENV = [
-    Op.ADDRESS,
-    Op.CALLER,
-    Op.CALLVALUE,
-    Op.ORIGIN,
-    Op.GASPRICE,
-    Op.NUMBER,
-    Op.TIMESTAMP,
-    Op.GASLIMIT,
-    Op.CHAINID,
-    Op.SELFBALANCE,
-    Op.CALLDATASIZE,
-    Op.CODESIZE,
-    Op.GAS,
-    Op.BASEFEE,
-]
-_KECCAK = [Op.SHA3]
-_STACK_SHUFFLE = [Op.DUP1, Op.DUP2, Op.SWAP1, Op.SWAP2, Op.POP]
-
-_PALETTE = (
-    _ARITHMETIC * 3
-    + _MEMORY * 2
-    + _STORAGE * 2
-    + _ENV * 2
-    + _KECCAK
-    + _STACK_SHUFFLE * 2
-)
 
 
 def _derive_key(rng: random.Random) -> Hash:
@@ -96,44 +44,6 @@ def _derive_key(rng: random.Random) -> Hash:
     # secp256k1 order; any value in [1, n-1] is a valid key.
     n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
     return Hash((rng.randrange(1, n)).to_bytes(32, "big"))
-
-
-def _generate_bytecode(rng: random.Random, max_ops: int) -> Bytes:
-    """
-    Build a stack-safe contract body ending in a clean terminator.
-
-    The generator maintains a running stack-height estimate and pushes
-    32-byte operands whenever the chosen opcode needs more items than are
-    available, so most instructions run rather than underflow.
-    """
-    code: Bytecode = Bytecode() + Op.JUMPDEST  # harmless leading anchor
-    stack_height = 0
-    num_ops = rng.randint(1, max_ops)
-
-    for _ in range(num_ops):
-        op = rng.choice(_PALETTE)
-        needed = op.min_stack_height
-        while stack_height < needed:
-            operand = rng.getrandbits(256)
-            code += Op.PUSH32(operand)
-            stack_height += 1
-        code += op
-        stack_height += op.pushed_stack_items - op.popped_stack_items
-        # Guard against unbounded growth confusing later opcodes.
-        if stack_height > 900:
-            code += Op.POP
-            stack_height -= 1
-
-    terminator = rng.choice([Op.STOP, Op.RETURN, Op.REVERT])
-    if terminator in (Op.RETURN, Op.REVERT):
-        while stack_height < 2:
-            code += Op.PUSH1(0)
-            stack_height += 1
-        code += terminator
-    else:
-        code += Op.STOP
-
-    return Bytes(bytes(code))
 
 
 def generate_fuzzer_output(
@@ -175,7 +85,9 @@ def generate_fuzzer_output(
         accounts[address] = FuzzerAccountInput(
             balance=HexNumber(rng.randrange(0, 10**18)),
             nonce=HexNumber(0),
-            code=_generate_bytecode(rng, max_ops_per_contract),
+            code=Bytes(
+                bytes(fuzzed_bytecode(rng, max_ops=max_ops_per_contract))
+            ),
         )
         contract_addresses.append(address)
 
@@ -195,7 +107,7 @@ def generate_fuzzer_output(
                 gas_price=HexNumber(10),
                 nonce=HexNumber(nonces[sender]),
                 value=HexNumber(rng.randrange(0, 10**16)),
-                data=Bytes(rng.randbytes(rng.randint(0, 64))),
+                data=Bytes(fuzzed_calldata(rng)),
             )
         )
         nonces[sender] += 1
