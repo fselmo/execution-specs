@@ -12,17 +12,18 @@ Divergences are minimized (delta-debugging with a "still diverges"
 predicate) and saved to a corpus as ``FuzzerOutput`` JSON.
 """
 
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from execution_testing.client_clis import TransitionTool
+from execution_testing.client_clis import GethTransitionTool, TransitionTool
 from execution_testing.client_clis.cli_types import Result
 from execution_testing.client_clis.clis.execution_specs import (
     ExecutionSpecsTransitionTool,
 )
-from execution_testing.forks import Fork
+from execution_testing.forks import Fork, get_forks
 from execution_testing.specs.blockchain import (
     environment_from_parent_header,
 )
@@ -31,6 +32,14 @@ from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
 from .generator import GENERATOR_VERSION, generate_fuzzer_output
 from .models import FuzzerOutput
+
+
+def _fork_by_name(name: str) -> Fork:
+    for fork in get_forks():
+        if fork.name() == name:
+            return fork
+    raise ValueError(f"unknown fork {name!r}")
+
 
 # Consensus-relevant scalar fields compared when both tools report them.
 _COMPARED_FIELDS = (
@@ -156,20 +165,47 @@ def _evaluate(
     return _compare(eels_result, client_result), None
 
 
+# Per-worker tool state, built once by the pool initializer. Building the
+# EELS and client tools is not free, so workers reuse them across seeds.
+_WORKER: Dict[str, Any] = {}
+
+
+def _init_worker(fork_name: str, client_binary: str) -> None:
+    """Build the per-process tools for the differential pool."""
+    _WORKER["fork"] = _fork_by_name(fork_name)
+    _WORKER["eels"] = ExecutionSpecsTransitionTool()
+    _WORKER["client"] = GethTransitionTool(binary=Path(client_binary))
+
+
+def _detect_in_worker(seed: int) -> CaseOutcome:
+    """Evaluate one seed using the worker's tools (runs in a subprocess)."""
+    fork = _WORKER["fork"]
+    case = generate_fuzzer_output(fork, seed)
+    divergences, error = _evaluate(
+        _WORKER["eels"], _WORKER["client"], case, fork
+    )
+    return CaseOutcome(seed=seed, divergences=divergences, error=error)
+
+
 def differential_fuzz(
     fork: Fork,
     seeds: range,
-    client: TransitionTool,
-    corpus_dir: Optional[Path] = None,
     *,
+    client_binary: Path,
+    corpus_dir: Optional[Path] = None,
     minimize_cases: bool = True,
+    workers: int = 1,
 ) -> DifferentialReport:
     """
-    Fuzz ``fork`` across ``seeds``, comparing EELS against ``client``.
+    Fuzz ``fork`` across ``seeds``, comparing EELS against geth's ``evm``.
 
-    Divergent cases are saved to ``corpus_dir`` (minimized when requested).
+    Each seed is independent, so ``workers > 1`` runs them across processes
+    (each building its own tools once). Output order is deterministic
+    regardless of worker count. Divergent cases are saved to ``corpus_dir``,
+    minimized when requested (minimization runs in the main process).
     """
     eels = ExecutionSpecsTransitionTool()
+    client = GethTransitionTool(binary=client_binary)
     report = DifferentialReport(
         fork=fork.name(),
         generator_version=GENERATOR_VERSION,
@@ -179,25 +215,38 @@ def differential_fuzz(
         diverged=0,
     )
 
-    for seed in seeds:
-        case = generate_fuzzer_output(fork, seed)
-        divergences, error = _evaluate(eels, client, case, fork)
-        outcome = CaseOutcome(seed=seed, divergences=divergences, error=error)
+    if workers > 1:
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_init_worker,
+            initargs=(fork.name(), str(client_binary)),
+        ) as executor:
+            outcomes = list(executor.map(_detect_in_worker, seeds))
+    else:
+        outcomes = []
+        for seed in seeds:
+            case = generate_fuzzer_output(fork, seed)
+            divergences, error = _evaluate(eels, client, case, fork)
+            outcomes.append(
+                CaseOutcome(seed=seed, divergences=divergences, error=error)
+            )
 
+    for outcome in outcomes:
         if outcome.diverged:
             report.diverged += 1
             if corpus_dir is not None:
+                case = generate_fuzzer_output(fork, outcome.seed)
                 saved = case
                 if minimize_cases:
                     predicate = partial(_diverges, eels, client, fork=fork)
                     saved = minimize(case, predicate)
                 save_case(
                     saved,
-                    corpus_dir / f"{fork.name()}_divergence_seed{seed}.json",
+                    corpus_dir
+                    / f"{fork.name()}_divergence_seed{outcome.seed}.json",
                 )
         else:
             report.agreed += 1
-
         report.outcomes.append(outcome)
 
     return report
