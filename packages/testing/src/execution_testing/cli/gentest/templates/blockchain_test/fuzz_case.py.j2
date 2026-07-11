@@ -1,0 +1,50 @@
+"""
+{{ docstring }}
+"""
+
+import pytest
+
+from execution_testing import (
+    Account,
+    Address,
+    Alloc,
+    Block,
+    BlockchainTestFiller,
+    Bytes,
+    EOA,
+    Transaction,
+)
+
+REFERENCE_SPEC_GIT_PATH = "N/A"
+REFERENCE_SPEC_VERSION = "N/A"
+
+
+@pytest.mark.valid_from("{{ fork_name }}")
+def test_{{ test_name }}(
+    blockchain_test: BlockchainTestFiller,
+):
+    """Distilled fuzzer finding: {{ reason }}."""
+{% for sender in senders %}
+    {{ sender.var }} = EOA(key={{ sender.key }})
+{%- endfor %}
+
+    pre = Alloc(
+        {
+{%- for entry in pre_entries %}
+            {{ entry }},
+{%- endfor %}
+        }
+    )
+
+    txs = [
+{%- for tx in tx_entries %}
+        {{ tx }},
+{%- endfor %}
+    ]
+
+    # NOTE: distilled from a fuzzer finding; `post` is intentionally empty so
+    # the reference spec fills the expected state. A reviewer should replace
+    # it with explicit expectations before this becomes a canonical fixture.
+    post: dict = {}
+
+    blockchain_test(pre=pre, post=post, blocks=[Block(txs=txs)])

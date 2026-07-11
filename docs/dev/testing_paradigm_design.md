@@ -216,7 +216,7 @@ known consensus bugs re-found in 12 hours.
 | 2' | Cross-fork differential gate (gap 5) | 2 | S–M | zero-divergence gate on fork copy |
 | 3 | Differential harness, EELS vs. client t8ns (gap 4) | 2 | M–L | **landed** — `fuzz-differential --evm-bin` vs geth |
 | 4 | Coverage feedback + corpus distillation (gap 6) | 2, 3 | M | distilled corpus + gap report |
-| 5 | Distillation → canonical fixtures (gap 7) | 2, 3 | M | first fuzz-found frozen fixture PR |
+| 5 | Distillation → canonical fixtures (gap 7) | 2, 3 | M | **landed** — `fuzz-distill` case.json → fillable test |
 | 6 | Agentic skills + rubric + triage (gap 8) | 1, 3 | M | first agent-mined property merged |
 
 ## PoC validation (mutation experiments)
@@ -351,6 +351,37 @@ The comparison is client-agnostic (any `TransitionTool`); geth is the
 first wired client because its `evm t8n` is readily built. Because EELS
 is slow, the intended scaling is the tiered model in the north star:
 native clients pre-filter at high throughput, EELS adjudicates.
+
+## Distillation to reviewable tests (landed)
+
+`uv run fuzz-distill <case.json> <out.py>` turns a corpus case (the
+minimized `FuzzerOutput` a `fuzz` or `fuzz-differential` run saved) into a
+readable `BlockchainTestFiller` module: explicit `EOA(key=…)` senders, an
+`Alloc` of exact accounts and contract code, the transactions, and a
+provenance docstring (fork, generator version, seed, why it was
+interesting). `post` is left empty for the reviewer to fill with explicit
+expectations before the test is landed.
+
+This closes the lifecycle that makes findings permanent — the repo's crown
+jewel is that a frozen fixture is a forever cross-client regression test:
+
+```
+fuzz / fuzz-differential  →  minimized corpus JSON
+        →  fuzz-distill    →  reviewable BlockchainTestFiller .py
+        →  fill            →  canonical fixtures every client consumes
+```
+
+The rendering is deliberately faithful (exact addresses/keys/code/values,
+via controlled codegen — EEST type `repr()` does not round-trip) rather
+than idiomatic, because the distilled test must reproduce the original
+execution. It reuses `gentest`'s template rendering and ruff formatting.
+
+Verified end-to-end: a geth-vs-EELS `state_root` divergence was distilled
+to a Python test and then *filled* successfully by the reference spec,
+proving the distilled case is valid and reproduces. (Note: ddmin had
+stripped the contract's code, since the divergence rode on the fee payment,
+not the code — the distilled test is a minimal value transfer, exactly the
+minimized case.)
 
 ## Honest limits
 
