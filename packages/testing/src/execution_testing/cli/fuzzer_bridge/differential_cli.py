@@ -5,7 +5,6 @@ from typing import Optional
 
 import click
 
-from execution_testing.client_clis import GethTransitionTool
 from execution_testing.forks import get_forks
 
 from .differential import differential_fuzz
@@ -37,6 +36,14 @@ def _resolve_fork(name: str) -> object:
     help="Directory to save divergent cases.",
 )
 @click.option("--no-minimize", is_flag=True)
+@click.option(
+    "-j",
+    "--workers",
+    type=int,
+    default=1,
+    show_default=True,
+    help="Parallel worker processes; large runs benefit from more.",
+)
 def differential(
     fork_name: str,
     evm_bin: Path,
@@ -44,26 +51,28 @@ def differential(
     count: int,
     corpus_dir: Optional[Path],
     no_minimize: bool,
+    workers: int,
 ) -> None:
     """
     Compare the reference spec (EELS) against a client transition tool on
     generated cases, and report consensus-relevant divergences.
     """
     fork = _resolve_fork(fork_name)
-    client = GethTransitionTool(binary=evm_bin)
     seeds = range(seed_start, seed_start + count)
 
     click.echo(
         f"Differential {fork_name} (generator v{GENERATOR_VERSION}) "
         f"EELS vs {evm_bin.name}, seeds {seed_start}..{seed_start + count - 1}"
+        f" ({workers} worker{'s' if workers != 1 else ''})"
     )
 
     report = differential_fuzz(
         fork,  # type: ignore[arg-type]
         seeds,
-        client,
+        client_binary=evm_bin,
         corpus_dir=corpus_dir,
         minimize_cases=not no_minimize,
+        workers=workers,
     )
 
     click.echo(

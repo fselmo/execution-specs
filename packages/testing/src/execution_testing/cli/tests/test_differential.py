@@ -3,8 +3,14 @@
 from types import SimpleNamespace
 from typing import Any, List
 
+from execution_testing.forks import Osaka
+
 from ..fuzzer_bridge import differential
-from ..fuzzer_bridge.differential import _compare, _evaluate
+from ..fuzzer_bridge.differential import (
+    _compare,
+    _evaluate,
+    _fork_by_name,
+)
 
 
 def _result(**overrides: Any) -> Any:
@@ -26,6 +32,19 @@ def _result(**overrides: Any) -> Any:
 
 def _rejected(*indices: int) -> List[Any]:
     return [SimpleNamespace(index=i) for i in indices]
+
+
+def test_fork_by_name_roundtrips() -> None:
+    """A fork name resolves back to the fork (for worker reconstruction)."""
+    assert _fork_by_name("Osaka") is Osaka
+
+
+def test_fork_by_name_rejects_unknown() -> None:
+    """An unknown fork name raises rather than silently mis-resolving."""
+    import pytest
+
+    with pytest.raises(ValueError):
+        _fork_by_name("NotAFork")
 
 
 def test_identical_results_agree() -> None:
