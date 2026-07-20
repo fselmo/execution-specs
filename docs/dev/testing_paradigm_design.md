@@ -538,8 +538,45 @@ Those markers are *state*-covariant (what the fork *has*). The manifest adds a
 *change*-covariant axis (what the fork *changed* vs its parent). So the
 production home for archetypes is a manifest-sourced covariant decorator —
 `diff_forks` runs once in the parametrization layer, and archetype bodies are
-fork-agnostic and permanent. The prototype below proves the mechanism in the
-lightweight pure-property layer before wiring into the fill-side plugin.
+fork-agnostic and permanent.
+
+**Landed:** `with_each_change(kind)` in `eip_properties.covariant`. It sources
+`(parent, child, change)` cases from `diff_forks` across **every adjacent
+fork pair** (`adjacent_fork_pairs()`, from `get_forks()`), so one archetype
+body covers every transition — and a newly added fork joins automatically,
+with zero test edits. Verified: the observability archetype expands to 47
+cases spanning Frontier→Homestead through Prague→Osaka from a single function.
+
+This deliberately lives in the pure-property layer (`pytest.mark.parametrize`
+over fork pairs), which needs no fill machinery and, because cases are
+collected across pairs, has no "this fork lacks the change kind" edge case.
+Archetypes needing full block execution graduate to a fill-side covariant
+marker — that path needs one shared-infra decision (the fill-side
+`covariant_decorator` asserts a non-empty value list, so it would *error*
+rather than *skip* on a fork without the change kind; graduation means adding
+empty→skip semantics). Deferred deliberately rather than rushed.
+
+### Keeping three things top of mind (per the design intent)
+
+- **Agent test-writing flow.** An agent writing an archetype does not pick
+  forks or enumerate changes. It: (1) picks a `ChangeKind` from the manifest;
+  (2) decides the oracle tier (differential / structural / assertion); (3)
+  writes one `@with_each_change(kind)` body; (4) for the assertion tier,
+  grounds the exact claim in the EIP text / spec line and self-triages (the
+  paper's loop). The framework supplies the cases; the agent supplies the
+  judgment where — and only where — it is needed.
+- **Scope / surface.** Change-covariant coverage scales with the fork's
+  *declared* surface (predicates, `GasCosts`, opcode/system-contract sets,
+  overridden calculators). It is complete over that surface by construction,
+  and blind to changes expressed only in un-parameterized spec logic — the
+  residue the source-diff + agent must cover. Stating that boundary explicitly
+  is how we avoid a false sense of completeness.
+- **Fidelity.** The load-bearing rule stands: the fork surface cannot be its
+  own oracle. Assumption-free archetypes (differential, structural,
+  observability) are safe to templatize; assertion-bearing archetypes must be
+  agent-grounded and triaged, never templated — a template would get the
+  gas-limit-cap boundary and failure-class wrong, and a wrong canonical
+  fixture is worse than a missing one.
 
 ## Honest limits
 
