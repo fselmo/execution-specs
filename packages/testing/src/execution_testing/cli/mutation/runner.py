@@ -18,13 +18,16 @@ Two oracles:
 The original source is always restored, even on error or interrupt.
 """
 
+import os
 import random
+import signal
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 from .mutations import Mutant, apply_mutant, enumerate_mutants
 
@@ -162,6 +165,28 @@ def _invariant_count(process: subprocess.CompletedProcess) -> int:
     return (process.stdout + process.stderr).count(_INVARIANT_MARKER)
 
 
+@contextmanager
+def _restore_on_signal(module_path: Path, original: str) -> Iterator[None]:
+    """
+    Restore the module source if the process is signalled mid-run.
+
+    A ``finally`` handles exceptions and SIGINT (which raises), but a plain
+    SIGTERM (e.g. from ``timeout``) would kill the process before the source
+    is restored, leaving a mutant on disk. Restore in a SIGTERM handler too.
+    """
+
+    def handler(signum: int, _frame: object) -> None:
+        module_path.write_text(original)
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    previous = signal.signal(signal.SIGTERM, handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
 def run_mutation_testing(
     module_path: Path,
     test_paths: List[str],
@@ -200,13 +225,14 @@ def run_mutation_testing(
         baseline_invariants = _invariant_count(baseline)
 
         try:
-            for mutant in mutants:
-                module_path.write_text(apply_mutant(original, mutant))
-                process = _run_oracle(
-                    oracle, test_paths, fork, output_dir, timeout
-                )
-                verdict = _classify(process, baseline_invariants)
-                report.results.append(MutantResult(mutant, verdict))
+            with _restore_on_signal(module_path, original):
+                for mutant in mutants:
+                    module_path.write_text(apply_mutant(original, mutant))
+                    process = _run_oracle(
+                        oracle, test_paths, fork, output_dir, timeout
+                    )
+                    verdict = _classify(process, baseline_invariants)
+                    report.results.append(MutantResult(mutant, verdict))
         finally:
             module_path.write_text(original)
 
