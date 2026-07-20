@@ -291,6 +291,18 @@ def diff_forks(fork_a: Fork, fork_b: Fork) -> List[Change]:
     return changes
 
 
+def changes_of_kind(
+    fork_a: Fork, fork_b: Fork, kind: ChangeKind
+) -> List[Change]:
+    """
+    Changes of a single kind from ``fork_a`` to ``fork_b``.
+
+    This is the covariant source an archetype test parametrizes over: the
+    fork diff supplies the cases, so one test body covers every fork.
+    """
+    return [c for c in diff_forks(fork_a, fork_b) if c.kind == kind]
+
+
 def derived_checklist_sections(changes: List[Change]) -> Set[str]:
     """The set of checklist sections implied by a manifest."""
     sections: Set[str] = set()
