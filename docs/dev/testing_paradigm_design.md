@@ -477,6 +477,70 @@ fork-level values (blob params) change without a new mixin override and land
 "unattributed". The kind→section map is coarse (blob-count changes currently
 fall under a generic constraint section). All refinements, not blockers.
 
+## Property archetypes, keyed to change kind (design)
+
+The manifest says *what* changed; an **archetype** says *how to test* each
+kind. Archetypes are written once and sourced from the fork diff (see the
+covariant-source note below), so they never need per-fork rewriting.
+
+**The load-bearing finding: the fork surface cannot test itself.** A property
+derived from the fork's own parameters and asserted back against those same
+parameters is circular — "Amsterdam's `TX_BASE` is 12000" is read *from* the
+fork, so asserting it proves nothing. A non-circular conformance property
+needs an **oracle from outside the fork surface**. There are only four:
+
+- **parent fork** — the cross-fork differential (behavior differs from the
+  prior fork only on the changed surface);
+- **another client** — the cross-client differential we built (EELS vs geth);
+- **the EIP text / spec prose** — an agent reads intent and grounds an
+  assertion (the paper's approach);
+- **end-to-end execution presence** — fill a block and observe the plumbing
+  (mildly circular, but confirms wiring, not just declaration).
+
+So the manifest is a **targeting system, not an oracle.** It tells you what
+changed and where to look; the judgment of correctness comes from one of the
+oracles above. That reshapes archetypes into three tiers by oracle:
+
+| Change kind | Tier | Oracle | Property shape | Altitude | Agent? |
+| --- | --- | --- | --- | --- | --- |
+| `gas_constant`, `formula_changed`, `value_changed` | Differential | parent fork / client | behavior differs from parent only where the changed surface is exercised | transition | no |
+| `feature_enabled/disabled` | Structural | execution presence | field/behavior absent before the fork, present after; header commits to it | transition | no |
+| `opcode_added/removed` (validity) | Structural | execution presence | undefined/invalid before, valid after (not its semantics) | transition | no |
+| `system_contract_added`, `precompile_added/removed` (presence) | Structural | execution presence | pre-deployed/callable at/after fork, absent before | transition | no |
+| `version_bump` | Structural | execution presence | engine API accepts the new version after fork | transition | no |
+| `bound_added`, `limit_changed` | Assertion | EIP text / spec | exact boundary (`>` vs `>=`), failure class (invalid-tx vs OOG), interactions | transition + standing | **yes** |
+| `opcode_added`, `precompile_added`, `system_contract_added` (semantics) | Assertion | EIP text / spec | what the opcode/precompile/contract *does* | transition + standing | **yes** |
+
+Two consequences that were not obvious before:
+
+- The **differential tier needs no baked-in assertion** and no agent — it
+  reuses the cross-client engine we built and the cross-fork engine (gap 5,
+  still to build). It is the safest backbone and adheres to the governing
+  principle (no hand-authored expectations).
+- The **assertion tier is exactly where the paper's agent belongs** — the
+  gas-limit cap showed a generic template would likely get `>` vs `>=`, the
+  failure class, and the framework-method-vs-spec-constant relationship
+  wrong. Those assertions must be spec-grounded and self-triaged, not
+  templated.
+
+**Transition vs standing.** A transition property holds at the boundary
+(rejected before, accepted after); a standing property holds at every fork
+where the change is active (the cap stays enforced). These are two covariant
+sources over the manifest — `with_each_new_*` (at introduction) and
+`with_each_active_*` (all forks where active) — both cheap.
+
+### `diff_forks` as a covariant source, not test-body code
+
+The framework already parametrizes a single test from fork-derived values:
+`with_all_precompiles` reads `fork.precompiles()` at fill time and generates
+one case per precompile (`plugins/forks/forks.py`, `covariant_decorator`).
+Those markers are *state*-covariant (what the fork *has*). The manifest adds a
+*change*-covariant axis (what the fork *changed* vs its parent). So the
+production home for archetypes is a manifest-sourced covariant decorator —
+`diff_forks` runs once in the parametrization layer, and archetype bodies are
+fork-agnostic and permanent. The prototype below proves the mechanism in the
+lightweight pure-property layer before wiring into the fill-side plugin.
+
 ## Honest limits
 
 - **EELS throughput bounds in-process fuzzing.** The design answer is
