@@ -5,7 +5,7 @@ from typing import List
 
 import click
 
-from .runner import Verdict, run_mutation_testing
+from .runner import Oracle, Verdict, run_mutation_testing
 
 
 @click.command()
@@ -23,7 +23,19 @@ from .runner import Verdict, run_mutation_testing
     multiple=True,
     help="Test path(s) to run as the kill oracle. Repeatable.",
 )
-@click.option("--fork", required=True, help="Fork to fill against.")
+@click.option(
+    "--oracle",
+    type=click.Choice([o.value for o in Oracle]),
+    default=Oracle.FILL.value,
+    show_default=True,
+    help="Kill oracle: 'fill' (conformance suite) or 'properties' "
+    "(the tests_property suite).",
+)
+@click.option(
+    "--fork",
+    default="",
+    help="Fork to fill against (required for the 'fill' oracle).",
+)
 @click.option(
     "--max-mutants",
     type=int,
@@ -36,7 +48,7 @@ from .runner import Verdict, run_mutation_testing
     type=int,
     default=600,
     show_default=True,
-    help="Per-fill timeout in seconds; a timeout counts as a kill.",
+    help="Per-run timeout in seconds; a timeout counts as a kill.",
 )
 @click.option(
     "--include-constants",
@@ -46,6 +58,7 @@ from .runner import Verdict, run_mutation_testing
 def mutate(
     module_path: Path,
     test_paths: tuple[str, ...],
+    oracle: str,
     fork: str,
     max_mutants: int,
     seed: int,
@@ -54,18 +67,22 @@ def mutate(
 ) -> None:
     """
     Mutation-test a spec module: measure how many small spec errors the
-    conformance suite catches, and list the survivors as coverage gaps.
+    test suite catches, and list the survivors as coverage gaps.
     """
+    oracle_choice = Oracle(oracle)
+    if oracle_choice is Oracle.FILL and not fork:
+        raise click.UsageError("--fork is required for the 'fill' oracle")
     paths: List[str] = list(test_paths)
     click.echo(
-        f"Mutating {module_path} against {len(paths)} test path(s), "
-        f"fork {fork}..."
+        f"Mutating {module_path} against {len(paths)} test path(s) "
+        f"[{oracle} oracle]..."
     )
 
     report = run_mutation_testing(
         module_path,
         paths,
         fork,
+        oracle=oracle_choice,
         max_mutants=max_mutants,
         seed=seed,
         timeout=timeout,
