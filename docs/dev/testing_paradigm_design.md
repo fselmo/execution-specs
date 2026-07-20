@@ -430,6 +430,53 @@ from the same library, so authors and the generator never drift.
 Verified: an example suite (`tests/fuzzing/test_fuzzed_execution.py`) fills
 8 seeds × 3 formats = 24 fixtures, invariant-clean.
 
+## EIP change manifest — deriving what to test from the fork (landed, prototype)
+
+A redesign insight for the agent era: the fork object is *already* a
+machine-readable description of the protocol (the `BaseFork` predicate
+surface + `GasCosts` + opcode/system-contract sets + the calculator methods
+each EIP mixin overrides). The repo's pre-AI gap was that nothing consumed it
+as one — the testing checklist was authored as prose *beside* the code rather
+than *derived from* it, creating two sources of truth that drift.
+
+`execution_testing.eip_properties.manifest` closes that: `uv run eip-manifest
+--from Osaka --to Amsterdam` diffs two forks and derives an EIP-attributed,
+classified change manifest via three detectors:
+
+- **value-diff** — scalars, `GasCosts` fields, opcode/system-contract/
+  precompile sets. Complete over everything parameterized by value.
+- **override-diff** — calculator/formula methods a *new* EIP mixin overrides
+  (pricing / state-transition logic a value cannot capture), attributed to
+  the mixin that defines them.
+- source-diff — pure logic behind no fork method; left to the agent.
+
+Each change is classified (`bound_added`, `gas_constant`, `opcode_added`,
+`feature_enabled`, `formula_changed`, …) and mapped to the checklist
+section(s) it implies, so the required-test surface is **derived, not
+hand-copied**. Verified on real forks:
+
+- Prague→Osaka surfaces `transaction_gas_limit_cap: None → 16777216`,
+  attributed to **EIP-7825**, classified `bound_added` → *New
+  Transaction-Validity Constraint* — exactly the kind of subtle bounded-
+  quantity change a coarse taxonomy would miss.
+- Osaka→Amsterdam: 68 changes across 11 EIPs — 19 individual `GasCosts`
+  constants, 4 new opcodes, 2 system contracts, EIP-8037's state-gas
+  calculators — deriving 5 checklist sections that are a subset of the real
+  16.
+
+This is the foundation the archetype layer and the change-type-aware mining
+agent consume: the manifest says *what* changed and *which EIP*; archetypes
+say *how to test* each kind; the agent's brief is manifest + archetype + EIP
+text.
+
+**Prototype limits (honest):** `GasCosts`/opcode changes attribute to the
+*candidate set* of new EIP mixins overriding the producing method (e.g. all
+five EIPs that override `gas_costs`), not the exact constant→EIP mapping —
+precise per-field attribution needs incremental MRO application. Some
+fork-level values (blob params) change without a new mixin override and land
+"unattributed". The kind→section map is coarse (blob-count changes currently
+fall under a generic constraint section). All refinements, not blockers.
+
 ## Honest limits
 
 - **EELS throughput bounds in-process fuzzing.** The design answer is
