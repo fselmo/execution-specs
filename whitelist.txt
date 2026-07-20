@@ -842,6 +842,7 @@ nop
 NOPs
 noPython
 notbookspath
+NotIn
 NOTSET
 nq2
 nSHA
@@ -993,8 +994,8 @@ pytestmark
 q1
 qGpsxSA
 qs
-qube
 quantized
+qube
 questionary
 quickstart
 qx
