@@ -8,6 +8,7 @@ an EIP-attributed, archetype-mapped manifest.
 from .manifest import (
     Change,
     ChangeKind,
+    changes_of_kind,
     derived_checklist_sections,
     diff_forks,
 )
@@ -15,6 +16,7 @@ from .manifest import (
 __all__ = [
     "Change",
     "ChangeKind",
+    "changes_of_kind",
     "derived_checklist_sections",
     "diff_forks",
 ]
