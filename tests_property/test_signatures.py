@@ -5,12 +5,12 @@ from dataclasses import replace
 from types import ModuleType
 from typing import Any
 
-import coincurve
 import pytest
 from ethereum_types.bytes import Bytes
 from ethereum_types.numeric import U64, U256, Uint
 from hypothesis import given
 from hypothesis import strategies as st
+from spec256k1 import PrivateKey
 
 from ethereum.crypto.elliptic_curve import SECP256K1N
 from ethereum.crypto.hash import keccak256
@@ -47,8 +47,10 @@ def unsigned_legacy_tx(
 
 def sign_hash(key: int, msg_hash: bytes) -> tuple[U256, U256, int]:
     """Sign a 32-byte hash, returning (r, s, parity)."""
-    private_key = coincurve.PrivateKey(key.to_bytes(32, "big"))
-    signature = private_key.sign_recoverable(msg_hash, hasher=None)
+    # spec256k1 (the spec's signing backend, replacing coincurve upstream)
+    # signs the raw 32-byte digest directly — no extra hashing.
+    private_key = PrivateKey(key.to_bytes(32, "big"))
+    signature = private_key.sign_recoverable(msg_hash)
     r = U256.from_be_bytes(signature[:32])
     s = U256.from_be_bytes(signature[32:64])
     return r, s, signature[64]
@@ -56,9 +58,9 @@ def sign_hash(key: int, msg_hash: bytes) -> tuple[U256, U256, int]:
 
 def address_of(key: int) -> Address:
     """Derive the address of a private key."""
-    public_key = coincurve.PrivateKey(
-        key.to_bytes(32, "big")
-    ).public_key.format(compressed=False)[1:]
+    public_key = PrivateKey(key.to_bytes(32, "big")).public_key.format(
+        compressed=False
+    )[1:]
     return Address(keccak256(public_key)[12:32])
 
 
