@@ -17,11 +17,14 @@ from .manifest import (
     derived_checklist_sections,
     diff_forks,
 )
+from .structural import HEADER_FIELD_FEATURES, built_header_at_fork
 
 __all__ = [
+    "HEADER_FIELD_FEATURES",
     "Change",
     "ChangeKind",
     "adjacent_fork_pairs",
+    "built_header_at_fork",
     "changes_of_kind",
     "derived_checklist_sections",
     "diff_forks",
