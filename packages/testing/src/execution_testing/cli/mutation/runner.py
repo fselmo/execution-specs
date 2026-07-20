@@ -1,11 +1,19 @@
 """
-Run mutation testing against the reference spec using ``fill`` as the oracle.
+Run mutation testing against the reference spec.
 
-Each mutant is written into the spec source, then a targeted ``fill`` runs
-with chain-invariant checks enabled. A mutant is *killed* if any test fails
-(its expected outputs diverge), if a new invariant violation appears, or if
-the run times out; otherwise it *survives* — a case the conformance suite
-does not distinguish from correct behavior, and therefore a coverage gap.
+Each mutant is written into the spec source, then a kill-oracle runs. A mutant
+is *killed* if the oracle fails (nonzero exit), a new invariant violation
+appears, or the run times out; otherwise it *survives* — a case the suite does
+not distinguish from correct behaviour, and therefore a coverage gap.
+
+Two oracles:
+
+- ``fill`` — a targeted ``fill`` with chain-invariant checks; measures how well
+  the frozen conformance suite pins the spec.
+- ``properties`` — the pure Hypothesis property suite (``tests_property``);
+  faster, and it measures how well the *property* suite pins the spec. This is
+  the objective validity signal for agent-proposed properties: a property that
+  raises the kill score is demonstrably valuable.
 
 The original source is always restored, even on error or interrupt.
 """
@@ -21,8 +29,15 @@ from typing import List, Optional
 from .mutations import Mutant, apply_mutant, enumerate_mutants
 
 
+class Oracle(str, Enum):
+    """Which test oracle decides whether a mutant is killed."""
+
+    FILL = "fill"
+    PROPERTIES = "properties"
+
+
 class Verdict(str, Enum):
-    """Outcome of running one mutant through the fill oracle."""
+    """Outcome of running one mutant through the oracle."""
 
     KILLED_TESTS = "killed (tests)"
     KILLED_INVARIANT = "killed (invariant only)"
@@ -106,6 +121,43 @@ def _run_fill(
         return None
 
 
+def _run_properties(
+    test_paths: List[str],
+    timeout: int,
+) -> Optional[subprocess.CompletedProcess]:
+    """Run the property suite as the kill oracle; return None on timeout."""
+    try:
+        return subprocess.run(
+            [
+                "uv",
+                "run",
+                "pytest",
+                *test_paths,
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _run_oracle(
+    oracle: Oracle,
+    test_paths: List[str],
+    fork: str,
+    output_dir: Path,
+    timeout: int,
+) -> Optional[subprocess.CompletedProcess]:
+    if oracle is Oracle.PROPERTIES:
+        return _run_properties(test_paths, timeout)
+    return _run_fill(test_paths, fork, output_dir, timeout)
+
+
 def _invariant_count(process: subprocess.CompletedProcess) -> int:
     return (process.stdout + process.stderr).count(_INVARIANT_MARKER)
 
@@ -119,9 +171,10 @@ def run_mutation_testing(
     seed: int = 0,
     timeout: int = 600,
     include_constants: bool = False,
+    oracle: Oracle = Oracle.FILL,
 ) -> MutationReport:
     """
-    Mutate ``module_path`` and report which mutants the tests kill.
+    Mutate ``module_path`` and report which mutants the oracle kills.
 
     ``test_paths`` should exercise the mutated module; killed mutants exit
     fast under ``-x`` while survivors pay the full run. The original source
@@ -138,18 +191,20 @@ def run_mutation_testing(
     with tempfile.TemporaryDirectory() as tmp:
         output_dir = Path(tmp) / "fixtures"
 
-        baseline = _run_fill(test_paths, fork, output_dir, timeout)
+        baseline = _run_oracle(oracle, test_paths, fork, output_dir, timeout)
         if baseline is None or baseline.returncode != 0:
             raise RuntimeError(
-                "baseline fill did not pass cleanly; fix the target/tests "
-                "before mutation testing"
+                "baseline oracle run did not pass cleanly; fix the "
+                "target/tests before mutation testing"
             )
         baseline_invariants = _invariant_count(baseline)
 
         try:
             for mutant in mutants:
                 module_path.write_text(apply_mutant(original, mutant))
-                process = _run_fill(test_paths, fork, output_dir, timeout)
+                process = _run_oracle(
+                    oracle, test_paths, fork, output_dir, timeout
+                )
                 verdict = _classify(process, baseline_invariants)
                 report.results.append(MutantResult(mutant, verdict))
         finally:
