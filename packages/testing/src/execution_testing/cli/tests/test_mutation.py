@@ -2,9 +2,12 @@
 
 import ast
 import subprocess
+from pathlib import Path
+from typing import Any
 
+from ..mutation import runner as runner_mod
 from ..mutation.mutations import apply_mutant, enumerate_mutants
-from ..mutation.runner import Verdict, _classify
+from ..mutation.runner import Oracle, Verdict, _classify, _run_oracle
 
 SNIPPET = """\
 def f(x, y):
@@ -78,6 +81,16 @@ def test_classify_killed_by_invariant_only() -> None:
     """A clean exit with new invariant warnings is an invariant-only kill."""
     process = _completed(0, "InvariantViolationWarning: ether_conservation")
     assert _classify(process, 0) == Verdict.KILLED_INVARIANT
+
+
+def test_run_oracle_dispatches_by_oracle(monkeypatch: Any) -> None:
+    """_run_oracle routes to the property runner or the fill runner."""
+    monkeypatch.setattr(
+        runner_mod, "_run_properties", lambda *_a, **_k: "PROPERTIES"
+    )
+    monkeypatch.setattr(runner_mod, "_run_fill", lambda *_a, **_k: "FILL")
+    assert _run_oracle(Oracle.PROPERTIES, [], "", Path("."), 1) == "PROPERTIES"
+    assert _run_oracle(Oracle.FILL, [], "Osaka", Path("."), 1) == "FILL"
 
 
 def test_classify_survived() -> None:
