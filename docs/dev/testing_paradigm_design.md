@@ -322,6 +322,41 @@ The runner also distinguishes *killed by invariant only* — a mutant the test
 suite misses but the fill-time invariant layer catches — quantifying what
 the invariant checker adds on top of the frozen fixtures.
 
+## Applying the stack to a live fork: Amsterdam (landed)
+
+The whole point is impact on the fork under development. Two Amsterdam
+results, each a different tool answering a different question:
+
+**Repricing is already pinned (a positive-assurance result).** EIP-2780/
+7976/8037/8038 move ~21 gas constants. Reverting each repriced constant to
+its Osaka value in EELS and re-running the conformance fills killed every
+directly-expressed one (9/9 testable; the rest are *derived* expressions
+like `AUTH_BASE = 23 * COST_PER_STATE_BYTE`, not flat literals — a confirmed
+limitation of value-diff mapping manifest totals back to spec source). So if
+a client ships an old price, `fill` catches it. The differential also caught
+a *real* stale-client drift: an older geth build diverged on 50/50 cases with
+a gas fingerprint localizing to the EIP-2780 commits; a fresh master build
+agreed 10,000/10,000 (BAL hash included).
+
+**BAL semantics were a real gap (a coverage-win result).** EIP-7928's
+`block_access_lists.py` builder — canonical ordering, per-index dedup,
+read/write exclusion, net-zero filtering — is consensus-critical, brand new,
+and had *no* property coverage; fills only ever see the aggregate BAL hash,
+not these internal rules. Full-module mutation baseline with the existing
+suite as oracle: **5/21 (24%)**. A `/mine-properties` agent (EIP mode, ground
+in EIP-7928 prose + docstrings) produced a model-based reference machine plus
+14 grounded properties; independently re-measured, the kill score rose to
+**19/21 (90%)**, a **+14 kill-delta**. The 2 residual survivors are provably
+equivalent mutants (`>`→`>=` on a nonce comparison that only differs when the
+values are equal — writing the same value either way; and a `//`→`*` inside
+an exception *message* f-string, not the accept/reject comparison). Tests in
+`tests_property/test_eip7928_bal.py`; amsterdam-only, skip-guarded on osaka.
+
+This is the clearest single demonstration of the thesis: fills answer "does
+the client match the frozen answer"; mutation + property mining answer "does
+any test even distinguish this spec from a subtly wrong one" — and for a new
+data structure the answer was mostly no, until it wasn't.
+
 ## Cross-client differential (landed)
 
 `uv run fuzz-differential --fork Osaka --evm-bin <path> --count N
