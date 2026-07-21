@@ -69,3 +69,27 @@ Verified against source before recording. Pinning properties live in
   `block_output.block_state_gas_used += tx_state_gas`, or is it clamped to
   zero per transaction — and does the clamped or unclamped value enter the
   regular-gas calculation?
+
+### 4. Child frames' share of the state gas reservoir
+
+- **Behaviour**: how much of the `state_gas_reservoir` a `CALL*`/`CREATE*`
+  child frame receives, and whether the child's remaining reservoir returns
+  to the parent on success.
+- **EELS's choice**: the child receives the parent's **entire** reservoir
+  (`drain_state_gas_reservoir`, `vm/gas.py:602-623` — "there is no
+  all-but-one-64th rule for state gas") and the parent reabsorbs it
+  unconditionally on return (`vm/__init__.py::incorporate_child`) —
+  observationally a transaction-shared pool.
+- **Prose gap** (verified against the published EIP text): the
+  Specification never states the child's reservoir share; the success rule
+  enumerates returned `gas_left` and merged `state_gas_from_gas_left` but
+  not the reservoir's return; no sentence says whether the 63/64 rule
+  applies to state gas. The halt rule ("exactly the reservoir's value at
+  the start of the child frame") presupposes a child reservoir without
+  defining it.
+- **Question for the author**: should the Specification state explicitly
+  that call/create forward the entire `state_gas_reservoir` to the child
+  (the all-but-one-64th rule applying to regular gas only), and that on
+  success the child's remaining reservoir returns to the parent in full?
+- Pinned at docstring tier in `tests_property/test_frame_gas_lifecycle.py`
+  (reservoir clauses of the drain and round-trip properties).
