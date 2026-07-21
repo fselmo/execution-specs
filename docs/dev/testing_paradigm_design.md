@@ -366,6 +366,54 @@ order-of-magnitude still needs the tiered model in the north star
 flagged cases), which in turn needs a second native client wired in to
 form a real pre-filter.
 
+## Generator coverage: reaching the divergence-prone surface (landed)
+
+A differential harness is only as good as where its generator aims. The
+v1 generator produced legacy transactions into pre-deployed contracts
+running arithmetic / memory / SSTORE / env-read opcodes — the legacy
+interpreter core. That surface has been stable for years, so a large
+clean run there is *reassuring but low-information*: it re-confirms the
+least-likely-to-diverge part and, critically, never issues a `CALL`, so
+it cannot reach a single precompile — the densest source of cross-client
+divergence (input parsing, gas schedules, the address-range boundary).
+
+Measured: 3050 Osaka cases agreed 3050/3050 (v1). Expected, and weak
+signal.
+
+**v2 — precompile coverage.** `fuzzed_bytecode` gained an optional
+`precompiles=` argument; when supplied it injects stack-neutral
+`STATICCALL`s into the fork's precompiles (drawn from `fork.precompiles()`,
+so it auto-tracks every fork), with fuzzed input, one guaranteed call per
+contract body, and an occasional `max+1` target to probe the range
+boundary. Each call `SSTORE`s its success flag and returndata size as
+post-state witnesses, so an output/success divergence surfaces in the
+state diff (gas divergence is already caught globally). `GENERATOR_VERSION`
+1→2. Proven with teeth, not just a null result: an injected +1-word
+`identity` gas bug diverges (`gas_used`, then `state_root`/`receipts_root`)
+within 300 cases — a precompile consensus bug v1 could not observe; 5300
+clean cases otherwise agree 5300/5300.
+
+**v3 — manifest-driven targeting.** This is where the change manifest
+earns its keep: it is not only a covariant test source, it is a *targeting
+system for the fuzzer*. `eip_properties.targeting` reads the manifest's
+`PRECOMPILE_ADDED` changes for a fork versus its parent, maps them back to
+concrete addresses, and up-weights those in the generator's target list. A
+fork's freshly-added precompiles — p256verify (`0x100`) in Osaka, the BLS
+range (`0x0b`–`0x11`) in Prague — are where a new consensus bug hides;
+decade-old ecrecover is not. For Osaka this lifts `0x100`'s share of
+precompile calls from ~5.6% (uniform) to ~18.5%. `GENERATOR_VERSION` 2→3.
+Proven: a gas bug injected into the *newly-added* p256verify diverges
+within 100 cases; 1000 clean cases otherwise agree.
+
+The general lesson: the harness was sound; the generator was the
+bottleneck on usefulness, and the manifest is the layer that decides where
+to point the strongest (cross-client) oracle. The next surfaces, in
+descending divergence-likelihood, are typed transactions (1559 /
+access-list / blob / set-code), `CALL`/`CREATE` families, and
+`SELFDESTRUCT`/`LOG`/`EXTCODE*` — each reachable the same way, and each a
+candidate for manifest-driven targeting (`OPCODE_ADDED`, `GAS_CONSTANT`,
+`FORMULA_CHANGED`).
+
 ## Distillation to reviewable tests (landed)
 
 `uv run fuzz-distill <case.json> <out.py>` turns a corpus case (the
