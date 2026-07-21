@@ -36,7 +36,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 1
+GENERATOR_VERSION = 2
 
 
 def _derive_key(rng: random.Random) -> Hash:
@@ -79,6 +79,8 @@ def generate_fuzzer_output(
         )
         sender_addresses.append(address)
 
+    precompiles = [int.from_bytes(bytes(a), "big") for a in fork.precompiles()]
+
     contract_addresses: List[Address] = []
     for i in range(num_contracts):
         address = Address(0x10000 + i)
@@ -86,7 +88,13 @@ def generate_fuzzer_output(
             balance=HexNumber(rng.randrange(0, 10**18)),
             nonce=HexNumber(0),
             code=Bytes(
-                bytes(fuzzed_bytecode(rng, max_ops=max_ops_per_contract))
+                bytes(
+                    fuzzed_bytecode(
+                        rng,
+                        max_ops=max_ops_per_contract,
+                        precompiles=precompiles,
+                    )
+                )
             ),
         )
         contract_addresses.append(address)
