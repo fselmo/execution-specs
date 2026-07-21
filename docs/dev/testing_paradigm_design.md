@@ -357,6 +357,28 @@ the client match the frozen answer"; mutation + property mining answer "does
 any test even distinguish this spec from a subtly wrong one" — and for a new
 data structure the answer was mostly no, until it wasn't.
 
+**Second run — EIP-8037 GasMeter, and the first spec-ambiguity findings.**
+Same loop on the two-dimensional gas meter (reservoir/spill/commit/refund in
+`amsterdam/vm/gas.py` — mentioned in fill-test docstrings, directly exercised
+by nothing): full-module baseline **36/83 (43%)** → with the mined properties
+(10 function-based + a `RuleBasedStateMachine` vs an EIP-transcribed
+reservoir model) **50/83 (60%)**, +14. The machine's op grammar encodes the
+caller contracts (commit only pre-dispatch, refunds only after), so the
+meter's `assert` preconditions are exercised, not tripped. Residual survivors
+are out-of-target functions (`settle_transaction_gas`, message-call gas —
+queued) and one provably equivalent mutant (`>=`→`>` at the exact-reservoir
+boundary, where both branches produce identical state).
+
+The bigger yield: the run exercised the new **spec-ambiguity triage track**
+and produced three genuine findings — behaviours EIP-8037's prose does not
+determine (delegation state-gas surviving top-frame failure; reversal of
+refills on negative-net frame rollback; negative net state gas at block
+accounting, where EELS clamps). Recorded with citations and author-questions
+in `docs/dev/spec_ambiguity_findings.md`; EELS's choices are pinned at
+docstring tier so a later prose ruling reads as "update the spec". This is
+the "testability review for prose" use of the loop: ambiguities surfaced at
+implementation time instead of as devnet divergences.
+
 ## Cross-client differential (landed)
 
 `uv run fuzz-differential --fork Osaka --evm-bin <path> --count N
