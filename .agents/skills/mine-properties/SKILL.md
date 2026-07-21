@@ -21,8 +21,12 @@ each property's worth objectively with mutation testing.
 ## The loop
 
 1. **Analyze.** Resolve the target. In manifest mode, list the EIP's changes and
-   their kinds/archetypes from `eip_properties`. In module mode, list the public
-   functions with substantive docstrings.
+   their kinds/archetypes from `eip_properties`, and check
+   `eip_properties.interaction_pairs(parent, fork)` for your EIP: a formula
+   method co-owned with another EIP is composition by construction — propose
+   properties for the *composed* behaviour, and if neither EIP's prose
+   determines it, that is a spec-ambiguity finding. In module mode, list the
+   public functions with substantive docstrings.
 2. **Understand.** Read the source and its docstrings. Follow import chains to
    the real implementation. **Investigate the input domain via callers** — track
    implicit preconditions (a property over inputs the callers never pass is a
