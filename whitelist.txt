@@ -390,6 +390,7 @@ dir
 dirname
 dirs
 discordapp
+disjointness
 div
 divmod
 docc
