@@ -21,6 +21,7 @@ from execution_testing.base_types import (
     Hash,
     HexNumber,
 )
+from execution_testing.eip_properties import fuzz_precompile_targets
 from execution_testing.forks import Fork
 from execution_testing.fuzzing import fuzzed_bytecode, fuzzed_calldata
 from execution_testing.test_types import Environment
@@ -36,7 +37,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 2
+GENERATOR_VERSION = 3
 
 
 def _derive_key(rng: random.Random) -> Hash:
@@ -79,7 +80,9 @@ def generate_fuzzer_output(
         )
         sender_addresses.append(address)
 
-    precompiles = [int.from_bytes(bytes(a), "big") for a in fork.precompiles()]
+    # Manifest-driven: precompiles the fork introduced are up-weighted, so
+    # the fuzzer aims at the changed surface (see eip_properties.targeting).
+    precompiles = fuzz_precompile_targets(fork)
 
     contract_addresses: List[Address] = []
     for i in range(num_contracts):
