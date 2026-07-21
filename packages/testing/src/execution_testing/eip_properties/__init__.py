@@ -16,6 +16,7 @@ from .manifest import (
     changes_of_kind,
     derived_checklist_sections,
     diff_forks,
+    interaction_pairs,
 )
 from .structural import HEADER_FIELD_FEATURES, built_header_at_fork
 from .targeting import (
@@ -35,6 +36,7 @@ __all__ = [
     "derived_checklist_sections",
     "diff_forks",
     "fuzz_precompile_targets",
+    "interaction_pairs",
     "manifest_cases",
     "parent_fork",
     "with_each_change",
