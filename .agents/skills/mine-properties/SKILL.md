@@ -29,7 +29,11 @@ each property's worth objectively with mutation testing.
    false alarm). In manifest mode, also read the EIP text for the normative rule.
 3. **Propose properties — grounded in evidence only.** Only test properties the
    code or EIP *explicitly claims* (docstring, comment, caller usage, or EIP
-   prose). Do not invent properties you merely believe are true. Draw from these
+   prose). Do not invent properties you merely believe are true. If a behavior
+   clearly matters but you cannot find prose or docstring that determines it —
+   including when two EIPs compose and *neither* defines the result — that
+   grounding failure is itself a **spec-ambiguity finding** (see Triage), not a
+   license to invent grounding or to quietly drop the property. Draw from these
    **shapes** × **oracle tiers**:
    - Shapes: round-trip (`decode(encode(x)) == x`), inverse (`add`/`remove`),
      invariant (`len(f(x)) <= len(x)`), metamorphic (relate `f(x)` and `g(x)`),
@@ -73,7 +77,7 @@ EELS, the differential oracle, and mutation testing judge them. A wrong frozen
 fixture poisons every client's CI, so assertion-tier properties are landed only
 after a human reviews the grounding.
 
-## Triage (two tracks)
+## Triage (three tracks)
 
 - **Spec defect** (a property/invariant fails, or clients/forks diverge): triage
   by *reproducibility → legitimacy (realistic input? actually claimed?) →
@@ -82,6 +86,17 @@ after a human reviews the grounding.
 - **Coverage gap** (a mutant survives — the suite can't tell the mutation from
   correct behaviour): this is a *missing test*, not a bug. Route it to
   test-writing (write the property that kills it), never a bug report.
+- **Spec ambiguity** (the EIP prose does not determine a behaviour the
+  implementation had to choose — common at EIP intersections, where neither
+  EIP defines the composition). Do not silently drop it, do not ground it
+  circularly in the code, and NEVER promote the implementation's choice to
+  normative. Record four things: the behaviour in question; what EELS
+  implements (cite code/docstring); what the EIP fails to say; and the
+  minimal question an author would need to answer. You may still land a
+  *docstring-tier* property pinning EELS's choice — labelled as
+  self-descriptive, so a later prose decision that contradicts it reads as
+  "update the spec", not "the spec was always right". An ambiguity at a
+  consensus-relevant boundary outranks a coverage gap.
 
 Rank findings; surface the top for human review rather than dumping all.
 
@@ -90,4 +105,8 @@ Rank findings; surface the top for human review rather than dumping all.
 For each proposed property: the test, its shape/oracle tier, its grounding
 (EIP-prose vs docstring, cited), and its mutation-kill-delta. For any spec
 defect: a minimal reproducer, why it violates the cited authority, and the
-triage category. Do not post anything externally — surface for human review.
+triage category. Report spec ambiguities as their own list (behaviour, EELS's
+choice, what the prose fails to say, the question for the author) — these are
+often the most valuable output on a draft EIP, and an empty list is a
+meaningful statement that the EIP's surface was fully determined. Do not post
+anything externally — surface for human review.
