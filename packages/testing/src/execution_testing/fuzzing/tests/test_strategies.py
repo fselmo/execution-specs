@@ -5,6 +5,8 @@ import random
 from ..strategies import fuzzed_bytecode, fuzzed_calldata
 
 TERMINATORS = {0x00, 0xF3, 0xFD}  # STOP, RETURN, REVERT
+STATICCALL = 0xFA
+PRECOMPILES = list(range(1, 12))
 
 
 def test_bytecode_is_deterministic() -> None:
@@ -46,3 +48,68 @@ def test_calldata_is_deterministic() -> None:
     assert fuzzed_calldata(random.Random(7)) == fuzzed_calldata(
         random.Random(7)
     )
+
+
+def _push20_operands(code: bytes) -> list[bytes]:
+    """
+    Return the 20-byte operands of every PUSH20, walking the code so that
+    bytes inside push immediates are not mistaken for opcodes (a raw byte
+    scan is unreliable — random PUSH32 data contains arbitrary bytes).
+    """
+    operands = []
+    i = 0
+    while i < len(code):
+        op = code[i]
+        if 0x60 <= op <= 0x7F:  # PUSH1..PUSH32
+            width = op - 0x5F
+            if op == 0x73:  # PUSH20
+                operands.append(code[i + 1 : i + 1 + width])
+            i += 1 + width
+        else:
+            i += 1
+    return operands
+
+
+def _has_opcode(code: bytes, opcode: int) -> bool:
+    """True if ``opcode`` appears as an instruction (not push data)."""
+    i = 0
+    while i < len(code):
+        op = code[i]
+        if op == opcode:
+            return True
+        i += 1 + (op - 0x5F) if 0x60 <= op <= 0x7F else 1
+    return False
+
+
+def test_no_precompile_calls_without_addresses() -> None:
+    """Without supplied precompiles, no STATICCALL is emitted."""
+    for seed in range(20):
+        code = bytes(fuzzed_bytecode(random.Random(seed)))
+        assert not _has_opcode(code, STATICCALL)
+
+
+def test_precompile_calls_injected_when_supplied() -> None:
+    """Supplying precompiles guarantees at least one STATICCALL per body."""
+    for seed in range(20):
+        code = bytes(
+            fuzzed_bytecode(random.Random(seed), precompiles=PRECOMPILES)
+        )
+        assert _has_opcode(code, STATICCALL)
+
+
+def test_precompile_call_targets_supplied_address() -> None:
+    """An injected call targets a supplied precompile (or the boundary)."""
+    allowed = {a.to_bytes(20, "big") for a in PRECOMPILES}
+    allowed.add((max(PRECOMPILES) + 1).to_bytes(20, "big"))
+    for seed in range(20):
+        code = bytes(
+            fuzzed_bytecode(random.Random(seed), precompiles=PRECOMPILES)
+        )
+        assert any(operand in allowed for operand in _push20_operands(code))
+
+
+def test_precompile_bytecode_is_deterministic() -> None:
+    """The same seed and precompile set yield identical bytecode."""
+    a = bytes(fuzzed_bytecode(random.Random(3), precompiles=PRECOMPILES))
+    b = bytes(fuzzed_bytecode(random.Random(3), precompiles=PRECOMPILES))
+    assert a == b
