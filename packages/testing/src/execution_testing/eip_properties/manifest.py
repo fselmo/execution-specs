@@ -27,7 +27,7 @@ import dataclasses
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Dict, List, Set, Type
+from typing import Any, Dict, List, Set, Tuple, Type
 
 from execution_testing.forks import Fork
 
@@ -301,6 +301,34 @@ def changes_of_kind(
     fork diff supplies the cases, so one test body covers every fork.
     """
     return [c for c in diff_forks(fork_a, fork_b) if c.kind == kind]
+
+
+def interaction_pairs(
+    fork_a: Fork, fork_b: Fork
+) -> Dict[Tuple[str, str], List[str]]:
+    """
+    EIP pairs that co-own a formula method, mapped to those methods.
+
+    Two EIP mixins overriding the *same* calculator method is composition by
+    construction: the composed behaviour is a distinct surface that neither
+    EIP's prose necessarily determines — the prime hunting ground for both
+    interaction properties and spec-ambiguity findings.
+
+    Deliberately restricted to the override detector (``FORMULA_CHANGED``):
+    value-level co-attribution (e.g. every gas-repricing EIP credited with
+    every ``GasCosts`` field) mostly reflects attribution imprecision, not
+    interaction, and would drown the signal. Widening this to value changes
+    requires exact per-mixin attribution (incremental MRO diffing) first.
+    """
+    pairs: Dict[Tuple[str, str], List[str]] = {}
+    for change in diff_forks(fork_a, fork_b):
+        if change.kind is not ChangeKind.FORMULA_CHANGED:
+            continue
+        eips = sorted(set(change.eips))
+        for i, first in enumerate(eips):
+            for second in eips[i + 1 :]:
+                pairs.setdefault((first, second), []).append(change.name)
+    return pairs
 
 
 def derived_checklist_sections(changes: List[Change]) -> Set[str]:

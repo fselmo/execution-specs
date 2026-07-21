@@ -7,6 +7,7 @@ from ..manifest import (
     ChangeKind,
     derived_checklist_sections,
     diff_forks,
+    interaction_pairs,
 )
 
 
@@ -87,3 +88,22 @@ def test_derived_sections_are_real_checklist_sections() -> None:
 def test_no_changes_for_same_fork() -> None:
     """A fork against itself yields no changes."""
     assert diff_forks(Amsterdam, Amsterdam) == []
+
+
+def test_interaction_pairs_finds_co_owned_formulas() -> None:
+    """EIPs co-overriding the same calculator form an interaction pair."""
+    pairs = interaction_pairs(Osaka, Amsterdam)
+    shared = pairs[("EIP2780", "EIP7981")]
+    assert "transaction_intrinsic_cost_calculator" in shared
+
+
+def test_interaction_pairs_exclude_value_noise() -> None:
+    """Value-level co-attribution (gas constants) never forms a pair."""
+    pairs = interaction_pairs(Osaka, Amsterdam)
+    for methods in pairs.values():
+        assert not any(m.startswith("gas_costs.") for m in methods)
+
+
+def test_interaction_pairs_empty_for_same_fork() -> None:
+    """A fork against itself has no interactions."""
+    assert interaction_pairs(Amsterdam, Amsterdam) == {}
