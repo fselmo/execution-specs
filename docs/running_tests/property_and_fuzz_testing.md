@@ -18,8 +18,8 @@ stated law, another implementation, or the spec itself.
   `--invariant-checks` is off by default and warn-only: violations become
   warnings plus an `invariant_violations` entry in the fixture's `_info`
   metadata; the fixture bytes are identical either way.
-- **Exploration is not conformance.** `fuzz`, `fuzz-differential`, `mutate`,
-  `fuzz-distill`, and `eip-manifest` are separate `uv run` commands because
+- **Exploration is not conformance.** `fuzz`, `fuzz diff`, `mutate`,
+  `fuzz distill`, and `eip-manifest` are separate `uv run` commands because
   they are slow (mutation re-runs a suite per mutant), need external binaries
   (a client `t8n`), or produce findings rather than fixtures. None of that
   belongs in the `fill` hot path.
@@ -36,9 +36,9 @@ Each layer uses the ones below it as its oracle or its input.
 | Property tests | `just test-spec-properties`  | EIP / Yellow Paper prose    | a component violating a stated law       |
 | Invariants     | `fill --invariant-checks`    | chain laws                  | spec or framework bugs on any test       |
 | Fuzzing        | `uv run fuzz`                | invariants                  | crashes and violations on generated input|
-| Differential   | `uv run fuzz-differential`   | a client transition tool    | self-consistent bugs (mispriced constant)|
+| Differential   | `uv run fuzz diff`   | a client transition tool    | self-consistent bugs (mispriced constant)|
 | Mutation       | `uv run mutate`              | the tests themselves        | mutants no test kills (coverage gaps)    |
-| Distillation   | `uv run fuzz-distill`        | —                           | turns a corpus case into a reviewable test|
+| Distillation   | `uv run fuzz distill`        | —                           | turns a corpus case into a reviewable test|
 | Manifest       | `uv run eip-manifest`        | —                           | what a fork changed, per EIP             |
 
 ## Property tests (`tests_property/`)
@@ -122,7 +122,7 @@ operation is where a consensus bug hides, not decade-old `ecrecover`.
 ### 2. Execution through EELS
 
 ```console
-uv run fuzz --fork Osaka --count 500 --corpus corpus/
+uv run fuzz run --fork Osaka --count 500 --corpus corpus/
 ```
 
 Each case becomes a `BlockchainTest` and is filled in-process through the
@@ -150,7 +150,7 @@ unchanged.
 
 ```console
 go build -o ./build/bin/evm ./cmd/evm        # in a go-ethereum checkout
-uv run fuzz-differential --fork Osaka --evm-bin path/to/evm --count 2000 \
+uv run fuzz diff --fork Osaka --client path/to/evm --count 2000 \
     --workers 8 --corpus divergences/
 ```
 
@@ -175,7 +175,7 @@ disagrees.
 ### 5. Distillation into a reviewable test
 
 ```console
-uv run fuzz-distill divergences/Osaka_divergence_seed42.json tests/osaka/test_finding.py \
+uv run fuzz distill divergences/Osaka_divergence_seed42.json tests/osaka/test_finding.py \
     --reason "geth/EELS state root divergence on identity precompile gas"
 ```
 

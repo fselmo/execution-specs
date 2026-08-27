@@ -214,9 +214,9 @@ known consensus bugs re-found in 12 hours.
 | 1' | Fill-time invariant checker (gap 1) | — | M | warnings-clean full `just fill` |
 | 2 | Generator → fuzzer_bridge + ddmin + corpus (gap 3) | 1 | M | **landed** — `fuzz --fork --count` replayable |
 | 2' | Cross-fork differential gate (gap 5) | 2 | S–M | zero-divergence gate on fork copy |
-| 3 | Differential harness, EELS vs. client t8ns (gap 4) | 2 | M–L | **landed** — `fuzz-differential --evm-bin` vs geth |
+| 3 | Differential harness, EELS vs. client t8ns (gap 4) | 2 | M–L | **landed** — `fuzz diff --evm-bin` vs geth |
 | 4 | Coverage feedback + corpus distillation (gap 6) | 2, 3 | M | distilled corpus + gap report |
-| 5 | Distillation → canonical fixtures (gap 7) | 2, 3 | M | **landed** — `fuzz-distill` case.json → fillable test |
+| 5 | Distillation → canonical fixtures (gap 7) | 2, 3 | M | **landed** — `fuzz distill` case.json → fillable test |
 | 6 | Agentic skills + rubric + triage (gap 8) | 1, 3 | M | first agent-mined property merged |
 
 ## PoC validation (mutation experiments)
@@ -262,7 +262,7 @@ plausibly flip to default-on hard-fail per fork.
 
 ## Generator + fuzz engine (phase 2, landed)
 
-`uv run fuzz --fork Osaka --count N [--corpus DIR]` generates seeded
+`uv run fuzz run --fork Osaka --count N [--corpus DIR]` generates seeded
 `FuzzerOutput` cases, fills them through EELS with the invariant oracle
 enabled, and saves any violating/crashing case to the corpus, minimized
 via delta-debugging. Every case is reproducible from
@@ -381,7 +381,7 @@ implementation time instead of as devnet divergences.
 
 ## Cross-client differential (landed)
 
-`uv run fuzz-differential --fork Osaka --evm-bin <path> --count N
+`uv run fuzz diff --fork Osaka --client <path> --count N
 [--corpus DIR]` runs each generated case through EELS in-process *and* a
 client transition tool (geth's `evm`), then compares the transition
 results field by field — state root, receipts root, logs hash, gas used,
@@ -407,7 +407,7 @@ Verified end-to-end against geth (`evm` built from source):
 The comparison is client-agnostic (any `TransitionTool`); geth is the
 first wired client because its `evm t8n` is readily built.
 
-**Throughput.** Each seed is independent, so `fuzz-differential -j N`
+**Throughput.** Each seed is independent, so `fuzz diff -j N`
 runs them across worker processes, each building EELS and the client
 tool once. Output order stays deterministic regardless of worker count,
 and minimization of divergent cases runs in the main process. Measured
@@ -473,8 +473,8 @@ candidate for manifest-driven targeting (`OPCODE_ADDED`, `GAS_CONSTANT`,
 
 ## Distillation to reviewable tests (landed)
 
-`uv run fuzz-distill <case.json> <out.py>` turns a corpus case (the
-minimized `FuzzerOutput` a `fuzz` or `fuzz-differential` run saved) into a
+`uv run fuzz distill <case.json> <out.py>` turns a corpus case (the
+minimized `FuzzerOutput` a `fuzz` or `fuzz diff` run saved) into a
 readable `BlockchainTestFiller` module: explicit `EOA(key=…)` senders, an
 `Alloc` of exact accounts and contract code, the transactions, and a
 provenance docstring (fork, generator version, seed, why it was
@@ -485,8 +485,8 @@ This closes the lifecycle that makes findings permanent — the repo's crown
 jewel is that a frozen fixture is a forever cross-client regression test:
 
 ```
-fuzz / fuzz-differential  →  minimized corpus JSON
-        →  fuzz-distill    →  reviewable BlockchainTestFiller .py
+fuzz run / fuzz diff  →  minimized corpus JSON
+        →  fuzz distill    →  reviewable BlockchainTestFiller .py
         →  fill            →  canonical fixtures every client consumes
 ```
 
