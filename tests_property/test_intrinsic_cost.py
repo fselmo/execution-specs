@@ -2,7 +2,7 @@
 
 import importlib
 from types import ModuleType
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 from ethereum_types.bytes import Bytes, Bytes0, Bytes20
@@ -52,15 +52,28 @@ def legacy_tx(
     )
 
 
-def intrinsic_cost(fork_name: str, transactions: ModuleType, tx: Any) -> Any:
+class Intrinsic(NamedTuple):
+    """Fork-independent view of an intrinsic gas cost."""
+
+    execution: Uint
+    calldata_floor: Uint
+
+
+def intrinsic_cost(
+    fork_name: str, transactions: ModuleType, tx: Any
+) -> Intrinsic:
     """
-    Adapt to the per-fork calling convention: Amsterdam's intrinsic cost
-    depends on the sender (self-transfer and recipient-access charges).
+    Adapt to the per-fork calling convention and field names: Amsterdam's
+    intrinsic cost depends on the sender (self-transfer and
+    recipient-access charges) and calls the non-floor component
+    `execution` where Osaka calls it `regular`.
     """
     if fork_name == "osaka":
-        return transactions.calculate_intrinsic_cost(tx)
+        cost = transactions.calculate_intrinsic_cost(tx)
+        return Intrinsic(cost.regular, cost.calldata_floor)
     elif fork_name == "amsterdam":
-        return transactions.calculate_intrinsic_cost(tx, SENDER)
+        cost = transactions.calculate_intrinsic_cost(tx, SENDER)
+        return Intrinsic(cost.execution, cost.calldata_floor)
     else:
         raise ValueError(f"unhandled fork: {fork_name}")
 
@@ -78,7 +91,7 @@ def test_intrinsic_cost_at_least_base(
         fork_name, transactions, legacy_tx(transactions, data, to)
     )
     base = gas_costs.TX_BASE
-    assert intrinsic.regular >= base
+    assert intrinsic.execution >= base
     assert intrinsic.calldata_floor >= base
 
 
@@ -99,7 +112,7 @@ def test_intrinsic_cost_monotonic_in_data(
         transactions,
         legacy_tx(transactions, Bytes(bytes(data) + bytes([extra])), to),
     )
-    assert longer.regular >= shorter.regular
+    assert longer.execution >= shorter.execution
     assert longer.calldata_floor >= shorter.calldata_floor
 
 
@@ -128,7 +141,7 @@ def test_zero_bytes_never_cost_more(
         transactions,
         legacy_tx(transactions, Bytes(bytes(zeroed)), to),
     )
-    assert with_zero.regular <= original.regular
+    assert with_zero.execution <= original.execution
     assert with_zero.calldata_floor <= original.calldata_floor
 
 
