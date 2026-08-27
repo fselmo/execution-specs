@@ -73,7 +73,8 @@ from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from ethereum.crypto.hash import keccak256
-from ethereum.state import EMPTY_CODE_HASH, Account, Address, State
+from ethereum.state import EMPTY_CODE_HASH, Account, Address
+from ethereum.state_mpt import State
 
 from .strategies import bytes_data, u64s, u256s
 

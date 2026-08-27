@@ -40,7 +40,8 @@ from hypothesis.stateful import (
 )
 
 from ethereum.crypto.hash import keccak256
-from ethereum.state import EMPTY_CODE_HASH, Account, State
+from ethereum.state import EMPTY_CODE_HASH, Account
+from ethereum.state_mpt import State
 
 # Small fixed pools so collisions/overwrites actually happen.
 ADDRESSES = [Bytes20(bytes([i]) * 20) for i in range(1, 5)]

@@ -15,6 +15,7 @@ from functools import partial
 from pathlib import Path
 from typing import List, Optional
 
+from execution_testing.client_clis import LazyAlloc
 from execution_testing.client_clis.clis.execution_specs import (
     ExecutionSpecsTransitionTool,
 )
@@ -23,6 +24,7 @@ from execution_testing.specs import invariants
 from execution_testing.specs.blockchain import (
     environment_from_parent_header,
 )
+from execution_testing.test_types import Alloc
 
 from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
@@ -69,13 +71,13 @@ def _run_case(
     test = blockchain_test_from_fuzzer(case, fork)
     pre, genesis = test.make_genesis(apply_pre_allocation_blockchain=True)
     env = environment_from_parent_header(genesis.header)
-    alloc = pre
+    alloc: Alloc | LazyAlloc = pre
     for block in test.blocks:
         built = test.generate_block_data(
             t8n=t8n, block=block, previous_env=env, previous_alloc=alloc
         )
         env = environment_from_parent_header(built.header)
-        alloc = built.alloc.get()
+        alloc = built.alloc
     # generate_block_data accumulates violations on the test instance.
     return [f"{v.invariant}: {v.message}" for v in test._invariant_violations]
 
