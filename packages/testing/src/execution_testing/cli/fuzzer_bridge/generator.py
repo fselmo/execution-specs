@@ -26,6 +26,7 @@ from execution_testing.forks import Fork
 from execution_testing.fuzzing import fuzzed_bytecode, fuzzed_calldata
 from execution_testing.test_types import Environment
 from execution_testing.test_types.account_types import EOA
+from execution_testing.vm import Opcodes as Op
 
 from .models import (
     FuzzerAccountInput,
@@ -37,7 +38,16 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 4
+GENERATOR_VERSION = 5
+
+DESTRUCTOR_ADDRESS = 0x1FFFF
+"""Helper contract whose code is `ORIGIN SELFDESTRUCT`."""
+
+TX_GAS_CAP = 16_777_216
+"""EIP-7825 cap; recursion shapes need the whole budget to go deep."""
+
+TX_GAS_CHOICES = (100_000, 500_000, 2_000_000, TX_GAS_CAP)
+BLOCK_GAS_LIMIT = 30_000_000
 
 
 def _derive_key(rng: random.Random) -> Hash:
@@ -87,6 +97,11 @@ def generate_fuzzer_output(
     # Every contract may call every sibling (including ones generated
     # later), so nested frames and recursion arise naturally.
     call_targets = [0x10000 + i for i in range(num_contracts)]
+    accounts[Address(DESTRUCTOR_ADDRESS)] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(1),
+        code=Bytes(bytes(Op.ORIGIN + Op.SELFDESTRUCT)),
+    )
     contract_addresses: List[Address] = []
     for target in call_targets:
         address = Address(target)
@@ -100,6 +115,7 @@ def generate_fuzzer_output(
                         max_ops=max_ops_per_contract,
                         precompiles=precompiles,
                         call_targets=call_targets,
+                        selfdestructor=DESTRUCTOR_ADDRESS,
                     )
                 )
             ),
@@ -110,10 +126,16 @@ def generate_fuzzer_output(
     targets = contract_addresses + sender_addresses
 
     transactions: List[FuzzerTransactionInput] = []
+    # Transactions must fit the block, or the block itself is invalid.
+    gas_budget = BLOCK_GAS_LIMIT
     for _ in range(num_transactions):
         sender = rng.choice(sender_addresses)
         to = rng.choice(targets)
-        gas = rng.choice([100_000, 500_000, 2_000_000])
+        affordable = [g for g in TX_GAS_CHOICES if g <= gas_budget]
+        if not affordable:
+            break
+        gas = rng.choice(affordable)
+        gas_budget -= gas
         transactions.append(
             FuzzerTransactionInput(
                 **{"from": sender},
@@ -129,7 +151,7 @@ def generate_fuzzer_output(
 
     env = Environment(
         fee_recipient=Address(0xC0FFEE),
-        gas_limit=30_000_000,
+        gas_limit=BLOCK_GAS_LIMIT,
         number=1,
         timestamp=1000,
         prev_randao=Hash(seed),

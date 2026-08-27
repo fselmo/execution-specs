@@ -72,6 +72,27 @@ def _accepted_txs(
     ]
 
 
+def _has_state_gas(fork: Type["BaseFork"]) -> bool:
+    """
+    Whether the fork meters state gas separately (EIP-8037).
+
+    Under EIP-8037 the header's `gas_used` is the larger of the block's
+    execution and state gas, while receipts and senders see the sum, so the
+    two legitimately differ.
+    """
+    predicate = getattr(fork, "state_gas_reservoir_enabled", None)
+    return bool(predicate is not None and predicate())
+
+
+def _sender_facing_gas(result: "Result") -> int | None:
+    """Gas the block's senders paid for: the last receipt's cumulative gas."""
+    cumulative = None
+    for receipt in result.receipts:
+        if receipt.cumulative_gas_used is not None:
+            cumulative = int(receipt.cumulative_gas_used)
+    return cumulative
+
+
 def check_ether_conservation(
     fork: Type["BaseFork"],
     pre_alloc: "Alloc",
@@ -98,7 +119,10 @@ def check_ether_conservation(
 
     if base_fee_per_gas is None and env.base_fee_per_gas is not None:
         base_fee_per_gas = int(env.base_fee_per_gas)
-    base_fee_burn = (base_fee_per_gas or 0) * int(result.gas_used)
+    burned_gas = int(result.gas_used)
+    if _has_state_gas(fork):
+        burned_gas = _sender_facing_gas(result) or burned_gas
+    base_fee_burn = (base_fee_per_gas or 0) * burned_gas
 
     blob_fee_burn = 0
     if fork.supports_blobs():
@@ -145,7 +169,7 @@ def check_ether_conservation(
 
 
 def check_gas_accounting(
-    result: "Result", env: "Environment"
+    fork: Type["BaseFork"], result: "Result", env: "Environment"
 ) -> List[InvariantViolation]:
     """
     Block gas used must not exceed the gas limit, and receipt cumulative
@@ -181,16 +205,24 @@ def check_gas_accounting(
                 )
             )
         cumulative = receipt_cumulative
-    if result.receipts and cumulative and cumulative != gas_used:
-        violations.append(
-            InvariantViolation(
-                invariant="receipt_gas_totals",
-                message=(
-                    f"last receipt cumulative gas {cumulative} != "
-                    f"block gas_used {gas_used}"
-                ),
-            )
+    if result.receipts and cumulative:
+        # With state gas metered separately the header carries the larger
+        # dimension, so receipts may sum to more but never to less.
+        totals_hold = (
+            gas_used <= cumulative
+            if _has_state_gas(fork)
+            else cumulative == gas_used
         )
+        if not totals_hold:
+            violations.append(
+                InvariantViolation(
+                    invariant="receipt_gas_totals",
+                    message=(
+                        f"last receipt cumulative gas {cumulative} vs "
+                        f"block gas_used {gas_used}"
+                    ),
+                )
+            )
     return violations
 
 
@@ -284,7 +316,7 @@ def check_block_invariants(
             reward,
             base_fee_per_gas,
         ),
-        *check_gas_accounting(result, env),
+        *check_gas_accounting(fork, result, env),
         *check_nonce_monotonicity(pre_alloc, post_alloc, txs, result),
     ]
     for violation in violations:

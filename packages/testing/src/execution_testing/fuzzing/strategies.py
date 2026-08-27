@@ -63,6 +63,16 @@ _ENV = [
 ]
 _KECCAK = [Op.SHA3]
 _STACK_SHUFFLE = [Op.DUP1, Op.DUP2, Op.SWAP1, Op.SWAP2, Op.POP]
+_TRANSIENT = [Op.TLOAD, Op.TSTORE]
+_ACCOUNT_INSPECTION = [
+    Op.EXTCODESIZE,
+    Op.EXTCODEHASH,
+    Op.EXTCODECOPY,
+    Op.BALANCE,
+]
+_LOGS = [Op.LOG0, Op.LOG1]
+_CREATION = [Op.CREATE, Op.CREATE2]
+_MISC = [Op.BLOBHASH, Op.MCOPY]
 
 # Weighted so execution biases toward arithmetic/state work over stack churn.
 PALETTE = (
@@ -72,7 +82,15 @@ PALETTE = (
     + _ENV * 2
     + _KECCAK
     + _STACK_SHUFFLE * 2
+    + _TRANSIENT
+    + _ACCOUNT_INSPECTION
+    + _LOGS
+    + _CREATION
+    + _MISC
 )
+
+_EPILOGUE_SLOT = 0x200
+_CHARGE_SLOT = 0x300
 
 
 _CALL_KINDS = (Op.CALL, Op.CALLCODE, Op.DELEGATECALL, Op.STATICCALL)
@@ -145,12 +163,120 @@ def _precompile_call(
     )
 
 
+def _create2_self_copy(rng: random.Random, slot: int) -> Bytecode:
+    """
+    Write a gas-keyed storage slot, then deploy a copy of this contract's
+    own code with ``CREATE2``.
+
+    The copy's initcode is this code, so each deployment recurses until the
+    63/64 rule starves it and the deepest frames fail -- many independent
+    reverting frames, each having read and written a fresh account's
+    storage, in one transaction. The created address is a witness.
+    """
+    code = Bytecode()
+    code += Op.PUSH1(rng.choice([1, 2, 0xFF]))
+    code += Op.GAS
+    code += Op.SSTORE
+    code += Op.CODESIZE
+    code += Op.PUSH0
+    code += Op.PUSH0
+    code += Op.CODECOPY
+    code += Op.PUSH2(rng.randrange(0, 0x10000))
+    code += Op.CODESIZE
+    code += Op.PUSH0
+    code += Op.SELFBALANCE if rng.random() < 0.5 else Op.PUSH0
+    code += Op.CREATE2
+    code += Op.PUSH2(slot)
+    code += Op.SSTORE
+    return code
+
+
+def _call_into_destructor(
+    rng: random.Random, destructor: int, slot: int
+) -> Bytecode:
+    """
+    Call a helper whose code is ``ORIGIN SELFDESTRUCT``.
+
+    Under ``CALLCODE``/``DELEGATECALL`` the helper's code runs in *this*
+    frame's context, so the caller schedules its own destruction; under
+    ``CALL`` the helper destroys itself. The success flag is a witness.
+    """
+    kind = rng.choice([Op.CALLCODE, Op.DELEGATECALL, Op.CALL])
+    code = Bytecode()
+    code += Op.PUSH0
+    code += Op.PUSH0
+    code += Op.PUSH0
+    code += Op.PUSH0
+    if kind in (Op.CALL, Op.CALLCODE):
+        code += Op.PUSH0
+    code += Op.PUSH20(destructor)
+    code += Op.GAS
+    code += kind
+    code += Op.PUSH2(slot)
+    code += Op.SSTORE
+    return code
+
+
+def _halting_child_then_state_charge(
+    rng: random.Random, target: int, slot: int
+) -> Bytecode:
+    """
+    Call ``target`` with too little gas for any state work, so the child
+    halts, then pay a cold state charge in this frame: a fresh storage
+    slot, and a value transfer that creates a fresh account.
+
+    A halted child settled wrongly (state gas credited back instead of
+    consumed) only becomes visible when the parent *spends* afterwards.
+    """
+    code = Bytecode()
+    for _ in range(5):
+        code += Op.PUSH0
+    code += Op.PUSH20(target)
+    code += Op.PUSH2(rng.choice([0, 700, 2300]))
+    code += Op.CALL
+    code += Op.PUSH2(slot)
+    code += Op.SSTORE
+    code += Op.PUSH1(1)
+    code += Op.PUSH2(_CHARGE_SLOT + rng.randrange(0, 0x100))
+    code += Op.SSTORE
+    for _ in range(4):
+        code += Op.PUSH0
+    code += Op.PUSH1(1)
+    code += Op.PUSH20(0xFEED0000 + rng.randrange(0, 0x1000))
+    code += Op.PUSH3(50_000)
+    code += Op.CALL
+    code += Op.PUSH2(slot + 1)
+    code += Op.SSTORE
+    return code
+
+
+def _epilogue() -> Bytecode:
+    """
+    Record what the frame has left before it ends.
+
+    Every internal gas or return-data divergence then shows in the
+    post-state, not only in the block's gas used.
+    """
+    code = Bytecode()
+    code += Op.GAS
+    code += Op.PUSH2(_EPILOGUE_SLOT)
+    code += Op.SSTORE
+    code += Op.RETURNDATASIZE
+    code += Op.PUSH2(_EPILOGUE_SLOT + 1)
+    code += Op.SSTORE
+    code += Op.SELFBALANCE
+    code += Op.PUSH2(_EPILOGUE_SLOT + 2)
+    code += Op.SSTORE
+    return code
+
+
 def fuzzed_bytecode(
     rng: random.Random,
     *,
     max_ops: int = 40,
     precompiles: Optional[Sequence[int]] = None,
     call_targets: Optional[Sequence[int]] = None,
+    selfdestructor: Optional[int] = None,
 ) -> Bytecode:
     """
     Draw a stack-safe contract body ending in a clean terminator.
@@ -159,7 +285,12 @@ def fuzzed_bytecode(
     underflow. When ``precompiles`` is given, calls into precompiles are
     injected (and at least one is guaranteed). When ``call_targets`` is
     given, message calls of every kind into those addresses -- and into
-    the contract itself, which is how recursion arises -- are injected.
+    the contract itself, which is how recursion arises -- are injected,
+    along with the shapes real consensus bugs have taken: a halting child
+    followed by a cold state charge, and ``CREATE2`` self-replication.
+    ``selfdestructor`` names a helper whose code is ``ORIGIN SELFDESTRUCT``
+    for calls that destroy the caller or the callee. Every body ends with an
+    epilogue that stores remaining gas, return-data size and balance.
     Fully determined by ``rng``.
     """
     code: Bytecode = Bytecode() + Op.JUMPDEST  # harmless leading anchor
@@ -182,6 +313,20 @@ def fuzzed_bytecode(
             )
             call_slot += 2
             continue
+        if call_targets and rng.random() < 0.1:
+            code += _halting_child_then_state_charge(
+                rng, rng.choice(call_targets), call_slot
+            )
+            call_slot += 2
+            continue
+        if call_targets and rng.random() < 0.08:
+            code += _create2_self_copy(rng, call_slot)
+            call_slot += 2
+            continue
+        if selfdestructor is not None and rng.random() < 0.06:
+            code += _call_into_destructor(rng, selfdestructor, call_slot)
+            call_slot += 2
+            continue
         op = rng.choice(PALETTE)
         while stack_height < op.min_stack_height:
             code += Op.PUSH32(rng.getrandbits(256))
@@ -194,6 +339,8 @@ def fuzzed_bytecode(
 
     if precompiles and not emitted_precompile_call:
         code += _precompile_call(rng, precompiles, witness_slot)
+
+    code += _epilogue()
 
     terminator = rng.choice([Op.STOP, Op.RETURN, Op.REVERT])
     if terminator in (Op.RETURN, Op.REVERT):
