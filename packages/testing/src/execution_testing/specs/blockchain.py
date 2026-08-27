@@ -1232,11 +1232,15 @@ class BlockchainTest(BaseTest):
                 check_block_invariants(
                     fork=fork,
                     pre_alloc=(
-                        previous_alloc.get()
+                        previous_alloc.materialize()
                         if isinstance(previous_alloc, LazyAlloc)
                         else previous_alloc
                     ),
-                    post_alloc=built_block.alloc.get(),
+                    post_alloc=(
+                        built_block.alloc.materialize()
+                        if isinstance(built_block.alloc, LazyAlloc)
+                        else built_block.alloc
+                    ),
                     result=built_block.result,
                     env=env,
                     txs=txs,

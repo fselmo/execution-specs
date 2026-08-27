@@ -40,7 +40,7 @@ from typing import Any
 
 import pytest
 from ethereum_types.bytes import Bytes
-from ethereum_types.numeric import U64, U256, Uint
+from ethereum_types.numeric import U8, U64, U256, Uint
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -85,7 +85,9 @@ def build_tx(
     """
     Build a minimal, otherwise-valid transaction of the given type whose
     only interesting field is `gas`. Signatures are never inspected by
-    `validate_transaction`, so placeholder values suffice.
+    `validate_transaction`, so placeholder values suffice; blob and
+    set-code transactions carry the single blob hash / authorization that
+    validation requires.
     """
     if tx_type == "legacy":
         return transactions.LegacyTransaction(
@@ -140,7 +142,9 @@ def build_tx(
             data=Bytes(b""),
             access_list=(),
             max_fee_per_blob_gas=U256(1),
-            blob_versioned_hashes=(),
+            blob_versioned_hashes=(
+                transactions.VersionedHash(b"\x01" + b"\x00" * 31),
+            ),
             y_parity=U256(0),
             r=U256(1),
             s=U256(1),
@@ -156,7 +160,16 @@ def build_tx(
             value=U256(0),
             data=Bytes(b""),
             access_list=(),
-            authorizations=(),
+            authorizations=(
+                transactions.Authorization(
+                    chain_id=U256(1),
+                    address=to,
+                    nonce=U64(0),
+                    y_parity=U8(0),
+                    r=U256(1),
+                    s=U256(1),
+                ),
+            ),
             y_parity=U256(0),
             r=U256(1),
             s=U256(1),
