@@ -1,33 +1,114 @@
 """Command-line interface for EELS-vs-client differential fuzzing."""
 
+import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional, Sequence, TypeVar
 
 import click
 
 from execution_testing.forks import get_forks
 
+from .baseline import StaleClientError
+from .clients import resolve_client
+from .config import CampaignConfig, FuzzConfig, load_fuzz_config
 from .differential import differential_fuzz
 from .generator import GENERATOR_VERSION
+
+T = TypeVar("T")
 
 
 def _resolve_fork(name: str) -> object:
     for fork in get_forks():
         if fork.name() == name:
             return fork
-    raise click.BadParameter(f"unknown fork {name!r}")
+    raise click.BadParameter(f"unknown fork {name!r}", param_hint="--fork")
+
+
+def name_clients(paths: Sequence[Path]) -> Dict[str, Path]:
+    """Key clients by binary stem, suffixing duplicates (`evm`, `evm-2`)."""
+    names: Dict[str, Path] = {}
+    for path in paths:
+        name, n = path.stem, 2
+        while name in names:
+            name, n = f"{path.stem}-{n}", n + 1
+        names[name] = path
+    return names
+
+
+def resolve_campaign_clients(
+    config: FuzzConfig, names: Sequence[str]
+) -> Dict[str, Path]:
+    """Map campaign client names to binaries, building sources if needed."""
+    clients: Dict[str, Path] = {}
+    for name in names:
+        try:
+            clients[name] = resolve_client(config.client(name)).binary
+        except subprocess.CalledProcessError as exc:
+            raise click.ClickException(f"building {name}: {exc}") from exc
+    return clients
+
+
+def _pick(flag: Optional[T], campaign_value: Optional[T], default: T) -> T:
+    """Flag beats campaign beats default."""
+    if flag is not None:
+        return flag
+    if campaign_value is not None:
+        return campaign_value
+    return default
+
+
+def load_config_or_fail(path: Optional[Path]) -> FuzzConfig:
+    """Load fuzz.yaml, reporting a broken file as a CLI error."""
+    try:
+        return load_fuzz_config(path)
+    except (FileNotFoundError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def campaign_or_fail(
+    config: FuzzConfig, name: Optional[str]
+) -> Optional[CampaignConfig]:
+    """Look up a campaign by name; an unknown name is a CLI error."""
+    if name is None:
+        return None
+    try:
+        return config.campaigns[name]
+    except KeyError:
+        known = ", ".join(config.campaigns) or "none"
+        raise click.BadParameter(
+            f"unknown campaign {name!r}; declared: {known}",
+            param_hint="--campaign",
+        ) from None
 
 
 @click.command()
-@click.option("--fork", "fork_name", required=True, help="Fork to fuzz.")
 @click.option(
-    "--evm-bin",
-    type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to the client transition tool (geth's evm binary).",
+    "--campaign",
+    "campaign_name",
+    default=None,
+    help="Campaign from fuzz.yaml supplying fork, clients, and run size.",
 )
-@click.option("--seed-start", type=int, default=0, show_default=True)
-@click.option("--count", type=int, default=100, show_default=True)
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="fuzz.yaml to read (default: nearest one in parent directories).",
+)
+@click.option("--fork", "fork_name", default=None, help="Fork to fuzz.")
+@click.option(
+    "--client",
+    "client_paths",
+    type=click.Path(exists=True, path_type=Path),
+    multiple=True,
+    help="Client t8n binary; repeat for several clients (auto-detected).",
+)
+@click.option(
+    "--seed-start", type=int, default=None, help="First seed [default: 0]."
+)
+@click.option(
+    "--count", type=int, default=None, help="Number of seeds [default: 100]."
+)
 @click.option(
     "--corpus",
     "corpus_dir",
@@ -37,54 +118,127 @@ def _resolve_fork(name: str) -> object:
 )
 @click.option("--no-minimize", is_flag=True)
 @click.option(
+    "--baseline-seeds",
+    type=int,
+    default=None,
+    help="Seeds every client must agree with EELS on first [default: 20].",
+)
+@click.option(
+    "--no-baseline", is_flag=True, help="Skip the stale-client check."
+)
+@click.option(
+    "--no-tiering",
+    is_flag=True,
+    help="Run EELS on every case instead of only on client disagreement.",
+)
+@click.option(
     "-j",
     "--workers",
     type=int,
-    default=1,
-    show_default=True,
-    help="Parallel worker processes; large runs benefit from more.",
+    default=None,
+    help="Parallel worker processes [default: 1].",
 )
 def differential(
-    fork_name: str,
-    evm_bin: Path,
-    seed_start: int,
-    count: int,
+    campaign_name: Optional[str],
+    config_path: Optional[Path],
+    fork_name: Optional[str],
+    client_paths: Sequence[Path],
+    seed_start: Optional[int],
+    count: Optional[int],
     corpus_dir: Optional[Path],
     no_minimize: bool,
-    workers: int,
+    baseline_seeds: Optional[int],
+    no_baseline: bool,
+    no_tiering: bool,
+    workers: Optional[int],
 ) -> None:
     """
-    Compare the reference spec (EELS) against a client transition tool on
+    Compare the reference spec (EELS) against client transition tools on
     generated cases, and report consensus-relevant divergences.
+
+    A campaign supplies the defaults; explicit flags override it.
     """
+    config = load_config_or_fail(config_path)
+    campaign = campaign_or_fail(config, campaign_name)
+
+    fork_name = _pick(fork_name, campaign.fork if campaign else None, "")
+    if not fork_name:
+        raise click.UsageError("--fork or --campaign is required")
     fork = _resolve_fork(fork_name)
+
+    clients = (
+        resolve_campaign_clients(config, campaign.clients) if campaign else {}
+    )
+    clients.update(name_clients(client_paths))
+    if not clients:
+        raise click.UsageError(
+            "no clients to compare: pass --client PATH or a --campaign"
+        )
+
+    seed_start = _pick(
+        seed_start, campaign.seed_start if campaign else None, 0
+    )
+    count = _pick(count, campaign.count if campaign else None, 100)
+    workers = _pick(workers, campaign.workers if campaign else None, 1)
+    corpus_dir = _pick(corpus_dir, campaign.corpus if campaign else None, None)
+    baseline_seeds = _pick(
+        baseline_seeds, campaign.baseline_seeds if campaign else None, 20
+    )
+    if no_baseline:
+        baseline_seeds = 0
     seeds = range(seed_start, seed_start + count)
 
     click.echo(
         f"Differential {fork_name} (generator v{GENERATOR_VERSION}) "
-        f"EELS vs {evm_bin.name}, seeds {seed_start}..{seed_start + count - 1}"
+        f"EELS vs {', '.join(clients)}, "
+        f"seeds {seed_start}..{seed_start + count - 1}"
         f" ({workers} worker{'s' if workers != 1 else ''})"
     )
 
-    report = differential_fuzz(
-        fork,  # type: ignore[arg-type]
-        seeds,
-        client_binary=evm_bin,
-        corpus_dir=corpus_dir,
-        minimize_cases=not no_minimize,
-        workers=workers,
-    )
+    try:
+        report = differential_fuzz(
+            fork,  # type: ignore[arg-type]
+            seeds,
+            clients=clients,
+            corpus_dir=corpus_dir,
+            minimize_cases=not no_minimize,
+            workers=workers,
+            baseline_seeds=baseline_seeds,
+            manifest_path=(
+                corpus_dir / "manifest.json" if corpus_dir else None
+            ),
+            tiered=not no_tiering,
+        )
+    except StaleClientError as exc:
+        raise click.ClickException(
+            f"{exc}\nrebuild or repoint the stale client(s) "
+            "(`fuzz clients --update`), or pass --no-baseline"
+        ) from exc
+
+    manifest = report.manifest
+    if manifest is not None:
+        versions = ", ".join(
+            f"{name} [{version}]" for name, version in manifest.clients.items()
+        )
+        click.echo(f"eels@{manifest.eels_commit} vs {versions}")
+    if baseline_seeds:
+        click.echo(f"baseline: all clients agree on {baseline_seeds} seeds")
 
     click.echo(
         f"\nagreed {report.agreed}/{report.seeds}  diverged {report.diverged}"
+        f"  (eels adjudicated {report.eels_runs}/{report.seeds})"
     )
     for outcome in report.outcomes:
-        if outcome.error is not None:
-            click.echo(f"  seed {outcome.seed}: {outcome.error}")
+        if outcome.asymmetric_failure:
+            for tool, error in outcome.errors.items():
+                click.echo(f"  seed {outcome.seed}: {tool} failed: {error}")
         for divergence in outcome.divergences:
+            values = " ".join(
+                f"{tool}={value}" for tool, value in divergence.values.items()
+            )
             click.echo(
-                f"  seed {outcome.seed}: {divergence.field} "
-                f"eels={divergence.eels} client={divergence.client}"
+                f"  seed {outcome.seed}: {divergence.field} {values} "
+                f"(minority: {', '.join(divergence.minority)})"
             )
     if corpus_dir is not None and report.diverged:
         click.echo(f"\ndivergent cases saved to {corpus_dir}")

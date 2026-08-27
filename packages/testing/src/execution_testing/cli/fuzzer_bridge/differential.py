@@ -1,24 +1,27 @@
 """
-Cross-client differential fuzzing: EELS versus a client transition tool.
+Cross-client differential fuzzing: EELS versus client transition tools.
 
-Runs each generated case through the reference spec (EELS, in-process) and a
-client ``t8n`` (e.g. geth's ``evm``), then compares the transition results
+Runs each generated case through the reference spec (EELS, in-process) and
+any number of client ``t8n`` tools, then compares the transition results
 field by field. A divergence in the state root, receipts root, gas used,
 rejected-transaction set, or any other consensus-relevant output is a
-finding: on adversarial input the two implementations disagree, which is the
-class of bug that splits a live network.
+finding: on adversarial input the implementations disagree, which is the
+class of bug that splits a live network. With several tools the report
+names the minority on each field, so a run says *who* is wrong, not only
+that someone is.
 
 Divergences are minimized (delta-debugging with a "still diverges"
 predicate) and saved to a corpus as ``FuzzerOutput`` JSON.
 """
 
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from execution_testing.client_clis import GethTransitionTool, TransitionTool
+from execution_testing.client_clis import TransitionTool
 from execution_testing.client_clis.cli_types import Result
 from execution_testing.client_clis.clis.execution_specs import (
     ExecutionSpecsTransitionTool,
@@ -33,6 +36,8 @@ from .corpus import minimize, save_case
 from .generator import GENERATOR_VERSION, generate_fuzzer_output
 from .models import FuzzerOutput
 
+REFERENCE = "eels"
+
 
 def _fork_by_name(name: str) -> Fork:
     for fork in get_forks():
@@ -41,7 +46,7 @@ def _fork_by_name(name: str) -> Fork:
     raise ValueError(f"unknown fork {name!r}")
 
 
-# Consensus-relevant scalar fields compared when both tools report them.
+# Consensus-relevant scalar fields compared when every tool reports them.
 _COMPARED_FIELDS = (
     "state_root",
     "receipts_root",
@@ -56,25 +61,32 @@ _COMPARED_FIELDS = (
 
 @dataclass
 class FieldDivergence:
-    """A single field on which the two tools disagree."""
+    """A field on which the tools disagree, with the odd ones out."""
 
     field: str
-    eels: str
-    client: str
+    values: Dict[str, str]
+    minority: List[str]
 
 
 @dataclass
 class CaseOutcome:
-    """Result of comparing one seed across the two tools."""
+    """Result of comparing one seed across the tools."""
 
     seed: int
+    tool_count: int = 0
     divergences: List[FieldDivergence] = field(default_factory=list)
-    error: Optional[str] = None
+    errors: Dict[str, str] = field(default_factory=dict)
+    eels_ran: bool = True
+
+    @property
+    def asymmetric_failure(self) -> bool:
+        """Some tools failed while others produced a result."""
+        return bool(self.errors) and len(self.errors) < self.tool_count
 
     @property
     def diverged(self) -> bool:
-        """Whether the two tools disagreed (or one failed asymmetrically)."""
-        return bool(self.divergences) or self.error is not None
+        """Whether any tool disagreed, or failed where another succeeded."""
+        return bool(self.divergences) or self.asymmetric_failure
 
 
 @dataclass
@@ -83,11 +95,18 @@ class DifferentialReport:
 
     fork: str
     generator_version: int
-    client: str
+    clients: List[str]
     seeds: int
     agreed: int
     diverged: int
     outcomes: List[CaseOutcome] = field(default_factory=list)
+    baseline: Dict[str, int] = field(default_factory=dict)
+    manifest: Optional[Any] = None
+
+    @property
+    def eels_runs(self) -> int:
+        """How many cases the reference had to adjudicate."""
+        return sum(1 for outcome in self.outcomes if outcome.eels_ran)
 
 
 def _transition(t8n: TransitionTool, case: FuzzerOutput, fork: Fork) -> Result:
@@ -101,147 +120,241 @@ def _transition(t8n: TransitionTool, case: FuzzerOutput, fork: Fork) -> Result:
     return built.result
 
 
-def _compare(eels: Result, client: Result) -> List[FieldDivergence]:
-    """Compare two transition results, returning the fields that differ."""
+def _minority(values: Dict[str, str]) -> List[str]:
+    """
+    Name the tools holding a minority value.
+
+    A tie is broken in favour of the reference implementation; a tie
+    without it reports every tool, since nothing distinguishes the sides.
+    """
+    counts = Counter(values.values())
+    top = max(counts.values())
+    leaders = [value for value, n in counts.items() if n == top]
+    if len(leaders) == 1:
+        majority = leaders[0]
+    elif values.get(REFERENCE) in leaders:
+        majority = values[REFERENCE]
+    else:
+        return sorted(values)
+    return sorted(name for name, value in values.items() if value != majority)
+
+
+def compare_results(results: Dict[str, Result]) -> List[FieldDivergence]:
+    """Return every field on which the given tool results disagree."""
     divergences: List[FieldDivergence] = []
     for name in _COMPARED_FIELDS:
-        a = getattr(eels, name, None)
-        b = getattr(client, name, None)
-        if a is None or b is None:
-            continue
-        if str(a) != str(b):
-            divergences.append(FieldDivergence(name, str(a), str(b)))
+        values = {
+            tool: str(getattr(result, name))
+            for tool, result in results.items()
+            if getattr(result, name, None) is not None
+        }
+        if len(values) == len(results) and len(set(values.values())) > 1:
+            divergences.append(
+                FieldDivergence(name, values, _minority(values))
+            )
 
-    eels_rejected = sorted(int(r.index) for r in eels.rejected_transactions)
-    client_rejected = sorted(
-        int(r.index) for r in client.rejected_transactions
-    )
-    if eels_rejected != client_rejected:
+    rejected = {
+        tool: str(sorted(int(r.index) for r in result.rejected_transactions))
+        for tool, result in results.items()
+    }
+    if len(set(rejected.values())) > 1:
         divergences.append(
             FieldDivergence(
-                "rejected_transactions",
-                str(eels_rejected),
-                str(client_rejected),
+                "rejected_transactions", rejected, _minority(rejected)
             )
         )
     return divergences
 
 
-def _evaluate(
-    eels: TransitionTool,
-    client: TransitionTool,
+def run_tools(
+    tools: Dict[str, Any], case: FuzzerOutput, fork: Fork
+) -> Tuple[Dict[str, Result], Dict[str, str]]:
+    """Run ``case`` through each tool, collecting results and failures."""
+    results: Dict[str, Result] = {}
+    errors: Dict[str, str] = {}
+    for name, tool in tools.items():
+        try:
+            results[name] = _transition(tool, case, fork)
+        except Exception as exc:  # noqa: BLE001
+            errors[name] = f"{type(exc).__name__}: {exc}"
+    return results, errors
+
+
+def _agree(results: Dict[str, Result], errors: Dict[str, str]) -> bool:
+    """Whether a set of tool runs is unanimous (all fail, or none differ)."""
+    if errors:
+        return not results
+    return not compare_results(results)
+
+
+def evaluate_case(
+    tools: Dict[str, Any],
     case: FuzzerOutput,
     fork: Fork,
-) -> Tuple[List[FieldDivergence], Optional[str]]:
+    *,
+    tiered: bool = False,
+) -> CaseOutcome:
     """
-    Run ``case`` through both tools and classify the outcome.
+    Run ``case`` through the tools and classify the outcome.
 
-    A tool raising where the other succeeds is itself a divergence (one
-    rejected the block, the other accepted it). Both raising is treated as
-    agreement — both consider the input invalid.
+    A tool raising where another succeeds is a divergence in itself (one
+    rejected the block, the other accepted it); every tool raising is
+    agreement that the input is invalid.
+
+    ``tiered`` runs the native clients first and consults the reference
+    only when they disagree: EELS is the slowest tool by far, and unanimous
+    clients need no adjudication. With fewer than two clients there is
+    nothing to compare natively, so the reference always runs.
     """
-    eels_result: Optional[Result] = None
-    client_result: Optional[Result] = None
-    eels_error: Optional[str] = None
-    client_error: Optional[str] = None
-
-    try:
-        eels_result = _transition(eels, case, fork)
-    except Exception as exc:  # noqa: BLE001
-        eels_error = f"{type(exc).__name__}: {exc}"
-
-    try:
-        client_result = _transition(client, case, fork)
-    except Exception as exc:  # noqa: BLE001
-        client_error = f"{type(exc).__name__}: {exc}"
-
-    if eels_result is None and client_result is None:
-        return [], None
-    if eels_result is None or client_result is None:
-        return [], (
-            "asymmetric failure: "
-            f"eels={eels_error or 'ok'} client={client_error or 'ok'}"
+    clients = {name: tool for name, tool in tools.items() if name != REFERENCE}
+    if tiered and REFERENCE in tools and len(clients) > 1:
+        results, errors = run_tools(clients, case, fork)
+        if _agree(results, errors):
+            return CaseOutcome(
+                seed=-1,
+                tool_count=len(clients),
+                errors=errors,
+                eels_ran=False,
+            )
+        reference, reference_error = run_tools(
+            {REFERENCE: tools[REFERENCE]}, case, fork
         )
-    return _compare(eels_result, client_result), None
+        results.update(reference)
+        errors.update(reference_error)
+    else:
+        results, errors = run_tools(tools, case, fork)
+
+    outcome = CaseOutcome(
+        seed=-1,
+        tool_count=len(tools),
+        errors=errors,
+        eels_ran=REFERENCE in tools,
+    )
+    if len(results) > 1:
+        outcome.divergences = compare_results(results)
+    return outcome
+
+
+def build_client_tool(path: Path) -> TransitionTool:
+    """Detect the client behind ``path`` and wrap its ``t8n``."""
+    tool: TransitionTool = TransitionTool.from_binary_path(binary_path=path)
+    return tool
+
+
+def build_tools(clients: Dict[str, Path]) -> Dict[str, TransitionTool]:
+    """Build the reference tool plus one tool per named client binary."""
+    tools: Dict[str, TransitionTool] = {
+        REFERENCE: ExecutionSpecsTransitionTool()
+    }
+    for name, path in clients.items():
+        tools[name] = build_client_tool(path)
+    return tools
 
 
 # Per-worker tool state, built once by the pool initializer. Building the
-# EELS and client tools is not free, so workers reuse them across seeds.
+# tools is not free, so workers reuse them across seeds.
 _WORKER: Dict[str, Any] = {}
 
 
-def _init_worker(fork_name: str, client_binary: str) -> None:
+def _init_worker(
+    fork_name: str, clients: Dict[str, str], tiered: bool
+) -> None:
     """Build the per-process tools for the differential pool."""
     _WORKER["fork"] = _fork_by_name(fork_name)
-    _WORKER["eels"] = ExecutionSpecsTransitionTool()
-    _WORKER["client"] = GethTransitionTool(binary=Path(client_binary))
+    _WORKER["tools"] = build_tools(
+        {name: Path(path) for name, path in clients.items()}
+    )
+    _WORKER["tiered"] = tiered
 
 
 def _detect_in_worker(seed: int) -> CaseOutcome:
     """Evaluate one seed using the worker's tools (runs in a subprocess)."""
     fork = _WORKER["fork"]
-    case = generate_fuzzer_output(fork, seed)
-    divergences, error = _evaluate(
-        _WORKER["eels"], _WORKER["client"], case, fork
+    outcome = evaluate_case(
+        _WORKER["tools"],
+        generate_fuzzer_output(fork, seed),
+        fork,
+        tiered=_WORKER["tiered"],
     )
-    return CaseOutcome(seed=seed, divergences=divergences, error=error)
+    outcome.seed = seed
+    return outcome
 
 
 def differential_fuzz(
     fork: Fork,
     seeds: range,
     *,
-    client_binary: Path,
+    clients: Dict[str, Path],
     corpus_dir: Optional[Path] = None,
     minimize_cases: bool = True,
     workers: int = 1,
+    baseline_seeds: int = 0,
+    manifest_path: Optional[Path] = None,
+    tiered: bool = True,
 ) -> DifferentialReport:
     """
-    Fuzz ``fork`` across ``seeds``, comparing EELS against geth's ``evm``.
+    Fuzz ``fork`` across ``seeds``, comparing EELS against every client.
 
-    Each seed is independent, so ``workers > 1`` runs them across processes
-    (each building its own tools once). Output order is deterministic
-    regardless of worker count. Divergent cases are saved to ``corpus_dir``,
-    minimized when requested (minimization runs in the main process).
+    With ``baseline_seeds > 0`` every client must first agree with EELS on
+    that many fixed seeds (see ``baseline``), which keeps a stale client
+    from producing a run of false divergences. Each seed is independent,
+    so ``workers > 1`` runs them across processes (each building its own
+    tools once). Output order is deterministic regardless of worker count.
+    Divergent cases are saved to ``corpus_dir``, minimized when requested
+    (minimization runs in the main process). ``tiered`` lets unanimous
+    clients skip the reference (see ``evaluate_case``).
     """
-    eels = ExecutionSpecsTransitionTool()
-    client = GethTransitionTool(binary=client_binary)
+    from .baseline import BASELINE_SEED_START, check_baseline
+    from .run_manifest import collect_manifest
+
+    tools = build_tools(clients)
     report = DifferentialReport(
         fork=fork.name(),
         generator_version=GENERATOR_VERSION,
-        client=client.__class__.__name__,
+        clients=sorted(clients),
         seeds=len(seeds),
         agreed=0,
         diverged=0,
     )
+    report.manifest = collect_manifest(fork, tools, seeds)
+    if manifest_path is not None:
+        report.manifest.write(manifest_path)
+    if baseline_seeds > 0:
+        report.baseline = check_baseline(
+            fork,
+            tools,
+            range(BASELINE_SEED_START, BASELINE_SEED_START + baseline_seeds),
+        )
 
     if workers > 1:
         with ProcessPoolExecutor(
             max_workers=workers,
             initializer=_init_worker,
-            initargs=(fork.name(), str(client_binary)),
+            initargs=(
+                fork.name(),
+                {name: str(path) for name, path in clients.items()},
+                tiered,
+            ),
         ) as executor:
             outcomes = list(executor.map(_detect_in_worker, seeds))
     else:
         outcomes = []
         for seed in seeds:
-            case = generate_fuzzer_output(fork, seed)
-            divergences, error = _evaluate(eels, client, case, fork)
-            outcomes.append(
-                CaseOutcome(seed=seed, divergences=divergences, error=error)
+            outcome = evaluate_case(
+                tools, generate_fuzzer_output(fork, seed), fork, tiered=tiered
             )
+            outcome.seed = seed
+            outcomes.append(outcome)
 
     for outcome in outcomes:
         if outcome.diverged:
             report.diverged += 1
             if corpus_dir is not None:
                 case = generate_fuzzer_output(fork, outcome.seed)
-                saved = case
                 if minimize_cases:
-                    predicate = partial(_diverges, eels, client, fork=fork)
-                    saved = minimize(case, predicate)
+                    case = minimize(case, partial(_diverges, tools, fork=fork))
                 save_case(
-                    saved,
+                    case,
                     corpus_dir
                     / f"{fork.name()}_divergence_seed{outcome.seed}.json",
                 )
@@ -253,12 +366,7 @@ def differential_fuzz(
 
 
 def _diverges(
-    eels: TransitionTool,
-    client: TransitionTool,
-    case: FuzzerOutput,
-    *,
-    fork: Fork,
+    tools: Dict[str, Any], case: FuzzerOutput, *, fork: Fork
 ) -> bool:
     """Return whether this case still diverges (minimization predicate)."""
-    divergences, error = _evaluate(eels, client, case, fork)
-    return bool(divergences) or error is not None
+    return evaluate_case(tools, case, fork).diverged
