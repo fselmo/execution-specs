@@ -75,26 +75,26 @@ PALETTE = (
 )
 
 
-def _precompile_call(
-    rng: random.Random, precompiles: Sequence[int], slot: int
+_CALL_KINDS = (Op.CALL, Op.CALLCODE, Op.DELEGATECALL, Op.STATICCALL)
+# Weighted toward STATICCALL: value-bearing calls into precompiles are a
+# distinct, rarer client code path and one call kind per snippet suffices.
+_PRECOMPILE_CALL_KINDS = (Op.STATICCALL, Op.STATICCALL, Op.CALL, Op.CALLCODE)
+
+
+def _message_call(
+    rng: random.Random, target: Optional[int], kind: Op, slot: int
 ) -> Bytecode:
     """
-    Draw a stack-neutral ``STATICCALL`` into a precompile with fuzzed input.
+    Draw a stack-neutral message call of ``kind`` with fuzzed gas, value
+    and calldata; ``target`` None means the contract calls itself.
 
-    The call's success flag and returndata size are written to ``slot`` and
-    ``slot + 1`` as post-state witnesses. With small probability the target is
-    one past the highest precompile, probing the address-range boundary. The
-    snippet's net stack effect is zero, so it composes with the caller's
-    stack-height tracking.
+    Gas is drawn from a set that straddles the stipend and typical
+    precompile costs, so calls fail about as often as they succeed, and
+    value stays small so a transfer only bounces when the caller is really
+    unfunded. The success flag and returndata size are written to ``slot``
+    and ``slot + 1`` as post-state witnesses.
     """
-    if rng.random() < 0.85:
-        address = rng.choice(precompiles)
-    else:
-        address = max(precompiles) + 1
-
-    size = rng.choice(
-        [rng.randint(0, 32), rng.randint(0, 96), rng.randint(0, 256)]
-    )
+    size = rng.choice([0, rng.randint(0, 64), rng.randint(0, 256)])
     data = rng.randbytes(size)
 
     code = Bytecode()
@@ -104,16 +104,18 @@ def _precompile_call(
         code += Op.PUSH2(offset)
         code += Op.MSTORE
 
-    # STATICCALL(gas, addr, argsOffset, argsSize, retOffset, retSize); push
-    # the arguments so gas ends up on top. retSize is 0 (returndata is read
-    # via RETURNDATASIZE, avoiding a memory-return revert).
+    # Arguments are pushed so gas ends up on top. retSize is 0 (returndata
+    # is read via RETURNDATASIZE, avoiding a memory-return revert).
     code += Op.PUSH1(0)
     code += Op.PUSH1(0)
     code += Op.PUSH2(size)
     code += Op.PUSH1(0)
-    code += Op.PUSH20(address)
-    code += Op.GAS
-    code += Op.STATICCALL
+    if kind in (Op.CALL, Op.CALLCODE):
+        code += Op.PUSH2(rng.choice([0, 1, 8, 1000]))
+    code += Op.ADDRESS if target is None else Op.PUSH20(target)
+    gas = rng.choice([0, 2300, 50_000, None])
+    code += Op.GAS if gas is None else Op.PUSH3(gas)
+    code += kind
 
     code += Op.PUSH2(slot)
     code += Op.SSTORE
@@ -125,23 +127,46 @@ def _precompile_call(
     return code
 
 
+def _precompile_call(
+    rng: random.Random, precompiles: Sequence[int], slot: int
+) -> Bytecode:
+    """
+    Draw a message call into a precompile with fuzzed input.
+
+    With small probability the target is one past the highest precompile,
+    probing the address-range boundary.
+    """
+    if rng.random() < 0.85:
+        address = rng.choice(precompiles)
+    else:
+        address = max(precompiles) + 1
+    return _message_call(
+        rng, address, rng.choice(_PRECOMPILE_CALL_KINDS), slot
+    )
+
+
 def fuzzed_bytecode(
     rng: random.Random,
     *,
     max_ops: int = 40,
     precompiles: Optional[Sequence[int]] = None,
+    call_targets: Optional[Sequence[int]] = None,
 ) -> Bytecode:
     """
     Draw a stack-safe contract body ending in a clean terminator.
 
     Operands are pushed as needed so most instructions run rather than
-    underflow. When ``precompiles`` is given, ``STATICCALL``s into precompiles
-    are injected (and at least one is guaranteed). Fully determined by ``rng``.
+    underflow. When ``precompiles`` is given, calls into precompiles are
+    injected (and at least one is guaranteed). When ``call_targets`` is
+    given, message calls of every kind into those addresses -- and into
+    the contract itself, which is how recursion arises -- are injected.
+    Fully determined by ``rng``.
     """
     code: Bytecode = Bytecode() + Op.JUMPDEST  # harmless leading anchor
     stack_height = 0
     num_ops = rng.randint(1, max_ops)
     witness_slot = 0
+    call_slot = 0x100  # separate range so call witnesses never collide
     emitted_precompile_call = False
 
     for _ in range(num_ops):
@@ -149,6 +174,13 @@ def fuzzed_bytecode(
             code += _precompile_call(rng, precompiles, witness_slot)
             witness_slot += 2
             emitted_precompile_call = True
+            continue
+        if call_targets and rng.random() < 0.15:
+            target = rng.choice([None, *call_targets])
+            code += _message_call(
+                rng, target, rng.choice(_CALL_KINDS), call_slot
+            )
+            call_slot += 2
             continue
         op = rng.choice(PALETTE)
         while stack_height < op.min_stack_height:

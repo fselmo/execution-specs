@@ -37,7 +37,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 3
+GENERATOR_VERSION = 4
 
 
 def _derive_key(rng: random.Random) -> Hash:
@@ -84,9 +84,12 @@ def generate_fuzzer_output(
     # the fuzzer aims at the changed surface (see eip_properties.targeting).
     precompiles = fuzz_precompile_targets(fork)
 
+    # Every contract may call every sibling (including ones generated
+    # later), so nested frames and recursion arise naturally.
+    call_targets = [0x10000 + i for i in range(num_contracts)]
     contract_addresses: List[Address] = []
-    for i in range(num_contracts):
-        address = Address(0x10000 + i)
+    for target in call_targets:
+        address = Address(target)
         accounts[address] = FuzzerAccountInput(
             balance=HexNumber(rng.randrange(0, 10**18)),
             nonce=HexNumber(0),
@@ -96,6 +99,7 @@ def generate_fuzzer_output(
                         rng,
                         max_ops=max_ops_per_contract,
                         precompiles=precompiles,
+                        call_targets=call_targets,
                     )
                 )
             ),
