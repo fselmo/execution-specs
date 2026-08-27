@@ -342,8 +342,6 @@ def test_post_state_diff_names_the_account(monkeypatch: Any) -> None:
 
 def test_corpus_name_leads_with_the_most_telling_field() -> None:
     """The file name tags state_root before less specific fields."""
-    from types import SimpleNamespace as NS
-
     from ..fuzzer_bridge.differential import FieldDivergence, corpus_name
 
     outcome = CaseOutcome(
@@ -354,7 +352,7 @@ def test_corpus_name_leads_with_the_most_telling_field() -> None:
             FieldDivergence("state_root", {}, ["evm"]),
         ],
     )
-    fork = NS(name=lambda: "Amsterdam")
+    fork = SimpleNamespace(name=lambda: "Amsterdam")
     assert corpus_name(fork, outcome) == (  # type: ignore[arg-type]
         "Amsterdam_divergence_seed7_state_root_evm.json"
     )
