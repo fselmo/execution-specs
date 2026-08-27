@@ -207,3 +207,62 @@ def test_replay_agreement_exits_zero(tmp_path: Path, monkeypatch: Any) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "minority" not in result.output
+
+
+def test_diff_writes_summary_and_exits_nonzero_on_divergence(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """`--summary-json` records the run; divergence is a nonzero exit."""
+    import json
+
+    exe = tmp_path / "evm"
+    exe.write_text("")
+    divergence = SimpleNamespace(
+        field="gas_used", values={"eels": "1", "evm": "2"}, minority=["evm"]
+    )
+    outcome = SimpleNamespace(
+        seed=7,
+        divergences=[divergence],
+        errors={},
+        asymmetric_failure=False,
+        diverged=True,
+        eels_ran=True,
+    )
+
+    def fake_differential_fuzz(fork: Any, seeds: range, **_kwargs: Any) -> Any:
+        return SimpleNamespace(
+            agreed=len(seeds) - 1,
+            diverged=1,
+            seeds=len(seeds),
+            outcomes=[outcome],
+            manifest=None,
+            eels_runs=len(seeds),
+            fork=fork.name(),
+            generator_version=4,
+            clients=["evm"],
+        )
+
+    monkeypatch.setattr(
+        differential_cli, "differential_fuzz", fake_differential_fuzz
+    )
+    summary = tmp_path / "summary.json"
+    result = CliRunner().invoke(
+        fuzz,
+        [
+            "diff",
+            "--fork",
+            "Osaka",
+            "--client",
+            str(exe),
+            "--count",
+            "10",
+            "--no-baseline",
+            "--summary-json",
+            str(summary),
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    data = json.loads(summary.read_text())
+    assert data["seeds"] == 10 and data["diverged"] == 1
+    assert data["first_divergent_seed"] == 7
+    assert data["fields"] == {"gas_used": 1}
