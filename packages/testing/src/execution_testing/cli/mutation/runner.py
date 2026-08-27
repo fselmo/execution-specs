@@ -18,18 +18,18 @@ Two oracles:
 The original source is always restored, even on error or interrupt.
 """
 
-import os
+import json
 import random
-import signal
 import subprocess
 import tempfile
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import List, Optional, Sequence, Tuple
 
 from .mutations import Mutant, apply_mutant, enumerate_mutants
+from .shapes import Shape, applied
+from .source import restore_on_signal
 
 
 class Oracle(str, Enum):
@@ -37,6 +37,7 @@ class Oracle(str, Enum):
 
     FILL = "fill"
     PROPERTIES = "properties"
+    DIFFERENTIAL = "differential"
 
 
 class Verdict(str, Enum):
@@ -45,7 +46,20 @@ class Verdict(str, Enum):
     KILLED_TESTS = "killed (tests)"
     KILLED_INVARIANT = "killed (invariant only)"
     KILLED_TIMEOUT = "killed (timeout)"
+    KILLED_DIFFERENTIAL = "killed (differential)"
     SURVIVED = "survived"
+
+
+@dataclass
+class DifferentialOptions:
+    """How the differential oracle drives `fuzz diff`."""
+
+    fork: str
+    count: int = 300
+    campaign: Optional[str] = None
+    clients: Tuple[Path, ...] = ()
+    workers: int = 1
+    config: Optional[Path] = None
 
 
 @dataclass
@@ -54,6 +68,15 @@ class MutantResult:
 
     mutant: Mutant
     verdict: Verdict
+
+
+@dataclass
+class ShapeResult:
+    """A named shape mutant paired with its verdict and reach detail."""
+
+    shape: Shape
+    verdict: Verdict
+    detail: str = ""
 
 
 @dataclass
@@ -149,15 +172,60 @@ def _run_properties(
         return None
 
 
+def _run_differential(
+    options: DifferentialOptions, summary_path: Path, timeout: int
+) -> Optional[subprocess.CompletedProcess]:
+    """
+    Run `fuzz diff` against the (mutated) spec on disk; None on timeout.
+
+    `fuzz diff` exits nonzero when any seed diverges, so a divergence is a
+    kill under the same classification as a failing test run.
+    """
+    command = [
+        "uv",
+        "run",
+        "fuzz",
+        "diff",
+        "--fork",
+        options.fork,
+        "--count",
+        str(options.count),
+        "--no-minimize",
+        "--no-baseline",
+        "-j",
+        str(options.workers),
+        "--summary-json",
+        str(summary_path),
+    ]
+    if options.campaign is not None:
+        command += ["--campaign", options.campaign]
+    for client in options.clients:
+        command += ["--client", str(client)]
+    if options.config is not None:
+        command += ["--config", str(options.config)]
+    try:
+        return subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        return None
+
+
 def _run_oracle(
     oracle: Oracle,
     test_paths: List[str],
     fork: str,
     output_dir: Path,
     timeout: int,
+    differential: Optional[DifferentialOptions] = None,
 ) -> Optional[subprocess.CompletedProcess]:
     if oracle is Oracle.PROPERTIES:
         return _run_properties(test_paths, timeout)
+    if oracle is Oracle.DIFFERENTIAL:
+        assert differential is not None
+        return _run_differential(
+            differential, output_dir / "summary.json", timeout
+        )
     return _run_fill(test_paths, fork, output_dir, timeout)
 
 
@@ -165,26 +233,14 @@ def _invariant_count(process: subprocess.CompletedProcess) -> int:
     return (process.stdout + process.stderr).count(_INVARIANT_MARKER)
 
 
-@contextmanager
-def _restore_on_signal(module_path: Path, original: str) -> Iterator[None]:
-    """
-    Restore the module source if the process is signalled mid-run.
-
-    A ``finally`` handles exceptions and SIGINT (which raises), but a plain
-    SIGTERM (e.g. from ``timeout``) would kill the process before the source
-    is restored, leaving a mutant on disk. Restore in a SIGTERM handler too.
-    """
-
-    def handler(signum: int, _frame: object) -> None:
-        module_path.write_text(original)
-        signal.signal(signum, signal.SIG_DFL)
-        os.kill(os.getpid(), signum)
-
-    previous = signal.signal(signal.SIGTERM, handler)
-    try:
-        yield
-    finally:
-        signal.signal(signal.SIGTERM, previous)
+def summary_detail(summary_path: Path) -> str:
+    """Render a `fuzz diff --summary-json` file as a one-line reach detail."""
+    data = json.loads(summary_path.read_text())
+    detail = f"{data['diverged']}/{data['seeds']} diverged"
+    first = data.get("first_divergent_seed")
+    if first is not None:
+        detail += f", first at seed {first}"
+    return detail
 
 
 def run_mutation_testing(
@@ -225,7 +281,7 @@ def run_mutation_testing(
         baseline_invariants = _invariant_count(baseline)
 
         try:
-            with _restore_on_signal(module_path, original):
+            with restore_on_signal({module_path: original}):
                 for mutant in mutants:
                     module_path.write_text(apply_mutant(original, mutant))
                     process = _run_oracle(
@@ -239,12 +295,61 @@ def run_mutation_testing(
     return report
 
 
+def run_shapes(
+    shapes: Sequence[Shape],
+    oracle: Oracle,
+    test_paths: List[str],
+    fork: str,
+    *,
+    differential: Optional[DifferentialOptions] = None,
+    timeout: int = 3600,
+) -> List[ShapeResult]:
+    """
+    Apply each named shape mutant to the spec and ask ``oracle`` whether it
+    notices. Under the differential oracle the kill rate is the generator's
+    *reach* for that bug class; under fill/properties it is whether the
+    suite would have caught it.
+
+    The clean spec must first pass the oracle, so a later kill is
+    attributable to the shape alone.
+    """
+    results: List[ShapeResult] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        output_dir = Path(tmp)
+        baseline = _run_oracle(
+            oracle, test_paths, fork, output_dir, timeout, differential
+        )
+        if baseline is None or baseline.returncode != 0:
+            raise RuntimeError(
+                "baseline oracle run did not pass on the clean spec; fix "
+                "the target/tests/client set before measuring shapes"
+            )
+        baseline_invariants = _invariant_count(baseline)
+        for shape in shapes:
+            with applied(shape):
+                process = _run_oracle(
+                    oracle, test_paths, fork, output_dir, timeout, differential
+                )
+            verdict = _classify(process, baseline_invariants, oracle=oracle)
+            summary = output_dir / "summary.json"
+            detail = ""
+            if oracle is Oracle.DIFFERENTIAL and process is not None:
+                detail = summary_detail(summary) if summary.exists() else ""
+            results.append(ShapeResult(shape, verdict, detail))
+    return results
+
+
 def _classify(
-    process: Optional[subprocess.CompletedProcess], baseline_invariants: int
+    process: Optional[subprocess.CompletedProcess],
+    baseline_invariants: int,
+    *,
+    oracle: Oracle = Oracle.FILL,
 ) -> Verdict:
     if process is None:
         return Verdict.KILLED_TIMEOUT
     if process.returncode != 0:
+        if oracle is Oracle.DIFFERENTIAL:
+            return Verdict.KILLED_DIFFERENTIAL
         return Verdict.KILLED_TESTS
     if _invariant_count(process) > baseline_invariants:
         return Verdict.KILLED_INVARIANT

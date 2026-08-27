@@ -1,8 +1,9 @@
 """Command-line interface for EELS-vs-client differential fuzzing."""
 
+import json
 import subprocess
 from pathlib import Path
-from typing import Dict, Optional, Sequence, TypeVar
+from typing import Any, Dict, Optional, Sequence, TypeVar
 
 import click
 
@@ -132,6 +133,13 @@ def campaign_or_fail(
     help="Run EELS on every case instead of only on client disagreement.",
 )
 @click.option(
+    "--summary-json",
+    "summary_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Write a machine-readable summary of the run here.",
+)
+@click.option(
     "-j",
     "--workers",
     type=int,
@@ -150,13 +158,16 @@ def differential(
     baseline_seeds: Optional[int],
     no_baseline: bool,
     no_tiering: bool,
+    summary_path: Optional[Path],
     workers: Optional[int],
 ) -> None:
     """
     Compare the reference spec (EELS) against client transition tools on
     generated cases, and report consensus-relevant divergences.
 
-    A campaign supplies the defaults; explicit flags override it.
+    A campaign supplies the defaults; explicit flags override it. Exits 1
+    when any seed diverged, so scripts and the mutation oracle can branch
+    on it.
     """
     config = load_config_or_fail(config_path)
     campaign = campaign_or_fail(config, campaign_name)
@@ -242,6 +253,38 @@ def differential(
             )
     if corpus_dir is not None and report.diverged:
         click.echo(f"\ndivergent cases saved to {corpus_dir}")
+    if summary_path is not None:
+        write_summary(report, seeds, summary_path)
+    if report.diverged:
+        raise SystemExit(1)
+
+
+def write_summary(report: Any, seeds: range, path: Path) -> Path:
+    """Write the run's counts, first divergent seed, and field tally."""
+    divergent = [o for o in report.outcomes if o.diverged]
+    fields: Dict[str, int] = {}
+    for outcome in divergent:
+        for divergence in outcome.divergences:
+            fields[divergence.field] = fields.get(divergence.field, 0) + 1
+    manifest = report.manifest
+    data = {
+        "fork": report.fork,
+        "generator_version": report.generator_version,
+        "clients": report.clients,
+        "eels_commit": manifest.eels_commit if manifest else None,
+        "seed_start": seeds.start,
+        "seeds": report.seeds,
+        "agreed": report.agreed,
+        "diverged": report.diverged,
+        "eels_runs": report.eels_runs,
+        "first_divergent_seed": min(o.seed for o in divergent)
+        if divergent
+        else None,
+        "fields": fields,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    return path
 
 
 if __name__ == "__main__":
