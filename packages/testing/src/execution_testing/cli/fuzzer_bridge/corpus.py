@@ -42,11 +42,29 @@ def _sender_addresses(case: FuzzerOutput) -> Set[Address]:
     }
 
 
+def _instruction_boundary(code: bytes, length: int) -> int:
+    """
+    Snap ``length`` down to an instruction boundary.
+
+    A cut inside a PUSH immediate would change how the remaining bytes
+    decode, so the truncated program could reproduce for a different
+    reason than the original.
+    """
+    boundary = 0
+    i = 0
+    while i < len(code) and i <= length:
+        boundary = i
+        op = code[i]
+        i += 1 + (op - 0x5F) if 0x60 <= op <= 0x7F else 1
+    return boundary if i > length else len(code)
+
+
 def _truncate_code(
     case: FuzzerOutput, address: Address, length: int
 ) -> FuzzerOutput:
     accounts = dict(case.accounts)
-    truncated = Bytes(bytes(accounts[address].code)[:length])
+    code = bytes(accounts[address].code)
+    truncated = Bytes(code[: _instruction_boundary(code, length)])
     accounts[address] = accounts[address].model_copy(
         update={"code": truncated}
     )

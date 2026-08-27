@@ -11,6 +11,7 @@ from .differential import (
     _COMPARED_FIELDS,
     build_tools,
     compare_results,
+    post_state_diff,
     run_tools,
 )
 from .differential_cli import (
@@ -101,10 +102,9 @@ def replay(
 
     case = load_case(case_path)
     tools = build_tools(clients)
-    results, errors = run_tools(tools, case, case.fork)
-    divergences = {
-        d.field: d for d in (compare_results(results) if results else [])
-    }
+    results, errors, allocs = run_tools(tools, case, case.fork)
+    divergence_list = compare_results(results) if results else []
+    divergences = {d.field: d for d in divergence_list}
 
     for field_name in (*_COMPARED_FIELDS, "rejected_transactions"):
         divergence = divergences.get(field_name)
@@ -128,6 +128,10 @@ def replay(
             click.echo(f"  {name:<12} {value}{mark}")
     for name, error in errors.items():
         click.echo(f"{name} failed: {error}")
+    for tool, diff in post_state_diff(divergence_list, allocs).items():
+        click.echo(f"post-state: {tool} differs from eels on")
+        for address, account in diff.items():
+            click.echo(f"  {address}: {account}")
 
     if divergences or (errors and len(errors) < len(tools)):
         raise SystemExit(1)
