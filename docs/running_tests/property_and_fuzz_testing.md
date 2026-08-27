@@ -116,20 +116,36 @@ pushes operands before each opcode, so programs execute real logic instead of
 reverting on the first underflow. Dynamic jumps are excluded (without a
 control-flow model they land on invalid destinations).
 
-Two kinds of message call are injected, each storing its success flag and
-`RETURNDATASIZE` to storage so a divergence shows in the post-state, not only
-in gas:
+On top of the walk, snippets are injected that reproduce the frame shapes
+real consensus bugs have taken, each storing a witness to storage so a
+divergence shows in the post-state, not only in gas:
 
-- **Into precompiles** — at least one per contract, as `STATICCALL` or as
-  value-bearing `CALL`/`CALLCODE`, plus an occasional probe just past the
+- **Calls into precompiles** — at least one per contract, as `STATICCALL` or
+  as value-bearing `CALL`/`CALLCODE`, plus an occasional probe just past the
   precompile address range. Precompiles the fork *newly added* are up-weighted
   (`eip_properties/targeting.py`, fed by the manifest): a fresh curve operation
   is where a consensus bug hides, not decade-old `ecrecover`.
-- **Into sibling contracts and the contract itself** — every kind
+- **Calls into sibling contracts and the contract itself** — every kind
   (`CALL`, `CALLCODE`, `DELEGATECALL`, `STATICCALL`), so nested frames,
   recursion, and reverting or halting children arise naturally. Gas is drawn
   from a set straddling the stipend and typical precompile costs, so calls
   fail about as often as they succeed.
+- **A halting child, then a cold state charge** — a call with too little gas
+  for any state work, followed by a fresh `SSTORE` and a value transfer to a
+  fresh account; a child settled wrongly only shows when the parent spends.
+- **`CREATE2` self-replication** — a gas-keyed `SSTORE`, then the contract
+  deploys a copy of its own code, which recurses until the 63/64 rule starves
+  it: many independent reverting frames in one transaction.
+- **Calls into a selfdestructing helper** — a contract whose code is
+  `ORIGIN SELFDESTRUCT`; under `CALLCODE`/`DELEGATECALL` the caller
+  schedules its own destruction.
+
+Every body ends with an **observation epilogue** (`GAS`, `RETURNDATASIZE`
+and `SELFBALANCE` stored to fixed slots) so internal gas or return-data
+differences become state-root differences. The palette also covers
+`CREATE`/`CREATE2`, transient storage, logs, `EXTCODE*`/`BALANCE`,
+`BLOBHASH` and `MCOPY`, and transaction gas limits include the EIP-7825 cap,
+budgeted so a block never exceeds its gas limit.
 
 ### 2. Execution through EELS
 
