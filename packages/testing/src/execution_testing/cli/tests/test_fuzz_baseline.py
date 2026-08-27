@@ -20,6 +20,7 @@ def test_clean_baseline_returns_zero_counts(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         baseline_module, "generate_fuzzer_output", lambda *_: None
     )
+    monkeypatch.setattr(differential, "_prepare", lambda case, _fork: case)
     counts = check_baseline(
         NO_FORK, {"eels": "eels", "geth": "geth"}, range(3)
     )
@@ -42,6 +43,7 @@ def test_stale_client_is_named_with_its_count(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         baseline_module, "generate_fuzzer_output", lambda *_: None
     )
+    monkeypatch.setattr(differential, "_prepare", lambda case, _fork: case)
     tools = {"eels": "eels", "geth": "geth", "besu": "besu"}
     with pytest.raises(StaleClientError, match="besu: 3/3") as info:
         check_baseline(NO_FORK, tools, range(3))
@@ -59,5 +61,6 @@ def test_failing_client_counts_as_stale(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         baseline_module, "generate_fuzzer_output", lambda *_: None
     )
+    monkeypatch.setattr(differential, "_prepare", lambda case, _fork: case)
     with pytest.raises(StaleClientError, match="geth: 2/2"):
         check_baseline(NO_FORK, {"eels": "eels", "geth": "geth"}, range(2))
