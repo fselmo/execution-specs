@@ -53,6 +53,7 @@ MANIFEST
 venv/
 # User config; not imposed
 .python-version
+fuzz.yaml
 
 # pycharm
 .idea/

@@ -40,7 +40,7 @@ def distill(case_path: Path, output_path: Path, reason: str) -> None:
     """
     Render a corpus case (FuzzerOutput JSON) as a reviewable spec test.
 
-    CASE_PATH is a corpus JSON file produced by `fuzz` or `fuzz-differential`.
+    CASE_PATH is a corpus JSON file produced by `fuzz` or `fuzz diff`.
     OUTPUT_PATH is the Python test file to write.
     """
     case = FuzzerOutput(**json.loads(case_path.read_text()))
