@@ -1,9 +1,11 @@
 """Tests for the seeded fuzzer generator, minimizer, and fuzz engine."""
 
+from execution_testing import Address
 from execution_testing.forks import Osaka
 
 from ..fuzzer_bridge.corpus import minimize
 from ..fuzzer_bridge.generator import (
+    DESTRUCTOR_ADDRESS,
     GENERATOR_VERSION,
     generate_fuzzer_output,
 )
@@ -32,7 +34,11 @@ def test_generated_shape() -> None:
     assert out.version == "2.0"
     assert len(out.transactions) == 4
     senders = [a for a in out.accounts.values() if a.private_key is not None]
-    contracts = [a for a in out.accounts.values() if a.code]
+    contracts = [
+        a
+        for addr, a in out.accounts.items()
+        if a.code and addr != Address(DESTRUCTOR_ADDRESS)
+    ]
     assert len(senders) == 2
     assert len(contracts) == 2
     # Every transaction is sent by a known sender with a private key.
@@ -92,11 +98,6 @@ def _has_opcode(code: bytes, opcode: int) -> bool:
     return False
 
 
-def test_generator_version_is_four() -> None:
-    """The call family shipped as generator v4; older seeds are distinct."""
-    assert GENERATOR_VERSION == 4
-
-
 def test_generated_contracts_call_each_other() -> None:
     """Generated contracts reach the CALL family, not only precompiles."""
     seen = set()
@@ -120,3 +121,31 @@ def test_truncation_never_splits_a_push_immediate() -> None:
         cut = _instruction_boundary(code, target)
         assert cut in (0, 33, 35, 36), (target, cut)
         assert cut <= target or cut == len(code)
+
+
+def test_generator_version_is_five() -> None:
+    """Shapes, the epilogue and the wider palette shipped as v5."""
+    assert GENERATOR_VERSION == 5
+
+
+def test_generated_cases_reach_creation_and_the_gas_cap() -> None:
+    """Some contracts CREATE2 and some transactions carry the gas cap."""
+    creation = False
+    at_cap = False
+    for seed in range(12):
+        out = generate_fuzzer_output(Osaka, seed)
+        for account in out.accounts.values():
+            if _has_opcode(bytes(account.code), 0xF5):
+                creation = True
+        at_cap |= any(int(tx.gas) == 16_777_216 for tx in out.transactions)
+    assert creation and at_cap
+
+
+def test_transactions_fit_the_block_gas_limit() -> None:
+    """The sum of transaction gas limits never exceeds the block's."""
+    from ..fuzzer_bridge.generator import BLOCK_GAS_LIMIT
+
+    for seed in range(60):
+        out = generate_fuzzer_output(Osaka, seed)
+        assert sum(int(tx.gas) for tx in out.transactions) <= BLOCK_GAS_LIMIT
+        assert out.transactions

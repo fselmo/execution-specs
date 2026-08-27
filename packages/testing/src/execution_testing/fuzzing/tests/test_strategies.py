@@ -167,3 +167,61 @@ def test_call_family_bytecode_is_deterministic() -> None:
     a = bytes(fuzzed_bytecode(random.Random(5), call_targets=TARGETS))
     b = bytes(fuzzed_bytecode(random.Random(5), call_targets=TARGETS))
     assert a == b
+
+
+CREATE, CREATE2, SELFDESTRUCT, TSTORE, LOG1 = 0xF0, 0xF5, 0xFF, 0x5D, 0xA1
+GAS, SELFBALANCE, RETURNDATASIZE, SSTORE, STOP = 0x5A, 0x47, 0x3D, 0x55, 0x00
+
+
+def _instructions(code: bytes) -> list[int]:
+    ops, i = [], 0
+    while i < len(code):
+        op = code[i]
+        ops.append(op)
+        i += 1 + (op - 0x5F) if 0x60 <= op <= 0x7F else 1
+    return ops
+
+
+def test_epilogue_witnesses_gas_returndata_and_balance() -> None:
+    """Every body ends by storing GAS, RETURNDATASIZE and SELFBALANCE."""
+    for seed in range(10):
+        ops = _instructions(bytes(fuzzed_bytecode(random.Random(seed))))
+        tail = ops[-12:]
+        assert GAS in tail and RETURNDATASIZE in tail and SELFBALANCE in tail
+        assert tail.count(SSTORE) >= 3
+
+
+def test_shapes_emit_creation_and_selfdestruct_calls() -> None:
+    """
+    With targets and a destructor, CREATE2 recursion and a callcode into
+    a selfdestructing helper both appear across seeds.
+    """
+    seen: set[int] = set()
+    destructor_called = False
+    for seed in range(60):
+        code = bytes(
+            fuzzed_bytecode(
+                random.Random(seed),
+                call_targets=[0x10000],
+                selfdestructor=0x10010,
+            )
+        )
+        seen |= set(_instructions(code)) & {CREATE2, 0xF2}
+        operands = {int.from_bytes(o, "big") for o in _push20_operands(code)}
+        destructor_called |= 0x10010 in operands
+    assert CREATE2 in seen and 0xF2 in seen and destructor_called
+
+
+def test_palette_reaches_new_opcode_families() -> None:
+    """Creation, transient storage, logs and EXTCODE* are in the walk."""
+    seen = set()
+    for seed in range(80):
+        seen |= set(_instructions(bytes(fuzzed_bytecode(random.Random(seed)))))
+    assert {CREATE, TSTORE, LOG1, 0x3B} <= seen  # 0x3B EXTCODESIZE
+
+
+def test_no_shapes_without_targets() -> None:
+    """A bare body still carries no message calls and no CREATE2 template."""
+    for seed in range(20):
+        ops = _instructions(bytes(fuzzed_bytecode(random.Random(seed))))
+        assert not any(op in ops for op in (0xF1, 0xF2, 0xF4, 0xFA))
