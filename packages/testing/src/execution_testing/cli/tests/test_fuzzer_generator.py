@@ -80,3 +80,31 @@ def test_minimize_noop_when_everything_matters() -> None:
 
     reduced = minimize(out, needs_all)
     assert len(reduced.transactions) == original_count
+
+
+def _has_opcode(code: bytes, opcode: int) -> bool:
+    i = 0
+    while i < len(code):
+        op = code[i]
+        if op == opcode:
+            return True
+        i += 1 + (op - 0x5F) if 0x60 <= op <= 0x7F else 1
+    return False
+
+
+def test_generator_version_is_four() -> None:
+    """The call family shipped as generator v4; older seeds are distinct."""
+    assert GENERATOR_VERSION == 4
+
+
+def test_generated_contracts_call_each_other() -> None:
+    """Generated contracts reach the CALL family, not only precompiles."""
+    seen = set()
+    for seed in range(10):
+        out = generate_fuzzer_output(Osaka, seed)
+        for account in out.accounts.values():
+            code = bytes(account.code)
+            seen |= {
+                op for op in (0xF1, 0xF2, 0xF4, 0xFA) if _has_opcode(code, op)
+            }
+    assert seen == {0xF1, 0xF2, 0xF4, 0xFA}

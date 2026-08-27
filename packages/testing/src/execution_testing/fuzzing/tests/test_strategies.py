@@ -89,12 +89,12 @@ def test_no_precompile_calls_without_addresses() -> None:
 
 
 def test_precompile_calls_injected_when_supplied() -> None:
-    """Supplying precompiles guarantees at least one STATICCALL per body."""
+    """Supplying precompiles guarantees at least one call into one per body."""
     for seed in range(20):
         code = bytes(
             fuzzed_bytecode(random.Random(seed), precompiles=PRECOMPILES)
         )
-        assert _has_opcode(code, STATICCALL)
+        assert any(_has_opcode(code, op) for op in (0xF1, 0xF2, STATICCALL))
 
 
 def test_precompile_call_targets_supplied_address() -> None:
@@ -112,4 +112,58 @@ def test_precompile_bytecode_is_deterministic() -> None:
     """The same seed and precompile set yield identical bytecode."""
     a = bytes(fuzzed_bytecode(random.Random(3), precompiles=PRECOMPILES))
     b = bytes(fuzzed_bytecode(random.Random(3), precompiles=PRECOMPILES))
+    assert a == b
+
+
+CALL, CALLCODE, DELEGATECALL = 0xF1, 0xF2, 0xF4
+CALL_FAMILY = (CALL, CALLCODE, DELEGATECALL, STATICCALL)
+TARGETS = [0x10000, 0x10001]
+
+
+def test_call_family_injected_when_targets_supplied() -> None:
+    """Supplying call targets yields every kind of message call."""
+    seen = set()
+    for seed in range(40):
+        code = bytes(
+            fuzzed_bytecode(random.Random(seed), call_targets=TARGETS)
+        )
+        seen |= {op for op in CALL_FAMILY if _has_opcode(code, op)}
+    assert seen == set(CALL_FAMILY)
+
+
+def test_no_message_calls_without_targets_or_precompiles() -> None:
+    """A bare body never calls out."""
+    for seed in range(20):
+        code = bytes(fuzzed_bytecode(random.Random(seed)))
+        assert not any(_has_opcode(code, op) for op in CALL_FAMILY)
+
+
+def test_precompile_calls_include_value_bearing_variants() -> None:
+    """Precompiles are reached with value-bearing CALL and CALLCODE too."""
+    seen = set()
+    for seed in range(60):
+        code = bytes(
+            fuzzed_bytecode(random.Random(seed), precompiles=PRECOMPILES)
+        )
+        seen |= {
+            op for op in (CALL, CALLCODE, STATICCALL) if _has_opcode(code, op)
+        }
+    assert seen == {CALL, CALLCODE, STATICCALL}
+
+
+def test_call_targets_appear_as_push20_operands() -> None:
+    """Every supplied target is called somewhere across seeds."""
+    found = set()
+    for seed in range(40):
+        code = bytes(
+            fuzzed_bytecode(random.Random(seed), call_targets=TARGETS)
+        )
+        found |= {int.from_bytes(o, "big") for o in _push20_operands(code)}
+    assert set(TARGETS) <= found
+
+
+def test_call_family_bytecode_is_deterministic() -> None:
+    """Injected calls are fully determined by the rng."""
+    a = bytes(fuzzed_bytecode(random.Random(5), call_targets=TARGETS))
+    b = bytes(fuzzed_bytecode(random.Random(5), call_targets=TARGETS))
     assert a == b
