@@ -2,7 +2,7 @@
 Distill a fuzzer corpus case into a readable, reviewable spec test.
 
 A corpus case (``FuzzerOutput`` JSON produced by ``fuzz`` or
-``fuzz-differential``) is a minimized, reproducible input that triggered
+``fuzz diff``) is a minimized, reproducible input that triggered
 something interesting. Distillation turns it into a ``BlockchainTestFiller``
 Python module — explicit accounts, transactions, and a provenance docstring —
 that a maintainer reviews and lands as a normal test. That is how a transient
