@@ -165,6 +165,7 @@ def _fake_tools(monkeypatch: Any, behaviour: Dict[str, Any]) -> None:
         "build_tools",
         lambda _clients: {name: name for name in behaviour},
     )
+    monkeypatch.setattr(differential, "_prepare", lambda case, _fork: case)
     monkeypatch.setattr(
         differential, "_transition", _fake_transition(behaviour)
     )
@@ -227,6 +228,7 @@ def test_diff_writes_summary_and_exits_nonzero_on_divergence(
         asymmetric_failure=False,
         diverged=True,
         eels_ran=True,
+        post_state_diff={},
     )
 
     def fake_differential_fuzz(fork: Any, seeds: range, **_kwargs: Any) -> Any:

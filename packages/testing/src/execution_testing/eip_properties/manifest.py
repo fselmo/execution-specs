@@ -24,12 +24,16 @@ Three detectors, matching the three ways a change is expressed:
 """
 
 import dataclasses
+import logging
 import re
+import warnings
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Dict, List, Set, Tuple, Type
 
 from execution_testing.forks import Fork
+
+logger = logging.getLogger(__name__)
 
 # Scalar predicates that describe the environment, not the protocol.
 _METADATA = {
@@ -135,7 +139,10 @@ def _scalars(fork: Fork) -> Dict[str, Any]:
             continue
         try:
             value = getattr(fork, name)()
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # Zero-argument probing legitimately trips methods that need
+            # arguments or exist only on EIP mixins.
+            logger.debug("%s.%s() raised %r; skipped", fork.name(), name, exc)
             continue
         if isinstance(value, (int, bool)) or value is None:
             out[name] = value
@@ -153,7 +160,12 @@ def _gas_costs(fork: Fork) -> Dict[str, Any]:
 def _string_set(fork: Fork, method: str) -> Set[str]:
     try:
         return {str(x) for x in getattr(fork, method)()}
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        warnings.warn(
+            f"{fork.name()}.{method}() raised {exc!r}; the manifest will "
+            "report every entry as removed",
+            stacklevel=2,
+        )
         return set()
 
 
@@ -163,7 +175,12 @@ def _opcodes(fork: Fork) -> Set[str]:
             o.hex() if hasattr(o, "hex") else str(o)
             for o in fork.valid_opcodes()
         }
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        warnings.warn(
+            f"{fork.name()}.valid_opcodes() raised {exc!r}; the manifest "
+            "will report every opcode as removed",
+            stacklevel=2,
+        )
         return set()
 
 

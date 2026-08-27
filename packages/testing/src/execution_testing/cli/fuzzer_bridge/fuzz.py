@@ -78,8 +78,7 @@ def _run_case(
         )
         env = environment_from_parent_header(built.header)
         alloc = built.alloc
-    # generate_block_data accumulates violations on the test instance.
-    return [f"{v.invariant}: {v.message}" for v in test._invariant_violations]
+    return [f"{v.invariant}: {v.message}" for v in test.invariant_violations]
 
 
 def fuzz(

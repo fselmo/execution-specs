@@ -9,6 +9,7 @@ from execution_testing.forks import Osaka
 
 from ..fuzzer_bridge import differential
 from ..fuzzer_bridge.differential import (
+    CaseOutcome,
     _fork_by_name,
     compare_results,
     evaluate_case,
@@ -49,9 +50,15 @@ def _fake_transition(behaviour: Dict[str, Any]) -> Any:
         outcome = behaviour[tool]
         if isinstance(outcome, Exception):
             raise outcome
-        return outcome
+        return outcome, None
 
     return transition
+
+
+@pytest.fixture(autouse=True)
+def _no_prepare(monkeypatch: Any) -> None:
+    """Skip genesis construction: the fakes never look at the case."""
+    monkeypatch.setattr(differential, "_prepare", lambda case, _fork: case)
 
 
 def test_fork_by_name_roundtrips() -> None:
@@ -270,3 +277,84 @@ def test_tiered_with_one_client_always_runs_eels(monkeypatch: Any) -> None:
         {"eels": "eels", "geth": "geth"}, NO_CASE, NO_FORK, tiered=True
     )
     assert outcome.eels_ran
+
+
+def test_signature_locked_predicate_rejects_a_different_bug(
+    monkeypatch: Any,
+) -> None:
+    """Minimization keeps only reductions with the original signature."""
+    from ..fuzzer_bridge.differential import (
+        divergence_signature,
+        still_diverges,
+    )
+
+    monkeypatch.setattr(
+        differential,
+        "_transition",
+        _fake_transition({"eels": _result(), "geth": _result(gas_used=1)}),
+    )
+    original = evaluate_case(
+        {"eels": "eels", "geth": "geth"}, NO_CASE, NO_FORK
+    )
+    signature = divergence_signature(original)
+    assert signature == {("gas_used", ("geth",))}
+    assert still_diverges(
+        {"eels": "eels", "geth": "geth"},
+        NO_CASE,
+        fork=NO_FORK,
+        signature=signature,
+    )
+    monkeypatch.setattr(
+        differential,
+        "_transition",
+        _fake_transition(
+            {"eels": _result(), "geth": _result(state_root="0xzzz")}
+        ),
+    )
+    assert not still_diverges(
+        {"eels": "eels", "geth": "geth"},
+        NO_CASE,
+        fork=NO_FORK,
+        signature=signature,
+    )
+
+
+def test_post_state_diff_names_the_account(monkeypatch: Any) -> None:
+    """A divergence carries the per-account diff against the minority."""
+    from execution_testing import Account, Address, Alloc
+
+    eels_alloc = Alloc({Address(0x100): Account(balance=1, nonce=1)})
+    geth_alloc = Alloc({Address(0x100): Account(balance=2, nonce=1)})
+
+    def transition(tool: Any, *_a: Any, **_k: Any) -> Any:
+        if tool == "eels":
+            return _result(), eels_alloc
+        return _result(state_root="0xzzz"), geth_alloc
+
+    monkeypatch.setattr(differential, "_transition", transition)
+    outcome = evaluate_case({"eels": "eels", "geth": "geth"}, NO_CASE, NO_FORK)
+    assert outcome.diverged
+    diff = outcome.post_state_diff["geth"]
+    assert list(diff) == ["0x0000000000000000000000000000000000000100"]
+    account = diff["0x0000000000000000000000000000000000000100"]
+    assert int(account["balance"], 16) == 2
+
+
+def test_corpus_name_leads_with_the_most_telling_field() -> None:
+    """The file name tags state_root before less specific fields."""
+    from types import SimpleNamespace as NS
+
+    from ..fuzzer_bridge.differential import FieldDivergence, corpus_name
+
+    outcome = CaseOutcome(
+        seed=7,
+        tool_count=2,
+        divergences=[
+            FieldDivergence("block_access_list_hash", {}, ["evm"]),
+            FieldDivergence("state_root", {}, ["evm"]),
+        ],
+    )
+    fork = NS(name=lambda: "Amsterdam")
+    assert corpus_name(fork, outcome) == (  # type: ignore[arg-type]
+        "Amsterdam_divergence_seed7_state_root_evm.json"
+    )
