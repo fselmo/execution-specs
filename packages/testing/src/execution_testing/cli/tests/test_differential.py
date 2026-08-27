@@ -14,6 +14,9 @@ from ..fuzzer_bridge.differential import (
     evaluate_case,
 )
 
+NO_CASE: Any = None
+NO_FORK: Any = None
+
 
 def _result(**overrides: Any) -> Any:
     """A stand-in transition Result with the fields compare_results reads."""
@@ -150,7 +153,7 @@ def test_evaluate_all_raise_is_agreement(monkeypatch: Any) -> None:
         "_transition",
         _fake_transition({"eels": ValueError("x"), "geth": ValueError("y")}),
     )
-    outcome = evaluate_case({"eels": "eels", "geth": "geth"}, None, None)
+    outcome = evaluate_case({"eels": "eels", "geth": "geth"}, NO_CASE, NO_FORK)
     assert not outcome.diverged
     assert outcome.errors == {"eels": "ValueError: x", "geth": "ValueError: y"}
 
@@ -162,7 +165,7 @@ def test_evaluate_asymmetric_failure_is_divergence(monkeypatch: Any) -> None:
         "_transition",
         _fake_transition({"eels": _result(), "geth": ValueError("rejected")}),
     )
-    outcome = evaluate_case({"eels": "eels", "geth": "geth"}, None, None)
+    outcome = evaluate_case({"eels": "eels", "geth": "geth"}, NO_CASE, NO_FORK)
     assert outcome.diverged
     assert outcome.errors == {"geth": "ValueError: rejected"}
     assert outcome.divergences == []
@@ -182,7 +185,7 @@ def test_evaluate_reports_the_minority(monkeypatch: Any) -> None:
         ),
     )
     outcome = evaluate_case(
-        {"eels": "eels", "geth": "geth", "besu": "besu"}, None, None
+        {"eels": "eels", "geth": "geth", "besu": "besu"}, NO_CASE, NO_FORK
     )
     assert outcome.diverged
     assert outcome.divergences[0].minority == ["besu"]
@@ -199,8 +202,8 @@ def test_tiered_skips_eels_when_clients_agree(monkeypatch: Any) -> None:
     monkeypatch.setattr(differential, "_transition", transition)
     outcome = evaluate_case(
         {"eels": "eels", "geth": "geth", "besu": "besu"},
-        None,
-        None,
+        NO_CASE,
+        NO_FORK,
         tiered=True,
     )
     assert not outcome.diverged
@@ -223,8 +226,8 @@ def test_tiered_runs_eels_to_adjudicate(monkeypatch: Any) -> None:
     )
     outcome = evaluate_case(
         {"eels": "eels", "geth": "geth", "besu": "besu"},
-        None,
-        None,
+        NO_CASE,
+        NO_FORK,
         tiered=True,
     )
     assert outcome.eels_ran
@@ -247,8 +250,8 @@ def test_tiered_client_failure_brings_eels_in(monkeypatch: Any) -> None:
     )
     outcome = evaluate_case(
         {"eels": "eels", "geth": "geth", "besu": "besu"},
-        None,
-        None,
+        NO_CASE,
+        NO_FORK,
         tiered=True,
     )
     assert outcome.eels_ran
@@ -264,6 +267,6 @@ def test_tiered_with_one_client_always_runs_eels(monkeypatch: Any) -> None:
         _fake_transition({"eels": _result(), "geth": _result()}),
     )
     outcome = evaluate_case(
-        {"eels": "eels", "geth": "geth"}, None, None, tiered=True
+        {"eels": "eels", "geth": "geth"}, NO_CASE, NO_FORK, tiered=True
     )
     assert outcome.eels_ran
