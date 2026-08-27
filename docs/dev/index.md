@@ -7,6 +7,7 @@ This documentation is aimed at `execution-specs` developers:
 - [Documenting CLI commands](./documenting_clis.md): Instructions for documenting command line interfaces (CLIs).
 - [Logging](./logging.md): Documentation on using the custom logging system with enhanced features.
 - [Running github actions locally](./test_actions_locally.md): Instructions for testing GitHub Actions workflows on your local machine to streamline development and debugging.
+- [Property, fuzz, and mutation testing](./property_and_fuzz_testing.md): The property suite, `fill --invariant-checks`, the fuzzing and differential commands, mutation testing, and the EIP change manifest — what each is for and how it works.
 
 These sections are primarily aimed at `execution-specs` maintainers:
 
