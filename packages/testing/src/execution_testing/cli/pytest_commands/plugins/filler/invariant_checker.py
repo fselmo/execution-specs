@@ -17,7 +17,7 @@ from execution_testing.specs.invariants import enable_invariant_checks
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Add the `--invariant-checks` command-line option to pytest."""
-    group = parser.getgroup("filler", "Arguments defining filler behavior")
+    group = parser.getgroup("debug", "Arguments defining debug behavior")
     group.addoption(
         "--invariant-checks",
         action="store_true",
