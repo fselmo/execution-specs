@@ -211,14 +211,19 @@ A run then does four things:
    `block_access_list_hash`, and the set of rejected transactions. One tool
    failing where another succeeds is a divergence; every tool failing is
    agreement. `--no-tiering` runs EELS on every case.
-4. **Majority view.** Each divergence names the minority — a tie sides with
-   EELS — so the report says *who* disagrees, not only that someone does.
-   Divergent cases are minimized with a "still diverges" predicate and saved.
+4. **Majority view and localization.** Each divergence names the minority
+   — a tie sides with EELS — so the report says *who* disagrees, not only
+   that someone does, and lists the accounts on which the minority's
+   post-state differs from EELS (`fuzz replay` prints them in full).
+   Divergent cases are minimized under a predicate that preserves the
+   original (field, minority) signature, so a reduction cannot drift onto
+   an unrelated bug, and saved as
+   `<fork>_divergence_seed<N>_<field>_<minority>.json`.
 
-On today's small generated cases tiering saves little (about 5% on 300
-seeds), because each client call is a subprocess spawn and that dominates the
-per-case cost; the gain grows with case size, where the Python interpreter's
-per-opcode cost takes over.
+Tiering is off by default: on today's small generated cases it saves about
+5% (300 seeds), because each client call is a subprocess spawn and that
+dominates the per-case cost. `--tiering` enables it; the gain grows with case
+size, where the Python interpreter's per-opcode cost takes over.
 
 | Option                                   | Purpose                                                    |
 | ---------------------------------------- | ---------------------------------------------------------- |
@@ -227,7 +232,8 @@ per-opcode cost takes over.
 | `--client PATH` (repeatable)             | clients by binary; adds to or replaces the campaign's      |
 | `--fork`, `--count`, `--seed-start`, `-j`| override the campaign                                      |
 | `--baseline-seeds N`, `--no-baseline`    | size of the stale-client check (default 20), or skip it    |
-| `--no-tiering`                           | EELS on every case                                         |
+| `--tiering`                              | natives first, EELS only on their disagreement             |
+| `--summary-json PATH`                    | machine-readable counts, first divergent seed, field tally |
 | `--corpus DIR`, `--no-minimize`          | as for `fuzz run`                                          |
 
 This is the only layer that catches a *self-consistent* bug: a mispriced gas
@@ -323,6 +329,24 @@ any abnormal exit, `git diff src/` before trusting the tree.
 
 The kill-delta of `--oracle properties` before and after adding a property is
 the objective validity signal for a mined property.
+
+### Measuring generator reach with shapes
+
+```console
+uv run mutate --shape child-read-rollback --shape child-spill-credit \
+    --shape precompile-value-callcode-refund \
+    --oracle differential --fork Amsterdam --campaign amsterdam
+```
+
+A *shape* is a reviewed, multi-file edit to the spec that models the
+mechanism of a bug a client actually shipped (reads dropped when a child
+frame reverts; spilled state gas credited back along a halt chain; a failed
+value-bearing `CALLCODE` into a precompile refunded). Applying it makes EELS
+the wrong side, so a clean client must catch it: the kill rate per shape is
+the generator's *reach* for that bug class, and it is measured before and
+after every generator change. Shapes are anchored on exact spec text and
+fail loudly when the spec moves. Under the `fill` or `properties` oracle the
+same command asks whether the suites would have caught the class.
 
 ## EIP change manifest (`uv run eip-manifest`)
 
