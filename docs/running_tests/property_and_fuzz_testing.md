@@ -5,7 +5,8 @@ a frozen, hand-authored result? The tools on this page ask three others:
 
 - Does the spec obey laws that must hold for *every* block?
 - Would *any* test notice if the spec were wrong in a small way?
-- Does a client agree with the spec on inputs nobody hand-wrote?
+- Do clients agree with the spec — and with each other — on inputs nobody
+  hand-wrote?
 
 One rule governs all of them: **the generator chooses inputs, EELS computes
 outputs.** Nothing here authors an expected post-state. Every oracle is a
@@ -18,28 +19,30 @@ stated law, another implementation, or the spec itself.
   `--invariant-checks` is off by default and warn-only: violations become
   warnings plus an `invariant_violations` entry in the fixture's `_info`
   metadata; the fixture bytes are identical either way.
-- **Exploration is not conformance.** `fuzz`, `fuzz diff`, `mutate`,
-  `fuzz distill`, and `eip-manifest` are separate `uv run` commands because
-  they are slow (mutation re-runs a suite per mutant), need external binaries
-  (a client `t8n`), or produce findings rather than fixtures. None of that
-  belongs in the `fill` hot path.
+- **Exploration is not conformance.** `fuzz`, `mutate`, and `eip-manifest`
+  are separate `uv run` commands because they are slow (mutation re-runs a
+  suite per mutant), need client binaries, or produce findings rather than
+  fixtures. None of that belongs in the `fill` hot path.
 - **Property tests are not fixtures.** `fill` collects `tests/`, so Hypothesis
   tests live in `tests_property/` and run as plain pytest via
   `just test-spec-properties`.
+- **Client setup is per checkout, not per command.** Which clients to compare,
+  where their binaries are, and what to run live in a gitignored `fuzz.yaml`,
+  so a run is `fuzz diff --campaign NAME` rather than a chain of paths.
 
 ## The layers
 
 Each layer uses the ones below it as its oracle or its input.
 
-| Layer          | Command                      | Oracle                      | Finds                                    |
-| -------------- | ---------------------------- | --------------------------- | ---------------------------------------- |
-| Property tests | `just test-spec-properties`  | EIP / Yellow Paper prose    | a component violating a stated law       |
-| Invariants     | `fill --invariant-checks`    | chain laws                  | spec or framework bugs on any test       |
-| Fuzzing        | `uv run fuzz`                | invariants                  | crashes and violations on generated input|
-| Differential   | `uv run fuzz diff`   | a client transition tool    | self-consistent bugs (mispriced constant)|
-| Mutation       | `uv run mutate`              | the tests themselves        | mutants no test kills (coverage gaps)    |
-| Distillation   | `uv run fuzz distill`        | —                           | turns a corpus case into a reviewable test|
-| Manifest       | `uv run eip-manifest`        | —                           | what a fork changed, per EIP             |
+| Layer          | Command                     | Oracle                      | Finds                                     |
+| -------------- | --------------------------- | --------------------------- | ----------------------------------------- |
+| Property tests | `just test-spec-properties` | EIP / Yellow Paper prose    | a component violating a stated law        |
+| Invariants     | `fill --invariant-checks`   | chain laws                  | spec or framework bugs on any test        |
+| Fuzzing        | `uv run fuzz run`           | invariants                  | crashes and violations on generated input |
+| Differential   | `uv run fuzz diff`          | other clients, then EELS    | self-consistent bugs (mispriced constant) |
+| Mutation       | `uv run mutate`             | the tests themselves        | mutants no test kills (coverage gaps)     |
+| Distillation   | `uv run fuzz distill`       | —                           | turns a corpus case into a reviewable test|
+| Manifest       | `uv run eip-manifest`       | —                           | what a fork changed, per EIP              |
 
 ## Property tests (`tests_property/`)
 
@@ -53,11 +56,11 @@ just test-spec-properties
 just test-spec-properties --hypothesis-profile=nightly
 ```
 
-| Profile   | Behaviour                                                         |
-| --------- | ----------------------------------------------------------------- |
+| Profile   | Behaviour                                                          |
+| --------- | ------------------------------------------------------------------ |
 | `ci`      | default; derandomized so runs reproduce, 200 examples per property |
-| `dev`     | randomized exploration for local runs                             |
-| `nightly` | 5000 examples, randomized                                         |
+| `dev`     | randomized exploration for local runs                              |
+| `nightly` | 5000 examples, randomized                                          |
 
 A found regression is pinned as an explicit `@example(...)` on the failing test.
 
@@ -66,12 +69,12 @@ tests: EIP prose, the Yellow Paper, or an independent reference model.
 Transcribing the EELS formula into a test is circular and proves nothing. Each
 property's docstring records its grounding.
 
-| Theme                  | Modules                                                                 |
-| ---------------------- | ----------------------------------------------------------------------- |
-| Spec components        | `test_rlp`, `test_trie`, `test_numeric`, `test_gas`, `test_intrinsic_cost`, `test_signatures` |
-| Stateful               | `test_state_machine` — `RuleBasedStateMachine` driving the state tracker against a reference model |
-| EIP-mined (Amsterdam)  | `test_eip7825`, `test_eip7928_bal`, `test_eip8037_state_gas`, `test_frame_gas_lifecycle` |
-| Manifest-driven        | `test_archetype_header_field`, `test_manifest_covariant` — one body, every fork transition |
+| Theme                 | Modules                                                                                            |
+| --------------------- | -------------------------------------------------------------------------------------------------- |
+| Spec components       | `test_rlp`, `test_trie`, `test_numeric`, `test_gas`, `test_intrinsic_cost`, `test_signatures`      |
+| Stateful              | `test_state_machine` — `RuleBasedStateMachine` driving the state tracker against a reference model |
+| EIP-mined (Amsterdam) | `test_eip7825`, `test_eip7928_bal`, `test_eip8037_state_gas`, `test_frame_gas_lifecycle`           |
+| Manifest-driven       | `test_archetype_header_field`, `test_manifest_covariant` — one body, every fork transition         |
 
 Shared Hypothesis strategies (addresses, byte data, sized integers) live in
 `tests_property/strategies/`.
@@ -95,7 +98,7 @@ account as beneficiary (the balance burns), and a same-block destroy plus
 re-credit (the nonce resets to 0). Modeling them is the precondition for making
 the checker default-on.
 
-The same checker is the oracle for `uv run fuzz` and for `mutate --oracle fill`.
+The same checker is the oracle for `fuzz run` and for `mutate --oracle fill`.
 
 ## How fuzzing works
 
@@ -111,13 +114,22 @@ that produced it.
 Bytecode generation is **stack-aware**: it tracks a virtual stack height and
 pushes operands before each opcode, so programs execute real logic instead of
 reverting on the first underflow. Dynamic jumps are excluded (without a
-control-flow model they land on invalid destinations). Each contract also gets
-`STATICCALL`s into the fork's precompiles — at least one per contract, plus an
-occasional probe just past the precompile address range — and stores the
-success flag and `RETURNDATASIZE` to storage so a divergence in either shows in
-the post-state, not only in gas. Precompiles the fork *newly added* are
-up-weighted (`eip_properties/targeting.py`, fed by the manifest): a fresh curve
-operation is where a consensus bug hides, not decade-old `ecrecover`.
+control-flow model they land on invalid destinations).
+
+Two kinds of message call are injected, each storing its success flag and
+`RETURNDATASIZE` to storage so a divergence shows in the post-state, not only
+in gas:
+
+- **Into precompiles** — at least one per contract, as `STATICCALL` or as
+  value-bearing `CALL`/`CALLCODE`, plus an occasional probe just past the
+  precompile address range. Precompiles the fork *newly added* are up-weighted
+  (`eip_properties/targeting.py`, fed by the manifest): a fresh curve operation
+  is where a consensus bug hides, not decade-old `ecrecover`.
+- **Into sibling contracts and the contract itself** — every kind
+  (`CALL`, `CALLCODE`, `DELEGATECALL`, `STATICCALL`), so nested frames,
+  recursion, and reverting or halting children arise naturally. Gas is drawn
+  from a set straddling the stipend and typical precompile costs, so calls
+  fail about as often as they succeed.
 
 ### 2. Execution through EELS
 
@@ -129,13 +141,13 @@ Each case becomes a `BlockchainTest` and is filled in-process through the
 reference spec; every block is checked against the invariants above. A crash
 or a violation is an *interesting* case.
 
-| Option          | Default | Purpose                                              |
-| --------------- | ------- | ---------------------------------------------------- |
-| `--fork`        | —       | fork to fuzz                                         |
+| Option          | Default | Purpose                                                 |
+| --------------- | ------- | ------------------------------------------------------- |
+| `--fork`        | —       | fork to fuzz                                            |
 | `--seed-start`  | `0`     | first seed; with `--count` defines a reproducible range |
-| `--count`       | `100`   | number of seeds                                      |
-| `--corpus DIR`  | none    | save interesting cases here as `FuzzerOutput` JSON   |
-| `--no-minimize` | off     | skip delta-debugging of saved cases                  |
+| `--count`       | `100`   | number of seeds                                         |
+| `--corpus DIR`  | none    | save interesting cases here as `FuzzerOutput` JSON      |
+| `--no-minimize` | off     | skip delta-debugging of saved cases                     |
 
 ### 3. Minimization and the corpus
 
@@ -146,37 +158,98 @@ The result is saved as plain `FuzzerOutput` JSON (`<Fork>_<label>_seed<N>.json`)
 the fuzzer bridge's native input format, so existing tooling consumes it
 unchanged.
 
-### 4. Differential: EELS versus a client
+### 4. Differential: clients against each other, EELS as the judge
 
-```console
-go build -o ./build/bin/evm ./cmd/evm        # in a go-ethereum checkout
-uv run fuzz diff --fork Osaka --client path/to/evm --count 2000 \
-    --workers 8 --corpus divergences/
+Declare the clients once in a gitignored `fuzz.yaml` at the repository root:
+
+```yaml
+clients:
+  - name: geth
+    build: {ref: master}            # known recipe: cloned, built, cached by commit
+  - name: geth-pr
+    build: {recipe: geth, ref: pr/1234}
+  - name: evmone
+    path: ~/src/evmone/build/bin/evmone-t8n
+campaigns:
+  amsterdam:
+    fork: Amsterdam
+    clients: [geth, geth-pr, evmone]
+    count: 2000
+    workers: 8
+    corpus: divergences/
 ```
 
-Each case runs through EELS in-process *and* the client's `t8n`. The results
-are compared field by field — `state_root`, `receipts_root`, `logs_hash`,
-`gas_used`, `withdrawals_root`, `blob_gas_used`, `requests_hash`,
-`block_access_list_hash` — plus the set of rejected transactions. One side
-failing where the other succeeds is a divergence; both failing is agreement.
-Divergences are minimized with a "still diverges" predicate and saved to the
-corpus.
+```console
+uv run fuzz clients            # source · binary · version, per client
+uv run fuzz clients --update   # re-resolve refs, build new commits
+uv run fuzz diff --campaign amsterdam
+uv run fuzz diff --fork Osaka --client path/to/evm --count 300 -j 6
+```
+
+A client is a binary on disk or a source build. Builds are cloned under
+`~/.cache/eels-fuzz/<name>` (or `$EELS_FUZZ_CACHE`), the ref resolved to a
+commit, and each commit built at most once into its own directory; switching
+branches never rebuilds what exists. Any t8n wrapper EEST ships is detected
+from the binary (`evm`, `evmtool`, `nethtest`, `evmone-t8n`, ...). EEST reads
+the client off the `--version` line, which echoes the binary's *name*, so a
+built artifact must carry the canonical name — known recipes handle that.
+
+A run then does four things:
+
+1. **Manifest.** Prints and, with a corpus, writes `manifest.json`: the spec
+   commit, each client's version line, the generator version, fork, and seed
+   range. A divergence without provenance is a rumor.
+2. **Baseline gate.** Every client must agree with EELS on a fixed set of seeds
+   (far above any campaign's range). A client that does not is stale — built
+   before the spec's latest change — and the run stops naming it
+   (`stale clients: evm: 3/10`) rather than producing a wall of false
+   divergences. `--no-baseline` skips it.
+3. **Tiered comparison.** With two or more clients, each case runs the natives
+   first; EELS runs only when they disagree, and then settles who is wrong.
+   Fields compared: `state_root`, `receipts_root`, `logs_hash`, `gas_used`,
+   `withdrawals_root`, `blob_gas_used`, `requests_hash`,
+   `block_access_list_hash`, and the set of rejected transactions. One tool
+   failing where another succeeds is a divergence; every tool failing is
+   agreement. `--no-tiering` runs EELS on every case.
+4. **Majority view.** Each divergence names the minority — a tie sides with
+   EELS — so the report says *who* disagrees, not only that someone does.
+   Divergent cases are minimized with a "still diverges" predicate and saved.
+
+On today's small generated cases tiering saves little (about 5% on 300
+seeds), because each client call is a subprocess spawn and that dominates the
+per-case cost; the gain grows with case size, where the Python interpreter's
+per-opcode cost takes over.
+
+| Option                                   | Purpose                                                    |
+| ---------------------------------------- | ---------------------------------------------------------- |
+| `--campaign NAME`                        | fork, clients, and run size from `fuzz.yaml`               |
+| `--config PATH`                          | a `fuzz.yaml` other than the nearest one                   |
+| `--client PATH` (repeatable)             | clients by binary; adds to or replaces the campaign's      |
+| `--fork`, `--count`, `--seed-start`, `-j`| override the campaign                                      |
+| `--baseline-seeds N`, `--no-baseline`    | size of the stale-client check (default 20), or skip it    |
+| `--no-tiering`                           | EELS on every case                                         |
+| `--corpus DIR`, `--no-minimize`          | as for `fuzz run`                                          |
 
 This is the only layer that catches a *self-consistent* bug: a mispriced gas
 constant passes every fixture EELS filled and every invariant, but a client
-disagrees.
+disagrees. It is also the only layer that catches a *client* bug — every other
+layer tests the spec.
 
-| Option          | Default | Purpose                                                    |
-| --------------- | ------- | ---------------------------------------------------------- |
-| `--evm-bin`     | —       | client transition tool (geth's `evm`)                      |
-| `--workers N`   | `1`     | process pool; output order is deterministic regardless    |
-| `--seed-start`, `--count`, `--corpus`, `--no-minimize` | | as for `fuzz` |
-
-### 5. Distillation into a reviewable test
+### 5. Replaying one case
 
 ```console
-uv run fuzz distill divergences/Osaka_divergence_seed42.json tests/osaka/test_finding.py \
-    --reason "geth/EELS state root divergence on identity precompile gas"
+uv run fuzz replay divergences/Amsterdam_divergence_seed42.json --campaign amsterdam
+```
+
+Re-runs a saved case through EELS and every client and prints each compared
+field per tool with the minority marked. Exits 1 on disagreement, so a fixed
+client can be re-checked from a script.
+
+### 6. Distillation into a reviewable test
+
+```console
+uv run fuzz distill divergences/Amsterdam_divergence_seed42.json tests/amsterdam/test_finding.py \
+    --reason "nethermind/EELS gas_used divergence on spilled state gas at halt"
 ```
 
 Renders a corpus case as a `BlockchainTestFiller` module with explicit
@@ -186,7 +259,7 @@ reproduce the original execution; `post` is left empty for the reviewer. Once
 reviewed it fills like any other test — a transient finding becomes a permanent
 fixture.
 
-### 6. Fuzzing inside an ordinary test
+### 7. Fuzzing inside an ordinary test
 
 The generator's strategies are public, so a normal seed-parametrized test can
 fuzz without any of the commands above:
@@ -228,20 +301,20 @@ into the source; the oracle runs; the source is restored — also on `SIGTERM`.
 Constant tweaks are opt-in (`--include-constants`) because they are numerous
 and noisy.
 
-| Verdict            | Meaning                                                      |
-| ------------------ | ------------------------------------------------------------ |
-| `killed (tests)`   | the oracle failed                                            |
+| Verdict                   | Meaning                                                            |
+| ------------------------- | ------------------------------------------------------------------ |
+| `killed (tests)`          | the oracle failed                                                  |
 | `killed (invariant only)` | no test failed but an invariant violation appeared (`fill` oracle) |
-| `killed (timeout)` | the run exceeded `--timeout` (an infinite loop is a kill)    |
-| `survived`         | nothing distinguished the mutant from the spec — a gap       |
+| `killed (timeout)`        | the run exceeded `--timeout` (an infinite loop is a kill)          |
+| `survived`                | nothing distinguished the mutant from the spec — a gap             |
 
-| Option                | Purpose                                                                 |
-| --------------------- | ----------------------------------------------------------------------- |
-| `--oracle fill`       | targeted `fill` with invariant checks; measures the conformance suite   |
-| `--oracle properties` | `tests_property/`; faster, measures the property suite                  |
-| `--test PATH`         | what to run (repeatable); `-x` makes kills cheap, survivors pay full cost |
-| `--max-mutants N`, `--seed` | deterministic sample of the mutant set                            |
-| `--timeout S`         | per-run limit, default 600                                              |
+| Option                      | Purpose                                                                  |
+| --------------------------- | ------------------------------------------------------------------------ |
+| `--oracle fill`             | targeted `fill` with invariant checks; measures the conformance suite    |
+| `--oracle properties`       | `tests_property/`; faster, measures the property suite                   |
+| `--test PATH`               | what to run (repeatable); `-x` makes kills cheap, survivors pay full cost |
+| `--max-mutants N`, `--seed` | deterministic sample of the mutant set                                   |
+| `--timeout S`               | per-run limit, default 600                                               |
 
 Two caveats. Mutation measures *teeth*, not correctness: a property can kill
 mutants and still be wrongly grounded, so human review of grounding stays. And
@@ -287,18 +360,22 @@ properties grounded in prose, write them as Hypothesis tests, measure them with
 `mutate --oracle properties`, and triage each into one of three tracks —
 spec defect, coverage gap, or *spec ambiguity* (the prose does not determine
 the behaviour). Ambiguities are recorded in
-[`spec_ambiguity_findings.md`](./spec_ambiguity_findings.md) with EELS's
+[`spec_ambiguity_findings.md`](../dev/spec_ambiguity_findings.md) with EELS's
 current choice cited, and are never promoted to normative.
 
 ## Where things live
 
-| Path                                                       | Contents                                   |
-| ---------------------------------------------------------- | ------------------------------------------ |
-| `tests_property/`                                          | Hypothesis suite and shared strategies     |
-| `execution_testing/specs/invariants.py`                    | invariant definitions                      |
-| `execution_testing/cli/pytest_commands/plugins/filler/invariant_checker.py` | the `fill` flag             |
-| `execution_testing/cli/fuzzer_bridge/`                     | generator, engine, corpus, differential, distill |
-| `execution_testing/fuzzing/strategies.py`                  | public `fuzzed_bytecode` / `fuzzed_calldata` |
-| `execution_testing/cli/mutation/`                          | mutant enumeration and runner              |
-| `execution_testing/eip_properties/`                        | manifest, covariant marker, structural observables, fuzz targeting |
-| `docs/dev/testing_paradigm_design.md`                      | the gap analysis and design behind all this |
+| Path                                                                        | Contents                                                           |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `tests_property/`                                                           | Hypothesis suite and shared strategies                             |
+| `execution_testing/specs/invariants.py`                                     | invariant definitions                                              |
+| `execution_testing/cli/pytest_commands/plugins/filler/invariant_checker.py` | the `fill` flag                                                    |
+| `execution_testing/cli/fuzzer_bridge/cli.py`                                | the `fuzz` command group                                           |
+| `execution_testing/cli/fuzzer_bridge/config.py`, `clients.py`               | `fuzz.yaml` model; client sources and the build cache              |
+| `execution_testing/cli/fuzzer_bridge/differential.py`                       | multi-client comparison, tiering, majority view                    |
+| `execution_testing/cli/fuzzer_bridge/baseline.py`, `run_manifest.py`        | stale-client gate; provenance record                               |
+| `execution_testing/cli/fuzzer_bridge/`                                      | generator, engine, corpus, distill                                 |
+| `execution_testing/fuzzing/strategies.py`                                   | public `fuzzed_bytecode` / `fuzzed_calldata`                       |
+| `execution_testing/cli/mutation/`                                           | mutant enumeration and runner                                      |
+| `execution_testing/eip_properties/`                                         | manifest, covariant marker, structural observables, fuzz targeting |
+| `docs/dev/testing_paradigm_design.md`                                       | the gap analysis and design behind all this                        |
