@@ -230,7 +230,9 @@ def _run_oracle(
 
 
 def _invariant_count(process: subprocess.CompletedProcess) -> int:
-    return (process.stdout + process.stderr).count(_INVARIANT_MARKER)
+    """Number of distinct invariant violations the run reported."""
+    lines = (process.stdout + process.stderr).splitlines()
+    return len({line.strip() for line in lines if _INVARIANT_MARKER in line})
 
 
 def summary_detail(summary_path: Path) -> str:

@@ -128,9 +128,9 @@ def campaign_or_fail(
     "--no-baseline", is_flag=True, help="Skip the stale-client check."
 )
 @click.option(
-    "--no-tiering",
+    "--tiering",
     is_flag=True,
-    help="Run EELS on every case instead of only on client disagreement.",
+    help="Run clients first and EELS only on their disagreement.",
 )
 @click.option(
     "--summary-json",
@@ -157,7 +157,7 @@ def differential(
     no_minimize: bool,
     baseline_seeds: Optional[int],
     no_baseline: bool,
-    no_tiering: bool,
+    tiering: bool,
     summary_path: Optional[Path],
     workers: Optional[int],
 ) -> None:
@@ -218,7 +218,7 @@ def differential(
             manifest_path=(
                 corpus_dir / "manifest.json" if corpus_dir else None
             ),
-            tiered=not no_tiering,
+            tiered=tiering,
         )
     except StaleClientError as exc:
         raise click.ClickException(
@@ -250,6 +250,11 @@ def differential(
             click.echo(
                 f"  seed {outcome.seed}: {divergence.field} {values} "
                 f"(minority: {', '.join(divergence.minority)})"
+            )
+        for tool, diff in outcome.post_state_diff.items():
+            click.echo(
+                f"  seed {outcome.seed}: {tool} post-state differs on "
+                f"{len(diff)} account(s): {', '.join(list(diff)[:3])}"
             )
     if corpus_dir is not None and report.diverged:
         click.echo(f"\ndivergent cases saved to {corpus_dir}")

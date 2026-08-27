@@ -102,3 +102,15 @@ def test_classify_ignores_baseline_invariants() -> None:
     """Warnings already present in the baseline do not count as a kill."""
     process = _completed(0, "InvariantViolationWarning: x")
     assert _classify(process, 1) == Verdict.SURVIVED
+
+
+def test_invariant_count_is_distinct_violations() -> None:
+    """Repeated identical warnings count once; distinct ones each count."""
+    from ..mutation.runner import _invariant_count
+
+    out = (
+        "InvariantViolationWarning: ether_conservation: off by 1\n"
+        "InvariantViolationWarning: ether_conservation: off by 1\n"
+        "InvariantViolationWarning: nonce_never_decreases: 0x1 went down\n"
+    )
+    assert _invariant_count(_completed(0, stdout=out)) == 2

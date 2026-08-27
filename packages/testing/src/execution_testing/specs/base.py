@@ -160,6 +160,11 @@ class BaseTest(BaseModel):
         default_factory=list
     )
 
+    @property
+    def invariant_violations(self) -> List[InvariantViolation]:
+        """Invariant violations recorded while generating this test."""
+        return list(self._invariant_violations)
+
     # Class variables, to be set by subclasses
     spec_types: ClassVar[Dict[str, Type["BaseTest"]]] = {}
     supported_fixture_formats: ClassVar[

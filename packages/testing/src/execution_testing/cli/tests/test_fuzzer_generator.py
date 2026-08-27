@@ -108,3 +108,15 @@ def test_generated_contracts_call_each_other() -> None:
                 op for op in (0xF1, 0xF2, 0xF4, 0xFA) if _has_opcode(code, op)
             }
     assert seen == {0xF1, 0xF2, 0xF4, 0xFA}
+
+
+def test_truncation_never_splits_a_push_immediate() -> None:
+    """Code is cut at instruction boundaries, so no immediate is torn."""
+    from ..fuzzer_bridge.corpus import _instruction_boundary
+
+    # PUSH32 <32 bytes> PUSH1 0x01 STOP
+    code = bytes([0x7F]) + bytes(range(32)) + bytes([0x60, 0x01, 0x00])
+    for target in range(0, len(code) + 1):
+        cut = _instruction_boundary(code, target)
+        assert cut in (0, 33, 35, 36), (target, cut)
+        assert cut <= target or cut == len(code)

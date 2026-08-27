@@ -19,17 +19,19 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-from execution_testing.client_clis import TransitionTool
+from execution_testing.client_clis import LazyAlloc, TransitionTool
 from execution_testing.client_clis.cli_types import Result
 from execution_testing.client_clis.clis.execution_specs import (
     ExecutionSpecsTransitionTool,
 )
 from execution_testing.forks import Fork, get_forks
 from execution_testing.specs.blockchain import (
+    BlockchainTest,
     environment_from_parent_header,
 )
+from execution_testing.test_types import Alloc, Environment
 
 from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
@@ -77,6 +79,8 @@ class CaseOutcome:
     divergences: List[FieldDivergence] = field(default_factory=list)
     errors: Dict[str, str] = field(default_factory=dict)
     eels_ran: bool = True
+    post_state_diff: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    """Per minority tool, the accounts on which it differs from EELS."""
 
     @property
     def asymmetric_failure(self) -> bool:
@@ -109,15 +113,36 @@ class DifferentialReport:
         return sum(1 for outcome in self.outcomes if outcome.eels_ran)
 
 
-def _transition(t8n: TransitionTool, case: FuzzerOutput, fork: Fork) -> Result:
-    """Run a single-block transition of ``case`` through ``t8n``."""
+Prepared = Tuple[BlockchainTest, Environment, Alloc]
+
+
+def _prepare(case: FuzzerOutput, fork: Fork) -> Prepared:
+    """
+    Build the test and its genesis once per case.
+
+    Genesis construction computes a state root, so it is done once and
+    shared by every tool rather than repeated per transition.
+    """
     test = blockchain_test_from_fuzzer(case, fork)
     pre, genesis = test.make_genesis(apply_pre_allocation_blockchain=True)
     env = environment_from_parent_header(genesis.header)
+    return test, env, pre
+
+
+def _transition(
+    t8n: TransitionTool, prepared: Prepared
+) -> Tuple[Result, Optional[Alloc]]:
+    """Run the prepared single-block transition through ``t8n``."""
+    test, env, pre = prepared
     built = test.generate_block_data(
         t8n=t8n, block=test.blocks[0], previous_env=env, previous_alloc=pre
     )
-    return built.result
+    alloc = (
+        built.alloc.materialize()
+        if isinstance(built.alloc, LazyAlloc)
+        else built.alloc
+    )
+    return built.result, alloc
 
 
 def _minority(values: Dict[str, str]) -> List[str]:
@@ -166,18 +191,47 @@ def compare_results(results: Dict[str, Result]) -> List[FieldDivergence]:
     return divergences
 
 
+ToolRuns = Tuple[Dict[str, Result], Dict[str, str], Dict[str, Alloc]]
+
+
 def run_tools(
     tools: Dict[str, Any], case: FuzzerOutput, fork: Fork
-) -> Tuple[Dict[str, Result], Dict[str, str]]:
-    """Run ``case`` through each tool, collecting results and failures."""
+) -> ToolRuns:
+    """
+    Run ``case`` through each tool, collecting results, failures, and the
+    post-state each tool produced.
+    """
+    prepared = _prepare(case, fork)
     results: Dict[str, Result] = {}
     errors: Dict[str, str] = {}
+    allocs: Dict[str, Alloc] = {}
     for name, tool in tools.items():
         try:
-            results[name] = _transition(tool, case, fork)
+            results[name], alloc = _transition(tool, prepared)
         except Exception as exc:  # noqa: BLE001
             errors[name] = f"{type(exc).__name__}: {exc}"
-    return results, errors
+            continue
+        if alloc is not None:
+            allocs[name] = alloc
+    return results, errors, allocs
+
+
+def post_state_diff(
+    divergences: List[FieldDivergence], allocs: Dict[str, Alloc]
+) -> Dict[str, Dict[str, Any]]:
+    """For each minority tool, the accounts on which it differs from EELS."""
+    reference = allocs.get(REFERENCE)
+    if reference is None:
+        return {}
+    diffs: Dict[str, Dict[str, Any]] = {}
+    for divergence in divergences:
+        for tool in divergence.minority:
+            if tool == REFERENCE or tool in diffs or tool not in allocs:
+                continue
+            diffs[tool] = (
+                allocs[tool].calculate_diff(reference).model_dump(mode="json")
+            )
+    return diffs
 
 
 def _agree(results: Dict[str, Result], errors: Dict[str, str]) -> bool:
@@ -208,7 +262,7 @@ def evaluate_case(
     """
     clients = {name: tool for name, tool in tools.items() if name != REFERENCE}
     if tiered and REFERENCE in tools and len(clients) > 1:
-        results, errors = run_tools(clients, case, fork)
+        results, errors, allocs = run_tools(clients, case, fork)
         if _agree(results, errors):
             return CaseOutcome(
                 seed=-1,
@@ -216,13 +270,14 @@ def evaluate_case(
                 errors=errors,
                 eels_ran=False,
             )
-        reference, reference_error = run_tools(
+        reference, reference_error, reference_alloc = run_tools(
             {REFERENCE: tools[REFERENCE]}, case, fork
         )
         results.update(reference)
         errors.update(reference_error)
+        allocs.update(reference_alloc)
     else:
-        results, errors = run_tools(tools, case, fork)
+        results, errors, allocs = run_tools(tools, case, fork)
 
     outcome = CaseOutcome(
         seed=-1,
@@ -232,7 +287,39 @@ def evaluate_case(
     )
     if len(results) > 1:
         outcome.divergences = compare_results(results)
+        outcome.post_state_diff = post_state_diff(outcome.divergences, allocs)
     return outcome
+
+
+Signature = Set[Tuple[str, Tuple[str, ...]]]
+
+
+def divergence_signature(outcome: CaseOutcome) -> Signature:
+    """
+    The (field, minority) pairs that identify *which* bug a case shows.
+
+    Minimization must preserve this, not merely "still diverges": a
+    reduction can otherwise drift onto an unrelated divergence.
+    """
+    signature: Signature = {
+        (d.field, tuple(d.minority)) for d in outcome.divergences
+    }
+    if outcome.asymmetric_failure:
+        signature.add(("failure", tuple(sorted(outcome.errors))))
+    return signature
+
+
+def still_diverges(
+    tools: Dict[str, Any],
+    case: FuzzerOutput,
+    *,
+    fork: Fork,
+    signature: Signature,
+    tiered: bool = False,
+) -> bool:
+    """Minimization predicate: the reduced case shows the same bug."""
+    outcome = evaluate_case(tools, case, fork, tiered=tiered)
+    return signature <= divergence_signature(outcome)
 
 
 def build_client_tool(path: Path) -> TransitionTool:
@@ -290,7 +377,7 @@ def differential_fuzz(
     workers: int = 1,
     baseline_seeds: int = 0,
     manifest_path: Optional[Path] = None,
-    tiered: bool = True,
+    tiered: bool = False,
 ) -> DifferentialReport:
     """
     Fuzz ``fork`` across ``seeds``, comparing EELS against every client.
@@ -351,13 +438,19 @@ def differential_fuzz(
             report.diverged += 1
             if corpus_dir is not None:
                 case = generate_fuzzer_output(fork, outcome.seed)
+                signature = divergence_signature(outcome)
                 if minimize_cases:
-                    case = minimize(case, partial(_diverges, tools, fork=fork))
-                save_case(
-                    case,
-                    corpus_dir
-                    / f"{fork.name()}_divergence_seed{outcome.seed}.json",
-                )
+                    case = minimize(
+                        case,
+                        partial(
+                            still_diverges,
+                            tools,
+                            fork=fork,
+                            signature=signature,
+                            tiered=tiered,
+                        ),
+                    )
+                save_case(case, corpus_dir / corpus_name(fork, outcome))
         else:
             report.agreed += 1
         report.outcomes.append(outcome)
@@ -365,8 +458,15 @@ def differential_fuzz(
     return report
 
 
-def _diverges(
-    tools: Dict[str, Any], case: FuzzerOutput, *, fork: Fork
-) -> bool:
-    """Return whether this case still diverges (minimization predicate)."""
-    return evaluate_case(tools, case, fork).diverged
+def corpus_name(fork: Fork, outcome: CaseOutcome) -> str:
+    """File name carrying the seed and the first (field, minority) pair."""
+    order = {name: i for i, name in enumerate(_COMPARED_FIELDS)}
+    signature = sorted(
+        divergence_signature(outcome),
+        key=lambda pair: (order.get(pair[0], len(order)), pair),
+    )
+    tag = ""
+    if signature:
+        field_name, minority = signature[0]
+        tag = f"_{field_name}_{'+'.join(minority)}"
+    return f"{fork.name()}_divergence_seed{outcome.seed}{tag}.json"
