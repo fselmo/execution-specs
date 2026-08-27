@@ -20,7 +20,7 @@ def test_manifest_records_provenance(tmp_path: Path, monkeypatch: Any) -> None:
         "eels": object(),
         "geth": SimpleNamespace(version=lambda: "evm version 1.17.6\nextra"),
     }
-    fork = SimpleNamespace(name=lambda: "Osaka")
+    fork: Any = SimpleNamespace(name=lambda: "Osaka")
     manifest = collect_manifest(fork, tools, range(5, 15))
     path = manifest.write(tmp_path / "manifest.json")
     data = json.loads(path.read_text())

@@ -94,7 +94,7 @@ def test_known_client_build_fills_defaults() -> None:
     assert build.repo == "ethereum/go-ethereum"
     assert build.ref == "v1.17.0"
     assert build.binary == "evm"
-    assert "{out}" in build.command
+    assert build.command is not None and "{out}" in build.command
 
 
 def test_recipe_fills_defaults_for_any_client_name() -> None:

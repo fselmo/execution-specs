@@ -7,7 +7,7 @@ import pytest
 from ..fuzzer_bridge import baseline as baseline_module
 from ..fuzzer_bridge import differential
 from ..fuzzer_bridge.baseline import StaleClientError, check_baseline
-from .test_differential import _fake_transition, _result
+from .test_differential import NO_FORK, _fake_transition, _result
 
 
 def test_clean_baseline_returns_zero_counts(monkeypatch: Any) -> None:
@@ -20,7 +20,9 @@ def test_clean_baseline_returns_zero_counts(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         baseline_module, "generate_fuzzer_output", lambda *_: None
     )
-    counts = check_baseline(None, {"eels": "eels", "geth": "geth"}, range(3))
+    counts = check_baseline(
+        NO_FORK, {"eels": "eels", "geth": "geth"}, range(3)
+    )
     assert counts == {"geth": 0}
 
 
@@ -42,7 +44,7 @@ def test_stale_client_is_named_with_its_count(monkeypatch: Any) -> None:
     )
     tools = {"eels": "eels", "geth": "geth", "besu": "besu"}
     with pytest.raises(StaleClientError, match="besu: 3/3") as info:
-        check_baseline(None, tools, range(3))
+        check_baseline(NO_FORK, tools, range(3))
     assert info.value.stale == {"besu": 3}
     assert "geth" not in str(info.value)
 
@@ -58,4 +60,4 @@ def test_failing_client_counts_as_stale(monkeypatch: Any) -> None:
         baseline_module, "generate_fuzzer_output", lambda *_: None
     )
     with pytest.raises(StaleClientError, match="geth: 2/2"):
-        check_baseline(None, {"eels": "eels", "geth": "geth"}, range(2))
+        check_baseline(NO_FORK, {"eels": "eels", "geth": "geth"}, range(2))
