@@ -13,8 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
 
+from execution_testing.client_clis import FixtureConsumerTool, TransitionTool
+
 from .config import BuildSource, ClientConfig
-from .differential import build_client_tool
 
 CACHE_ENV = "EELS_FUZZ_CACHE"
 
@@ -131,6 +132,23 @@ def resolve_client(
     return ResolvedClient(client.name, binary, f"build@{commit[:12]}")
 
 
+def binary_version(binary: Path) -> str:
+    """
+    First version line of ``binary``, detected as a fixture runner or a
+    t8n -- a client may be either, and `fuzz campaign` only needs the former.
+    """
+    failure: Exception = RuntimeError("no detection attempted")
+    for tool_class in (FixtureConsumerTool, TransitionTool):
+        try:
+            tool = tool_class.from_binary_path(binary_path=binary)
+            return tool.version().splitlines()[0]
+        except Exception as exc:  # noqa: BLE001 - try the other role
+            failure = exc
+    raise RuntimeError(
+        f"not a known fixture runner or t8n: {binary} ({failure})"
+    )
+
+
 def client_status(client: ClientConfig, *, update: bool = False) -> str:
     """
     One status line: source, binary, and version -- or what is wrong.
@@ -139,8 +157,8 @@ def client_status(client: ClientConfig, *, update: bool = False) -> str:
     """
     try:
         resolved = resolve_client(client, update=update, build_missing=update)
-        version = build_client_tool(resolved.binary).version().splitlines()
-        return f"{resolved.source:<18} {resolved.binary}  {version[0]}"
+        version = binary_version(resolved.binary)
+        return f"{resolved.source:<18} {resolved.binary}  {version}"
     except NotBuiltError:
         return "not built: run `fuzz clients --update`"
     except Exception as exc:  # noqa: BLE001 - status must never abort

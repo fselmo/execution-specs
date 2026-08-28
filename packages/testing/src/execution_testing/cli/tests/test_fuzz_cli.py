@@ -268,3 +268,52 @@ def test_diff_writes_summary_and_exits_nonzero_on_divergence(
     assert data["seeds"] == 10 and data["diverged"] == 1
     assert data["first_divergent_seed"] == 7
     assert data["fields"] == {"gas_used": 1}
+
+
+def test_campaign_command_runs_and_reports(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """`fuzz campaign` resolves the campaign and runs the loop."""
+    from types import SimpleNamespace
+
+    from ..fuzzer_bridge import cli as cli_module
+
+    exe = tmp_path / "evm"
+    exe.write_text("")
+    (tmp_path / "fuzz.yaml").write_text(
+        f"clients:\n  - name: geth\n    path: {exe}\n"
+        "campaigns:\n  osaka:\n    fork: Osaka\n    clients: [geth]\n"
+    )
+    seen = {}
+
+    def fake_run(options: Any, *, echo: Any) -> Any:  # noqa: ARG001
+        seen["options"] = options
+        return SimpleNamespace(signatures={}, unique_findings=lambda: 0)
+
+    monkeypatch.setattr(cli_module, "run_campaign", fake_run)
+    result = CliRunner().invoke(
+        fuzz,
+        [
+            "campaign",
+            "osaka",
+            "--count",
+            "10",
+            "--config",
+            str(tmp_path / "fuzz.yaml"),
+            "--output",
+            str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    options = seen["options"]
+    assert options.count == 10 and options.clients == {"geth": exe}
+    assert options.output == tmp_path / "out"
+
+
+def test_campaign_command_needs_a_budget(tmp_path: Path) -> None:
+    """Without --hours or --count the command refuses to run forever."""
+    (tmp_path / "fuzz.yaml").write_text("")
+    result = CliRunner().invoke(
+        fuzz, ["campaign", "x", "--config", str(tmp_path / "fuzz.yaml")]
+    )
+    assert result.exit_code != 0 and "--hours" in result.output

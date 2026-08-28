@@ -146,3 +146,19 @@ def test_malformed_config_names_the_file(tmp_path: Path) -> None:
     cfg_path.write_text("clients:\n  - name: x\n path: /a\n")
     with pytest.raises(ValueError, match="fuzz.yaml"):
         load_fuzz_config(cfg_path)
+
+
+def test_every_known_build_has_a_canonical_binary_name() -> None:
+    """Recipes name the artifact EEST detects (evm, evmtool, nethtest, ...)."""
+    from ..fuzzer_bridge.config import KNOWN_BUILDS
+
+    assert set(KNOWN_BUILDS) >= {
+        "geth",
+        "erigon",
+        "besu",
+        "nethermind",
+        "evmone",
+    }
+    for name, build in KNOWN_BUILDS.items():
+        assert build.repo and build.command and build.binary, name
+        assert "{out}" in build.command, name
