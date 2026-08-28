@@ -178,6 +178,13 @@ returnData
 stateGas
 stateGasCost
 
+# packages/testing/src/execution_testing/evm_tools/t8n/evm_trace/
+# signature.py - layered-signature API, used via lazy imports in
+# ExecutionSpecsTransitionTool._evaluate and by the fuzzer + tests
+EMPTY_SIGNATURE
+SignatureTracer
+merge_signatures
+
 # packages/testing/src/execution_testing/evm_tools/daemon.py -
 # overrides `BaseHTTPRequestHandler.log_request`
 log_request
