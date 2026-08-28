@@ -11,7 +11,7 @@ fresh-seed-only curve at equal budget.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Set, Tuple
+from typing import TYPE_CHECKING, List, Optional, Set, Tuple
 
 if TYPE_CHECKING:
     from execution_testing.evm_tools.t8n.evm_trace.signature import Signature
@@ -47,6 +47,48 @@ class NoveltyTracker:
         """Return the distinct (frames, events, bigrams) totals seen."""
         return len(self._frames), len(self._events), len(self._bigrams)
 
+    def unreached_events(self) -> List[str]:
+        """L1 events the run never fired -- the generator's target list."""
+        from execution_testing.evm_tools.t8n.evm_trace.signature import (
+            KNOWN_EVENTS,
+        )
+
+        return sorted(KNOWN_EVENTS - self._events)
+
+    def unreached_frames(self) -> List[Tuple[int, str, str]]:
+        """Enumerated L0 cells the run never reached (the reach map)."""
+        from execution_testing.evm_tools.t8n.evm_trace.signature import (
+            CALL_OPS,
+            DEPTH_BUCKETS,
+            KNOWN_HALT_KINDS,
+        )
+
+        cells = [
+            (bucket, "call", op)
+            for bucket in DEPTH_BUCKETS
+            for op in sorted(CALL_OPS)
+        ] + [
+            (bucket, "halt", halt)
+            for bucket in DEPTH_BUCKETS
+            for halt in sorted(KNOWN_HALT_KINDS)
+        ]
+        return [cell for cell in cells if cell not in self._frames]
+
+
+def render_unreached(tracker: NoveltyTracker) -> str:
+    """Render the never-fired events and never-reached frame cells."""
+    events = tracker.unreached_events()
+    frames = tracker.unreached_frames()
+    lines = [f"unreached events ({len(events)}): " + ", ".join(events)]
+    lines.append(f"unreached frame cells ({len(frames)}):")
+    for bucket, kind, name in frames:
+        lines.append(
+            f"  depth>={bucket} {kind} {name}"
+            if bucket == 3
+            else f"  depth {bucket}  {kind} {name}"
+        )
+    return "\n".join(lines)
+
 
 @dataclass
 class BaselineReport:
@@ -81,7 +123,11 @@ class CurveRow:
 
 
 def novelty_curve(
-    fork: "Fork", seeds: range, *, checkpoint: int = 50
+    fork: "Fork",
+    seeds: range,
+    *,
+    checkpoint: int = 50,
+    tracker: "Optional[NoveltyTracker]" = None,
 ) -> "List[CurveRow]":
     """
     Fill seeds serially, recording per-layer novelty at checkpoints.
@@ -102,7 +148,7 @@ def novelty_curve(
 
     eels = ExecutionSpecsTransitionTool()
     eels.compute_signature = True
-    tracker = NoveltyTracker()
+    tracker = tracker if tracker is not None else NoveltyTracker()
     rows: List[CurveRow] = []
     novel = unfillable = done = 0
     for seed in seeds:

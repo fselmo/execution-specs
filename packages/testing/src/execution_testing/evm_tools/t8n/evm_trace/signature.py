@@ -34,11 +34,45 @@ from ethereum.trace import (
     TransactionEnd,
 )
 
-_CALL_OPS = frozenset(
+CALL_OPS = frozenset(
     {"CALL", "CALLCODE", "DELEGATECALL", "STATICCALL", "CREATE", "CREATE2"}
 )
 
+KNOWN_EVENTS = frozenset(
+    {
+        "create",
+        "revert",
+        "child-revert",
+        "child-exception",
+        "precompile",
+        "state-gas",
+        "sstore-stipend",
+        "refund-clamp",
+        "call-depth-limit",
+    }
+)
+"""Every L1 tag the tracer can emit; the unreached complement is computed
+against this set, so a new event must be registered here."""
+
+KNOWN_HALT_KINDS = frozenset(
+    {
+        "STOP",
+        "Revert",
+        "OutOfGasError",
+        "InvalidOpcode",
+        "StackUnderflowError",
+        "StackDepthLimitError",
+        "WriteInStaticContext",
+    }
+)
+"""Halt kinds the L0 reach map enumerates (exception class names plus the
+clean STOP); rarer exceptional halts still land in `frames` but are not part
+of the enumerated complement."""
+
 _DEPTH_BUCKET_CAP = 3  # L0 buckets depth into {0, 1, 2, >=3} so it saturates
+
+DEPTH_BUCKETS = tuple(range(_DEPTH_BUCKET_CAP + 1))
+"""The L0 depth buckets, for enumerating the reach map's product space."""
 
 
 def _bucket(depth: int) -> int:
@@ -127,7 +161,7 @@ class SignatureTracer:
             if self._prev_op is not None:
                 self._bigrams.add((self._prev_op, name))
             self._prev_op = name
-            if name in _CALL_OPS:
+            if name in CALL_OPS:
                 self._frames.add((_bucket(depth), "call", name))
                 if name in ("CREATE", "CREATE2"):
                     self._events.add("create")
@@ -144,10 +178,15 @@ class SignatureTracer:
                 if depth > 0:
                     self._events.add("child-revert")
         elif isinstance(event, OpException):
-            self._frames.add(
-                (_bucket(depth), "halt", type(event.error).__name__)
-            )
-            if depth > 0:
+            # A REVERT reaches the tracer as OpException(Revert), never as
+            # EvmStop(REVERT) -- the unreached map exposed the dead path.
+            error_kind = type(event.error).__name__
+            self._frames.add((_bucket(depth), "halt", error_kind))
+            if error_kind == "Revert":
+                self._events.add("revert")
+                if depth > 0:
+                    self._events.add("child-revert")
+            elif depth > 0:
                 self._events.add("child-exception")
         elif isinstance(event, PrecompileStart):
             self._events.add("precompile")

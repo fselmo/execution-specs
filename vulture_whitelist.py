@@ -184,6 +184,10 @@ stateGasCost
 EMPTY_SIGNATURE
 SignatureTracer
 merge_signatures
+CALL_OPS
+DEPTH_BUCKETS
+KNOWN_EVENTS
+KNOWN_HALT_KINDS
 
 # packages/testing/src/execution_testing/evm_tools/daemon.py -
 # overrides `BaseHTTPRequestHandler.log_request`

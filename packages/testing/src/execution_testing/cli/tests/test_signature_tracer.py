@@ -55,6 +55,19 @@ def test_records_bigrams_frames_and_events() -> None:
     assert "revert" in sig.events and "child-revert" in sig.events
 
 
+def test_op_exception_revert_is_the_revert_event() -> None:
+    """A Revert exception fires revert (not child-exception)."""
+
+    class Revert(Exception):  # noqa: N818 - mirrors the spec's class name
+        pass
+
+    tracer = SignatureTracer()
+    tracer(_evm(1), OpException(error=Revert("r")))
+    events = tracer.signature().events
+    assert "revert" in events and "child-revert" in events
+    assert "child-exception" not in events
+
+
 def test_op_exception_at_depth_is_a_child_exception() -> None:
     """An OpException below the top frame is a child exception."""
     tracer = SignatureTracer()
