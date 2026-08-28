@@ -30,6 +30,9 @@ from execution_testing.forks import Fork
 
 if TYPE_CHECKING:
     from execution_testing.evm_tools.t8n import ForkCache
+    from execution_testing.evm_tools.t8n.evm_trace.signature import (
+        Signature,
+    )
 
 
 class ExecutionSpecsTransitionTool(TransitionTool):
@@ -48,6 +51,8 @@ class ExecutionSpecsTransitionTool(TransitionTool):
         del binary  # EELS doesn't use an external binary
         self.exception_mapper = ExecutionSpecsExceptionMapper()
         self.trace = trace
+        self.compute_signature = False
+        self.last_signature: Optional["Signature"] = None
         self._info_metadata: Optional[Dict[str, Any]] = {}
         # Defer importing the `ethereum` package (see `fork_cache` and
         # `version`) until the tool is actually used. The tool is constructed
@@ -141,6 +146,17 @@ class ExecutionSpecsTransitionTool(TransitionTool):
                 tracers = GroupTracer()
             tracers.add(count_tracer)
 
+        signature_tracer = None
+        if self.compute_signature:
+            from execution_testing.evm_tools.t8n.evm_trace.signature import (
+                SignatureTracer,
+            )
+
+            signature_tracer = SignatureTracer()
+            if tracers is None:
+                tracers = GroupTracer()
+            tracers.add(signature_tracer)
+
         t8n = T8N(
             transition_tool_data,
             cache=self.fork_cache,
@@ -152,6 +168,18 @@ class ExecutionSpecsTransitionTool(TransitionTool):
         if count_tracer is not None:
             output.result.opcode_count = OpcodeCount.model_validate(
                 count_tracer.results()
+            )
+
+        if signature_tracer is not None:
+            from execution_testing.evm_tools.t8n.evm_trace.signature import (
+                merge_signatures,
+            )
+
+            new_signature = signature_tracer.signature()
+            self.last_signature = (
+                new_signature
+                if self.last_signature is None
+                else merge_signatures(self.last_signature, new_signature)
             )
 
         if debug_output_path:
