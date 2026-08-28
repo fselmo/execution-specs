@@ -4,6 +4,8 @@ from typing import Iterable, Tuple
 
 from execution_testing.cli.fuzzer_bridge.signature_baseline import (
     NoveltyTracker,
+    novelty_curve,
+    render_curve,
     signature_baseline,
 )
 from execution_testing.evm_tools.t8n.evm_trace.signature import (
@@ -32,12 +34,20 @@ def test_novelty_first_is_novel_duplicate_is_not() -> None:
     assert tracker.observe(signature) is False
 
 
-def test_novelty_a_new_bigram_is_novel() -> None:
-    """A case adding one new bigram counts as novel."""
+def test_bigram_only_growth_is_not_novel() -> None:
+    """L2 is a tie-breaker: bigram growth alone never promotes."""
     tracker = NoveltyTracker()
     tracker.observe(_sig(bigrams={("ADD", "MUL")}))
     grown = _sig(bigrams={("ADD", "MUL"), ("PUSH1", "POP")})
-    assert tracker.observe(grown) is True
+    assert tracker.observe(grown) is False
+    assert tracker.counts()[2] == 2  # still tracked for ranking
+
+
+def test_a_new_event_is_novel() -> None:
+    """L1 growth promotes even when frames and bigrams are unchanged."""
+    tracker = NoveltyTracker()
+    tracker.observe(_sig(events={"create"}))
+    assert tracker.observe(_sig(events={"create", "revert"})) is True
 
 
 def test_empty_signature_is_not_novel() -> None:
@@ -64,6 +74,18 @@ def test_fill_signature_is_deterministic() -> None:
     eels.last_signature = None
     fill_case(generate_fuzzer_output(Amsterdam, 1), Amsterdam, eels)
     assert eels.last_signature == first
+
+
+def test_novelty_curve_checkpoints_are_cumulative() -> None:
+    """The curve rows grow monotonically and end at the full seed count."""
+    rows = novelty_curve(Amsterdam, range(3), checkpoint=1)
+    assert [r.seeds for r in rows] == [1, 2, 3]
+    for earlier, later in zip(rows, rows[1:], strict=False):
+        assert later.frames >= earlier.frames
+        assert later.events >= earlier.events
+        assert later.bigrams >= earlier.bigrams
+        assert later.novel >= earlier.novel
+    assert "seeds" in render_curve(rows)
 
 
 def test_baseline_over_real_seeds_reports_novelty() -> None:
