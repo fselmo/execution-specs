@@ -11,7 +11,7 @@ fresh-seed-only curve at equal budget.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Set, Tuple
+from typing import TYPE_CHECKING, List, Set, Tuple
 
 if TYPE_CHECKING:
     from execution_testing.evm_tools.t8n.evm_trace.signature import Signature
@@ -19,7 +19,15 @@ if TYPE_CHECKING:
 
 
 class NoveltyTracker:
-    """Promote a case as novel when it extends any signature layer."""
+    """
+    Promote a case as novel when it extends L0 (frames) or L1 (events).
+
+    L2 (bigrams) is folded in and reported but never drives promotion: the
+    400-seed saturation curve showed raw bigrams are a long tail that keeps
+    growing (~1.3 new pairs/seed at seed 400), so bigram-in-the-union
+    promotes ~half of all fresh seeds indefinitely -- a tie-breaker signal,
+    not a driver, exactly as the design classified it.
+    """
 
     def __init__(self) -> None:
         self._frames: Set[Tuple[int, str, str]] = set()
@@ -27,12 +35,12 @@ class NoveltyTracker:
         self._bigrams: Set[Tuple[str, str]] = set()
 
     def observe(self, signature: "Signature") -> bool:
-        """Fold a signature in; return whether any layer grew (set-union)."""
-        before = len(self._frames) + len(self._events) + len(self._bigrams)
+        """Fold a signature in; return whether L0 or L1 grew (set-union)."""
+        before = len(self._frames) + len(self._events)
         self._frames |= signature.frames
         self._events |= signature.events
         self._bigrams |= signature.bigrams
-        after = len(self._frames) + len(self._events) + len(self._bigrams)
+        after = len(self._frames) + len(self._events)
         return after > before
 
     def counts(self) -> Tuple[int, int, int]:
@@ -58,6 +66,73 @@ class BaselineReport:
             f"distinct frames={self.frames} events={self.events} "
             f"bigrams={self.bigrams}; max depth {self.max_depth}"
         )
+
+
+@dataclass
+class CurveRow:
+    """Cumulative novelty at one checkpoint of the saturation curve."""
+
+    seeds: int
+    novel: int
+    frames: int
+    events: int
+    bigrams: int
+    unfillable: int
+
+
+def novelty_curve(
+    fork: "Fork", seeds: range, *, checkpoint: int = 50
+) -> "List[CurveRow]":
+    """
+    Fill seeds serially, recording per-layer novelty at checkpoints.
+
+    The curve's shape -- which layers saturate and how fast -- sets the
+    promotion rate a corpus scheduler should expect, and is the input to
+    freezing the gate's minimum effect. The unfillable rate rides along so
+    a later generator change that shifts fillability shows up in the same
+    table.
+    """
+    from execution_testing.cli.fuzzer_bridge.campaign import fill_case
+    from execution_testing.cli.fuzzer_bridge.generator import (
+        generate_fuzzer_output,
+    )
+    from execution_testing.client_clis.clis.execution_specs import (
+        ExecutionSpecsTransitionTool,
+    )
+
+    eels = ExecutionSpecsTransitionTool()
+    eels.compute_signature = True
+    tracker = NoveltyTracker()
+    rows: List[CurveRow] = []
+    novel = unfillable = done = 0
+    for seed in seeds:
+        eels.last_signature = None
+        try:
+            fill_case(generate_fuzzer_output(fork, seed), fork, eels)
+        except Exception:  # noqa: BLE001 - unfillable is data
+            unfillable += 1
+        else:
+            signature = eels.last_signature
+            if signature is not None and tracker.observe(signature):
+                novel += 1
+        done += 1
+        if done % checkpoint == 0 or done == len(seeds):
+            frames, events, bigrams = tracker.counts()
+            rows.append(
+                CurveRow(done, novel, frames, events, bigrams, unfillable)
+            )
+    return rows
+
+
+def render_curve(rows: "List[CurveRow]") -> str:
+    """Render the curve as a compact table."""
+    lines = ["seeds  novel  frames  events  bigrams  unfillable"]
+    for row in rows:
+        lines.append(
+            f"{row.seeds:5d}  {row.novel:5d}  {row.frames:6d}  "
+            f"{row.events:6d}  {row.bigrams:7d}  {row.unfillable:10d}"
+        )
+    return "\n".join(lines)
 
 
 def signature_baseline(fork: "Fork", seeds: range) -> BaselineReport:
