@@ -1,10 +1,17 @@
 """Command-line interface for spec mutation testing."""
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence
 
 import click
 
+from .reach_log import (
+    append_reach_log,
+    eels_commit,
+    reach_record,
+    reach_trend,
+)
 from .runner import (
     DifferentialOptions,
     Oracle,
@@ -104,6 +111,20 @@ from .shapes import SHAPES
     is_flag=True,
     help="Also mutate integer/boolean constants (numerous, noisier).",
 )
+@click.option(
+    "--reach-log",
+    "reach_log_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Append trendable reach records (JSONL) here after a shape run.",
+)
+@click.option(
+    "--reach-trend",
+    "reach_trend_path",
+    type=click.Path(exists=True, path_type=Path, dir_okay=False),
+    default=None,
+    help="Print the reach trend from this log and exit.",
+)
 def mutate(
     module_path: Optional[Path],
     shape_names: Sequence[str],
@@ -119,6 +140,8 @@ def mutate(
     seed: int,
     timeout: int,
     include_constants: bool,
+    reach_log_path: Optional[Path],
+    reach_trend_path: Optional[Path],
 ) -> None:
     """
     Mutation-test a spec module: measure how many small spec errors the
@@ -128,6 +151,9 @@ def mutate(
     whether the oracle notices each -- under the differential oracle that
     is the generator's reach for the class.
     """
+    if reach_trend_path is not None:
+        click.echo(reach_trend(reach_trend_path))
+        return
     oracle_choice = Oracle(oracle)
     if (module_path is None) == (not shape_names):
         raise click.UsageError("pass exactly one of --module or --shape")
@@ -170,6 +196,19 @@ def mutate(
             click.echo(
                 f"  {result.shape.name:<34} {result.verdict.value}{detail}"
             )
+        if reach_log_path is not None:
+            stamp = datetime.now(timezone.utc).isoformat()
+            commit = eels_commit()
+            append_reach_log(
+                [
+                    reach_record(
+                        r, fork=fork, eels_commit=commit, timestamp=stamp
+                    )
+                    for r in results
+                ],
+                reach_log_path,
+            )
+            click.echo(f"reach log appended: {reach_log_path}")
         return
 
     assert module_path is not None
