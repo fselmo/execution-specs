@@ -46,8 +46,51 @@ KNOWN_BUILDS: Dict[str, BuildSource] = {
         command="go build -o {out} ./cmd/evm",
         binary="evm",
     ),
+    "erigon": BuildSource(
+        repo="erigontech/erigon",
+        command=(
+            "make BUILD_TAGS=nosqlite,noboltdb,nosilkworm evm "
+            "&& cp build/bin/evm {out}"
+        ),
+        binary="evm",
+    ),
+    "besu": BuildSource(
+        repo="besu-eth/besu",
+        command=(
+            "./gradlew installDist -x test "
+            "&& rm -rf {out}.dist && cp -r build/install/besu {out}.dist "
+            "&& ln -sf {out}.dist/bin/evmtool {out}"
+        ),
+        binary="evmtool",
+    ),
+    "nethermind": BuildSource(
+        repo="NethermindEth/nethermind",
+        command=(
+            "dotnet publish src/Nethermind/Nethermind.Test.Runner "
+            "-c release -o {out}.publish --sc false "
+            "&& ln -sf {out}.publish/nethtest {out}"
+        ),
+        binary="nethtest",
+    ),
+    "evmone": BuildSource(
+        repo="ethereum/evmone",
+        command=(
+            "cmake -S . -B build -DEVMONE_TESTING=ON "
+            "&& cmake --build build --parallel --target evmone-blockchaintest "
+            "&& cp build/bin/evmone-blockchaintest {out}"
+        ),
+        binary="evmone-blockchaintest",
+    ),
 }
-"""Build recipes for clients the framework knows how to produce."""
+"""
+Build recipes for clients the framework knows how to produce: each yields
+the client's standalone fixture runner (geth/erigon `evm`, besu `evmtool`,
+nethermind `nethtest`, evmone's blockchain-test runner). Builds use the
+toolchains in the environment: Go >= 1.24 with cgo for erigon, the JDK
+besu's Gradle toolchain asks for (25 on the devnet branches; point
+`JAVA_HOME` at it), the .NET SDK band nethermind's `global.json` pins
+(10.0.3xx), and CMake + C++20 for evmone.
+"""
 
 
 class ClientConfig(BaseModel):
@@ -83,6 +126,15 @@ class ClientConfig(BaseModel):
         return self
 
 
+class KnownSignature(BaseModel):
+    """A campaign finding understood already: counted, never bundled again."""
+
+    reason: str
+    """Substring matched against a signature's normalized reason text."""
+    client: Optional[str] = None
+    """Restrict the match to one client; any client when omitted."""
+
+
 class CampaignConfig(BaseModel):
     """A named differential run: fork, clients, and size."""
 
@@ -93,6 +145,8 @@ class CampaignConfig(BaseModel):
     workers: int = 1
     corpus: Optional[Path] = None
     baseline_seeds: int = 20
+    known: List[KnownSignature] = Field(default_factory=list)
+    """Signatures to suppress from findings (e.g. a bug already filed)."""
 
 
 class FuzzConfig(BaseModel):

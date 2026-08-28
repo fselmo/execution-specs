@@ -5,6 +5,10 @@ from typing import Optional, Sequence
 
 import click
 
+from execution_testing.forks import get_forks
+
+from .baseline import StaleClientError
+from .campaign import CampaignOptions, run_campaign
 from .clients import client_status
 from .corpus import load_case
 from .differential import (
@@ -51,6 +55,98 @@ def clients(update: bool, config_path: Optional[Path]) -> None:
         return
     for client in config.clients:
         click.echo(f"{client.name:<14} {client_status(client, update=update)}")
+
+
+@fuzz.command("campaign")
+@click.argument("name")
+@click.option("--hours", type=float, default=None, help="Time budget.")
+@click.option("--count", type=int, default=None, help="Seed budget.")
+@click.option("--batch", type=int, default=200, show_default=True)
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path, file_okay=False),
+    default=None,
+    help="Campaign directory [default: campaigns/NAME].",
+)
+@click.option(
+    "--fill-workers", type=int, default=None, help="EELS fill processes."
+)
+@click.option(
+    "--minimize", is_flag=True, help="Delta-debug each new signature."
+)
+@click.option("--fresh", is_flag=True, help="Discard prior state and corpus.")
+@click.option(
+    "--no-baseline", is_flag=True, help="Skip the stale-client check."
+)
+@click.option("--keep-fixtures", is_flag=True, help="Keep every batch file.")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="fuzz.yaml to read (default: nearest one in parent directories).",
+)
+def campaign(
+    name: str,
+    hours: Optional[float],
+    count: Optional[int],
+    batch: int,
+    output: Optional[Path],
+    fill_workers: Optional[int],
+    minimize: bool,
+    fresh: bool,
+    no_baseline: bool,
+    keep_fixtures: bool,
+    config_path: Optional[Path],
+) -> None:
+    """
+    Run a long-lived differential campaign: fill batches through EELS and
+    judge them with every client's standalone runner, keeping only what is
+    new. Resumable; leave it in a terminal.
+    """
+    if hours is None and count is None:
+        raise click.UsageError("pass --hours or --count")
+    config = load_config_or_fail(config_path)
+    campaign_config = campaign_or_fail(config, name)
+    assert campaign_config is not None
+    clients = resolve_campaign_clients(config, campaign_config.clients)
+    fork = next(f for f in get_forks() if f.name() == campaign_config.fork)
+    options = CampaignOptions(
+        fork=fork,
+        clients=clients,
+        output=output or Path("campaigns") / name,
+        seed_start=campaign_config.seed_start,
+        hours=hours,
+        count=count,
+        batch=batch,
+        fill_workers=fill_workers or campaign_config.workers,
+        minimize=minimize,
+        fresh=fresh,
+        baseline=not no_baseline,
+        keep_fixtures=keep_fixtures,
+        known=tuple((k.client, k.reason) for k in campaign_config.known),
+    )
+    click.echo(
+        f"campaign {name}: {campaign_config.fork} vs {', '.join(clients)} "
+        f"-> {options.output} "
+        f"(batch {batch}, {options.fill_workers} fill workers)"
+    )
+    try:
+        state = run_campaign(options, echo=click.echo)
+    except StaleClientError as exc:
+        raise click.ClickException(
+            f"{exc}\nrebuild the stale client(s) (`fuzz clients --update`) "
+            "or pass --no-baseline"
+        ) from exc
+    except KeyboardInterrupt:
+        click.echo(
+            "\ninterrupted; state saved -- rerun the same command to resume"
+        )
+        return
+    click.echo(
+        f"done: {state.unique_findings()} unique signature(s); "
+        f"report at {options.output / 'report.md'}"
+    )
 
 
 @fuzz.command("replay")
