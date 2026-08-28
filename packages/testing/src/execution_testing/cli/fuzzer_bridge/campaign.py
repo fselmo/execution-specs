@@ -14,15 +14,23 @@ import hashlib
 import io
 import json
 import re
+import resource
 import shutil
+import sys
 import tempfile
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from collections import deque
+from concurrent.futures import (
+    Future,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+)
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
     Any,
     Callable,
+    Deque,
     Dict,
     List,
     Mapping,
@@ -250,6 +258,15 @@ def render_report(
         f"| all-fail (suspect) | {state.counts.get('all-fail', 0)} |",
         f"| fill errors | {fill_errors} "
         f"({fill_error_rate:.1%} of {generated} candidates) |",
+    ]
+    fill_ms = state.counts.get("fill_ms", 0)
+    fill_filled = state.counts.get("fill_filled", 0)
+    if fill_filled:
+        lines += [
+            f"| fill worker-side | {fill_ms / fill_filled:.1f} ms/case, "
+            f"peak worker rss {state.counts.get('rss_mb_peak', 0)} MB |",
+        ]
+    lines += [
         "",
         "## Versions",
         "",
@@ -354,7 +371,12 @@ def _fill_pool(workers: int, fork: Fork) -> ProcessPoolExecutor:
 def fill_batch(
     seeds: range, pool: Any
 ) -> Tuple[Dict[str, Dict[str, Any]], Dict[int, str]]:
-    """Fill ``seeds`` in the pool: fixtures keyed `seed_<n>`, plus errors."""
+    """
+    Fill ``seeds`` one task per seed (kept for the scaling probes).
+
+    The campaign itself fills through ``_fill_slice`` shards: per-seed
+    dispatch measurably leaves pool workers idle at higher worker counts.
+    """
     fixtures: Dict[str, Dict[str, Any]] = {}
     errors: Dict[int, str] = {}
     for seed, fixture, error in pool.map(_fill_seed, seeds):
@@ -363,6 +385,68 @@ def fill_batch(
         else:
             errors[seed] = error or "unknown"
     return fixtures, errors
+
+
+def shard_path(fixtures_dir: Path, seeds: Sequence[int]) -> Path:
+    """Name a shard by its seed range, so provenance is derivable."""
+    return fixtures_dir / f"batch_{seeds[0]}_{seeds[-1]}.json"
+
+
+def _worker_rss_mb() -> int:
+    """Return the process's peak RSS in MB (bytes on macOS, KB elsewhere)."""
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
+    return int(peak / divisor)
+
+
+def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
+    """
+    Fill a slice of seeds, write its shard and metadata, return a summary.
+
+    The worker writes the fixture file itself and hands back only names,
+    errors, and telemetry: per-case dispatch through the pool leaves
+    workers idle, and the fixtures never need to transit the parent.
+    """
+    seeds, fixtures_dir = args
+    fork = _FILL["fork"]
+    started = time.perf_counter()
+    fixtures: Dict[str, Dict[str, Any]] = {}
+    errors: Dict[int, str] = {}
+    for seed in seeds:
+        try:
+            fixtures[f"seed_{seed}"] = fill_case(
+                generate_fuzzer_output(fork, seed), fork, _FILL["eels"]
+            )
+        except Exception as exc:  # noqa: BLE001 - a fill failure is data
+            errors[seed] = f"{type(exc).__name__}: {exc}"[:200]
+    seconds = time.perf_counter() - started
+    path = shard_path(Path(fixtures_dir), seeds)
+    if fixtures:
+        path.write_text(json.dumps(fixtures))
+    rss_mb = _worker_rss_mb()
+    path.with_suffix(".meta.json").write_text(
+        json.dumps(
+            {
+                "seeds": [seeds[0], seeds[-1]],
+                "generator_version": GENERATOR_VERSION,
+                "filled": len(fixtures),
+                "fill_errors": {str(k): v for k, v in errors.items()},
+                "worker_seconds": round(seconds, 3),
+                "ms_per_case": round(seconds / len(fixtures) * 1000, 2)
+                if fixtures
+                else None,
+                "rss_mb": rss_mb,
+            },
+            indent=1,
+        )
+    )
+    return {
+        "path": str(path) if fixtures else None,
+        "names": list(fixtures),
+        "errors": errors,
+        "seconds": seconds,
+        "rss_mb": rss_mb,
+    }
 
 
 @dataclass
@@ -394,10 +478,15 @@ def run_campaign(
     """
     Run batches until the time or count budget is spent.
 
-    Every batch: fill, write one fixture file, run each client's runner over
-    it concurrently, classify each fixture, bundle new signatures, persist
-    state, rewrite the report. The first batch of a fresh campaign doubles
-    as the baseline: a client failing more than half of it is stale.
+    Batches are filled as pipelined slices: several batch-sized fill tasks
+    stay in flight, each worker writes its own seed-range-named shard (plus
+    metadata), and the parent receives names and telemetry only -- per-case
+    pool dispatch measurably left workers idle. Batches are processed in
+    submission order, so state and resume semantics stay contiguous. Per
+    processed batch: run each client's runner over the shard concurrently,
+    classify each fixture, bundle new signatures, persist state, rewrite
+    the report. The first batch of a fresh campaign doubles as the
+    baseline: a client failing more than half of it is stale.
     """
     output = options.output
     if options.fresh and output.exists():
@@ -464,100 +553,140 @@ def run_campaign(
         return state
 
     with _fill_pool(options.fill_workers, options.fork) as pool:
-        while True:
-            if end_seed is not None and state.next_seed >= end_seed:
-                break
+        in_flight = max(2 * options.fill_workers, 2)
+        pending: Deque[Tuple[range, "Future[Dict[str, Any]]"]] = deque()
+        submit_cursor = state.next_seed
+
+        def submit_one() -> bool:
+            nonlocal submit_cursor
+            if end_seed is not None and submit_cursor >= end_seed:
+                return False
             if deadline is not None and time.time() >= deadline:
-                break
-            stop = state.next_seed + options.batch
+                return False
+            stop = submit_cursor + options.batch
             if end_seed is not None:
                 stop = min(stop, end_seed)
-            seeds = range(state.next_seed, stop)
+            seeds = range(submit_cursor, stop)
+            future = pool.submit(_fill_slice, (list(seeds), str(fixtures_dir)))
+            pending.append((seeds, future))
+            submit_cursor = stop
+            return True
 
-            fixtures, fill_errors = fill_batch(seeds, pool)
+        while True:
+            while len(pending) < in_flight and submit_one():
+                pass
+            if not pending:
+                break
+            if deadline is not None and time.time() >= deadline:
+                while len(pending) > 1 and pending[-1][1].cancel():
+                    pending.pop()
+            seeds, future = pending.popleft()
+            slice_result = future.result()
+            names: List[str] = slice_result["names"]
+            fill_errors = slice_result["errors"]
             state.counts["fill_error"] = state.counts.get(
                 "fill_error", 0
             ) + len(fill_errors)
-            batch_file = fixtures_dir / f"batch_{seeds.start}.json"
-            batch_file.write_text(json.dumps(fixtures))
-
-            with ThreadPoolExecutor(max_workers=max(1, len(runners))) as tp:
-                futures = {
-                    name: tp.submit(
-                        _timed_run, runner, batch_file, list(fixtures)
-                    )
-                    for name, runner in runners.items()
-                }
-                timed = {name: f.result() for name, f in futures.items()}
-            results = {name: verdicts for name, (verdicts, _) in timed.items()}
-            runner_seconds = {
-                name: seconds for name, (_, seconds) in timed.items()
-            }
+            state.counts["fill_ms"] = state.counts.get("fill_ms", 0) + int(
+                slice_result["seconds"] * 1000
+            )
+            state.counts["fill_filled"] = state.counts.get(
+                "fill_filled", 0
+            ) + len(names)
+            state.counts["rss_mb_peak"] = max(
+                state.counts.get("rss_mb_peak", 0),
+                int(slice_result["rss_mb"]),
+            )
 
             keep_file = False
-            batch_failures = dict.fromkeys(runners, 0)
-            for fixture_name, fixture in fixtures.items():
-                verdicts = {
-                    name: results[name][fixture_name] for name in runners
+            runner_seconds: Dict[str, float] = {}
+            if names:
+                batch_file = Path(slice_result["path"])
+                with ThreadPoolExecutor(
+                    max_workers=max(1, len(runners))
+                ) as tp:
+                    futures = {
+                        name: tp.submit(_timed_run, runner, batch_file, names)
+                        for name, runner in runners.items()
+                    }
+                    timed = {name: f.result() for name, f in futures.items()}
+                results = {
+                    name: verdicts for name, (verdicts, _) in timed.items()
                 }
-                kind = classify(verdicts)
-                state.counts[kind] = state.counts.get(kind, 0) + 1
-                for name, verdict in verdicts.items():
-                    if not verdict.passed:
-                        state.client_failures[name] = (
-                            state.client_failures.get(name, 0) + 1
+                runner_seconds = {
+                    name: seconds for name, (_, seconds) in timed.items()
+                }
+
+                shard_fixtures: Optional[Dict[str, Any]] = None
+                batch_failures = dict.fromkeys(runners, 0)
+                for fixture_name in names:
+                    verdicts = {
+                        name: results[name][fixture_name] for name in runners
+                    }
+                    kind = classify(verdicts)
+                    state.counts[kind] = state.counts.get(kind, 0) + 1
+                    for name, verdict in verdicts.items():
+                        if not verdict.passed:
+                            state.client_failures[name] = (
+                                state.client_failures.get(name, 0) + 1
+                            )
+                            batch_failures[name] += 1
+                    if kind != "divergence":
+                        continue
+                    seed = _seed_of(fixture_name)
+                    for signature in per_client_signatures(verdicts):
+                        known = is_known(signature, options.known)
+                        bundle = corpus_dir / signature_id(signature)
+                        client, reason = signature
+                        new = state.record_signature(
+                            client,
+                            reason,
+                            seed=seed,
+                            bundle=None if known else str(bundle),
+                            known=known,
                         )
-                        batch_failures[name] += 1
-                if kind != "divergence":
-                    continue
-                seed = _seed_of(fixture_name)
-                for signature in per_client_signatures(verdicts):
-                    known = is_known(signature, options.known)
-                    bundle = corpus_dir / signature_id(signature)
-                    client, reason = signature
-                    new = state.record_signature(
-                        client,
-                        reason,
-                        seed=seed,
-                        bundle=None if known else str(bundle),
-                        known=known,
+                        if new and not known:
+                            keep_file = True
+                            if shard_fixtures is None:
+                                shard_fixtures = json.loads(
+                                    batch_file.read_text()
+                                )
+                            _write_bundle(
+                                bundle,
+                                options,
+                                fixture_name,
+                                shard_fixtures[fixture_name],
+                                verdicts,
+                                runners,
+                                focus_client=client,
+                            )
+
+                if fresh_start and fill_batches == 0 and options.baseline:
+                    stale = {
+                        name: count
+                        for name, count in batch_failures.items()
+                        if count > len(names) / 2
+                    }
+                    if stale:
+                        state.save()
+                        write_report()
+                        raise StaleClientError(stale, len(names))
+
+                if not keep_file and not options.keep_fixtures:
+                    batch_file.unlink(missing_ok=True)
+                    batch_file.with_suffix(".meta.json").unlink(
+                        missing_ok=True
                     )
-                    if new and not known:
-                        keep_file = True
-                        _write_bundle(
-                            bundle,
-                            options,
-                            fixture_name,
-                            fixture,
-                            verdicts,
-                            runners,
-                            focus_client=client,
-                        )
 
-            if (
-                fresh_start
-                and fill_batches == 0
-                and options.baseline
-                and fixtures
-            ):
-                stale = {
-                    name: count
-                    for name, count in batch_failures.items()
-                    if count > len(fixtures) / 2
-                }
-                if stale:
-                    state.save()
-                    write_report()
-                    raise StaleClientError(stale, len(fixtures))
-
-            if not keep_file and not options.keep_fixtures:
-                batch_file.unlink(missing_ok=True)
             state.next_seed = seeds.stop
             state.save()
             write_report()
             fill_batches += 1
             elapsed = time.time() - run_started
             counts = state.counts
+            fill_ms_case = (
+                slice_result["seconds"] / len(names) * 1000 if names else 0.0
+            )
             echo(
                 f"seeds {seeds.start}..{seeds.stop - 1}: "
                 f"agreed {counts.get('agreed', 0)} "
@@ -565,6 +694,8 @@ def run_campaign(
                 f"({state.unique_findings()} unique) "
                 f"all-fail {counts.get('all-fail', 0)} "
                 f"fill-errors {counts.get('fill_error', 0)} "
+                f"| fill {fill_ms_case:.0f}ms/case "
+                f"rss {slice_result['rss_mb']}MB "
                 f"| {elapsed / 60:.1f} min | runners "
                 + " ".join(f"{n} {s:.1f}s" for n, s in runner_seconds.items())
             )
