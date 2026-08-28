@@ -9,10 +9,13 @@ fragile call/halt pairing is needed:
 - L0 ``frames``: the set of ``(depth, kind, name)`` frame events -- which call
   kinds fired at which depths, and which halt kinds ended a frame at which
   depth. Captures "did we get deep" and the shape of the call/halt surface.
-- L1 ``events``: rare/exceptional event tags derivable from the stream (a child
-  exception, a revert, a create, a precompile call, a state-gas charge). Events
-  needing a new spec-branch hook (SSTORE stipend crossing, refund clamp, 63/64
-  starvation) are deferred to a later change.
+- L1 ``events``: rare/exceptional event tags, derived from the stream and the
+  live ``Evm`` -- a child exception, a revert, a create, a precompile call, a
+  state-gas charge, an SSTORE at/below the 2300 stipend, a refund clamped by
+  the EIP-3529 fifth, a call at the 1024 depth ceiling. The 63/64 starvation is
+  deliberately omitted: reproducing it needs the op's memory/extra costs
+  (computed in the op body, invisible at ``OpStart``), so it stays covered by
+  the CREATE2-self-copy motif.
 - L2 ``bigrams``: the set of consecutive executed-opcode pairs.
 
 Novelty is set-union across all three layers (see the fuzzer's NoveltyTracker).
@@ -28,6 +31,7 @@ from ethereum.trace import (
     PrecompileStart,
     StateGasAndRefund,
     TraceEvent,
+    TransactionEnd,
 )
 
 _CALL_OPS = frozenset(
@@ -40,6 +44,35 @@ _DEPTH_BUCKET_CAP = 3  # L0 buckets depth into {0, 1, 2, >=3} so it saturates
 def _bucket(depth: int) -> int:
     """Bucket a raw frame depth into `{0, 1, 2, >=3}` for L0 novelty."""
     return depth if depth < _DEPTH_BUCKET_CAP else _DEPTH_BUCKET_CAP
+
+
+_CALL_STIPEND = 2300  # EIP-2200: SSTORE forbidden at/below the call stipend
+_STACK_DEPTH_LIMIT = 1024  # EIP-150 call-depth ceiling
+
+
+def _gas_left(evm: object) -> Optional[int]:
+    """Execution gas remaining, defensive across the EIP-8037 GasMeter move."""
+    source = getattr(evm, "gas_meter", evm)
+    value = getattr(source, "gas_left", None)
+    return int(value) if value is not None else None
+
+
+def _refund_is_clamped(evm: object) -> bool:
+    """Whether the tx's raw refund exceeds the gas_used // 5 cap (EIP-3529)."""
+    meter = getattr(evm, "gas_meter", None)
+    tx_env = getattr(evm, "tx_env", None)
+    if meter is None or tx_env is None:
+        return False
+    try:
+        refund = int(meter.refund_counter)
+        used_before_refund = (
+            int(tx_env.gas_limit)
+            - int(meter.gas_left)
+            - int(meter.state_gas_left)
+        )
+    except (AttributeError, TypeError):
+        return False
+    return refund > used_before_refund // 5
 
 
 @dataclass(frozen=True)
@@ -98,6 +131,12 @@ class SignatureTracer:
                 self._frames.add((_bucket(depth), "call", name))
                 if name in ("CREATE", "CREATE2"):
                     self._events.add("create")
+                if depth >= _STACK_DEPTH_LIMIT:
+                    self._events.add("call-depth-limit")
+            elif name == "SSTORE":
+                gas_left = _gas_left(evm)
+                if gas_left is not None and gas_left <= _CALL_STIPEND:
+                    self._events.add("sstore-stipend")
         elif isinstance(event, EvmStop):
             self._frames.add((_bucket(depth), "halt", event.op.name))
             if event.op.name == "REVERT":
@@ -114,6 +153,9 @@ class SignatureTracer:
             self._events.add("precompile")
         elif isinstance(event, StateGasAndRefund):
             self._events.add("state-gas")
+        elif isinstance(event, TransactionEnd):
+            if _refund_is_clamped(evm):
+                self._events.add("refund-clamp")
 
     def signature(self) -> Signature:
         """Return the accumulated signature."""
