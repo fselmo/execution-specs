@@ -25,9 +25,10 @@ import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .mutations import Mutant, apply_mutant, enumerate_mutants
+from .reach_log import summary_data
 from .shapes import Shape, applied
 from .source import restore_on_signal
 
@@ -77,6 +78,7 @@ class ShapeResult:
     shape: Shape
     verdict: Verdict
     detail: str = ""
+    summary: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -335,9 +337,12 @@ def run_shapes(
             verdict = _classify(process, baseline_invariants, oracle=oracle)
             summary = output_dir / "summary.json"
             detail = ""
+            data: Optional[Dict[str, Any]] = None
             if oracle is Oracle.DIFFERENTIAL and process is not None:
-                detail = summary_detail(summary) if summary.exists() else ""
-            results.append(ShapeResult(shape, verdict, detail))
+                if summary.exists():
+                    detail = summary_detail(summary)
+                    data = summary_data(summary)
+            results.append(ShapeResult(shape, verdict, detail, data))
     return results
 
 
