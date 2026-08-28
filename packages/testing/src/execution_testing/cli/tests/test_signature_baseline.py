@@ -4,10 +4,12 @@ from typing import Iterable, Tuple
 
 from execution_testing.cli.fuzzer_bridge.signature_baseline import (
     NoveltyTracker,
+    fork_reach_space,
     novelty_curve,
     render_curve,
     render_unreached,
     signature_baseline,
+    unreachable_on_fork,
 )
 from execution_testing.evm_tools.t8n.evm_trace.signature import (
     EMPTY_SIGNATURE,
@@ -87,6 +89,30 @@ def test_unreached_maps_shrink_as_signatures_arrive() -> None:
     assert (0, "call", "CALL") not in tracker.unreached_frames()
     assert len(tracker.unreached_frames()) == cells_before - 1
     assert "unreached events" in render_unreached(tracker)
+
+
+def test_fork_reach_space_derives_from_the_fork() -> None:
+    """Halt kinds come from the fork's own exception classes."""
+    call_ops, halt_kinds = fork_reach_space(Amsterdam)
+    assert "CREATE2" in call_ops and "CALL" in call_ops
+    assert {"STOP", "Revert", "OutOfGasError"} <= halt_kinds
+    assert "KZGProofError" in halt_kinds  # beyond any static list
+
+
+def test_capped_fork_marks_depth_limit_unreachable() -> None:
+    """A 7825 tx-gas cap makes the 1024 depth limit unreachable."""
+    events, cells = unreachable_on_fork(Amsterdam)
+    assert "call-depth-limit" in events
+    assert (0, "halt", "StackDepthLimitError") in cells
+    assert (0, "halt", "WriteInStaticContext") in cells
+
+
+def test_render_unreached_separates_fork_unreachable() -> None:
+    """Fork-impossible cells render apart from the target list."""
+    text = render_unreached(NoveltyTracker(), fork=Amsterdam)
+    assert "unreachable on this fork" in text
+    assert "KZGProofError" in text  # derived cell shows as unreached
+    assert "call-depth-limit" not in text.splitlines()[0]
 
 
 def test_novelty_curve_checkpoints_are_cumulative() -> None:
