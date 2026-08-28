@@ -15,6 +15,7 @@ from ..fuzzer_bridge.campaign import (
     normalize_error,
     per_client_signatures,
     render_report,
+    shard_path,
 )
 
 
@@ -101,9 +102,33 @@ def test_report_shows_fill_error_rate(tmp_path: Path) -> None:
     assert "10.0% of 100 candidates" in text
 
 
-def _fake_fill(seeds: range, _pool: Any) -> Any:
-    """Stand-in fill: one trivial fixture per seed, no errors."""
-    return {f"seed_{s}": {"blocks": [], "seed": s} for s in seeds}, {}
+class _FakePool:
+    """Synchronous stand-in pool: fills a slice of trivial fixtures."""
+
+    def __enter__(self) -> "_FakePool":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        return None
+
+    def submit(self, _fn: Any, args: Any) -> Any:
+        from concurrent.futures import Future
+
+        seeds, fixtures_dir = args
+        fixtures = {f"seed_{s}": {"blocks": [], "seed": s} for s in seeds}
+        path = shard_path(Path(fixtures_dir), seeds)
+        path.write_text(json.dumps(fixtures))
+        future: Any = Future()
+        future.set_result(
+            {
+                "path": str(path),
+                "names": list(fixtures),
+                "errors": {},
+                "seconds": 0.01,
+                "rss_mb": 1,
+            }
+        )
+        return future
 
 
 class _FakeRunner:
@@ -139,7 +164,6 @@ def _campaign(
     from ..fuzzer_bridge import campaign as campaign_module
     from ..fuzzer_bridge.campaign import CampaignOptions, run_campaign
 
-    monkeypatch.setattr(campaign_module, "fill_batch", _fake_fill)
     monkeypatch.setattr(
         campaign_module.FixtureRunner,
         "detect",
@@ -149,7 +173,7 @@ def _campaign(
     )
     monkeypatch.setattr(campaign_module, "_eels_commit", lambda: "abc123")
     monkeypatch.setattr(
-        campaign_module, "_fill_pool", lambda _workers, _fork: _NoPool()
+        campaign_module, "_fill_pool", lambda _workers, _fork: _FakePool()
     )
     options = CampaignOptions(
         fork=Osaka,
@@ -159,14 +183,6 @@ def _campaign(
         **kw,
     )
     return run_campaign(options, echo=echo or (lambda _msg: None))
-
-
-class _NoPool:
-    def __enter__(self) -> "_NoPool":
-        return self
-
-    def __exit__(self, *_: Any) -> None:
-        return None
 
 
 def test_campaign_records_divergences_and_resumes(
