@@ -50,6 +50,16 @@ def test_create_and_precompile_events() -> None:
     assert "create" in events and "precompile" in events
 
 
+def test_depth_is_bucketed_and_max_depth_is_raw() -> None:
+    """L0 buckets depth to >=3 but max_depth keeps the raw reach."""
+    tracer = SignatureTracer()
+    tracer(_evm(0), OpStart(op=Ops.CALL))
+    tracer(_evm(5), EvmStop(op=Ops.STOP))
+    sig = tracer.signature()
+    assert (3, "halt", "STOP") in sig.frames
+    assert sig.max_depth == 5
+
+
 def test_merge_unions_layers_and_empty_is_empty() -> None:
     """Merging unions each layer; the empty signature reports empty."""
     assert EMPTY_SIGNATURE.is_empty()
