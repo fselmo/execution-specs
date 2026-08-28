@@ -17,8 +17,11 @@ def _sig(
     frames: Iterable[Tuple[int, str, str]] = (),
     events: Iterable[str] = (),
     bigrams: Iterable[Tuple[str, str]] = (),
+    max_depth: int = 0,
 ) -> Signature:
-    return Signature(frozenset(frames), frozenset(events), frozenset(bigrams))
+    return Signature(
+        frozenset(frames), frozenset(events), frozenset(bigrams), max_depth
+    )
 
 
 def test_novelty_first_is_novel_duplicate_is_not() -> None:
@@ -69,4 +72,5 @@ def test_baseline_over_real_seeds_reports_novelty() -> None:
     assert report.seeds == 3
     assert 1 <= report.novel <= 3
     assert report.frames > 0 and report.bigrams > 0
-    assert "novel" in report.summary()
+    assert report.max_depth >= 1  # real fills reach a child frame
+    assert "novel" in report.summary() and "max depth" in report.summary()
