@@ -234,6 +234,9 @@ def render_report(
         state.counts.get(k, 0) for k in ("agreed", "divergence", "all-fail")
     )
     rate = cases / elapsed_seconds if elapsed_seconds > 0 else 0.0
+    fill_errors = state.counts.get("fill_error", 0)
+    generated = cases + fill_errors
+    fill_error_rate = fill_errors / generated if generated else 0.0
     lines = [
         f"# Fuzz campaign: {fork}",
         "",
@@ -245,7 +248,8 @@ def render_report(
         f"| divergences | {state.counts.get('divergence', 0)} "
         f"({state.unique_findings()} unique) |",
         f"| all-fail (suspect) | {state.counts.get('all-fail', 0)} |",
-        f"| fill errors | {state.counts.get('fill_error', 0)} |",
+        f"| fill errors | {fill_errors} "
+        f"({fill_error_rate:.1%} of {generated} candidates) |",
         "",
         "## Versions",
         "",

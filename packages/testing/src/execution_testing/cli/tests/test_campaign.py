@@ -88,6 +88,19 @@ def test_report_lists_signatures_and_versions(tmp_path: Path) -> None:
     json.dumps(state.signatures)  # JSON-serializable
 
 
+def test_report_shows_fill_error_rate(tmp_path: Path) -> None:
+    """The report shows unfillable candidates as a rate, not just a count."""
+    state = CampaignState.load(tmp_path / "state.json", seed_start=0)
+    state.counts.update({"agreed": 90, "fill_error": 10})
+    text = render_report(
+        state,
+        fork="Amsterdam",
+        versions={"eels": "abc"},
+        elapsed_seconds=10.0,
+    )
+    assert "10.0% of 100 candidates" in text
+
+
 def _fake_fill(seeds: range, _pool: Any) -> Any:
     """Stand-in fill: one trivial fixture per seed, no errors."""
     return {f"seed_{s}": {"blocks": [], "seed": s} for s in seeds}, {}
