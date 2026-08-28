@@ -89,8 +89,11 @@ PALETTE = (
     + _MISC
 )
 
+_PRECOMPILE_SLOT_BASE = 0x000
+_CALL_SLOT_BASE = 0x100
 _EPILOGUE_SLOT = 0x200
 _CHARGE_SLOT = 0x300
+_WITNESS_RANGE = 0x100  # each witness range spans this many slots
 
 
 _CALL_KINDS = (Op.CALL, Op.CALLCODE, Op.DELEGATECALL, Op.STATICCALL)
@@ -293,11 +296,18 @@ def fuzzed_bytecode(
     epilogue that stores remaining gas, return-data size and balance.
     Fully determined by ``rng``.
     """
+    if 2 * max_ops > _WITNESS_RANGE:
+        raise ValueError(
+            f"max_ops={max_ops} overflows the witness-slot range: "
+            f"2*max_ops must be <= {_WITNESS_RANGE:#x} to keep precompile "
+            f"witnesses below the call range (0x100) and call witnesses "
+            f"below the epilogue (0x200)"
+        )
     code: Bytecode = Bytecode() + Op.JUMPDEST  # harmless leading anchor
     stack_height = 0
     num_ops = rng.randint(1, max_ops)
-    witness_slot = 0
-    call_slot = 0x100  # separate range so call witnesses never collide
+    witness_slot = _PRECOMPILE_SLOT_BASE
+    call_slot = _CALL_SLOT_BASE
     emitted_precompile_call = False
 
     for _ in range(num_ops):
