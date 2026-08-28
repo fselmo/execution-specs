@@ -257,7 +257,108 @@ constant passes every fixture EELS filled and every invariant, but a client
 disagrees. It is also the only layer that catches a *client* bug — every other
 layer tests the spec.
 
-### 5. Replaying one case
+### 5. Campaigns: hours against every client's fixture runner
+
+`fuzz diff` spawns a t8n per client per case and needs a t8n wrapper; it is
+the localization tool. Detection at width goes through the path clients
+already run for conformance: a campaign fills generated cases through EELS
+into fixture files of `--batch` cases and hands each file to every client's
+standalone fixture runner (`evm blocktest`, `evmone-blockchaintest`,
+`evmtool block-test`, `nethtest`) — one process per file per client, all
+clients concurrently. A runner rejecting a fixture is a disagreement with
+EELS. Pin every build to the devnet branch the clients are being tested on:
+
+```yaml
+clients:
+  - name: geth
+    build: {recipe: geth, ref: glamsterdam-devnet-8}
+  - name: erigon
+    build: {recipe: erigon, ref: glamsterdam-devnet-8}
+  - name: besu
+    build: {recipe: besu, ref: glamsterdam-devnet-8}
+  - name: nethermind
+    build: {recipe: nethermind, ref: glamsterdam-devnet-8}
+  - name: evmone
+    build: {recipe: evmone, ref: master}
+campaigns:
+  devnet:
+    fork: Amsterdam
+    clients: [geth, erigon, besu, nethermind, evmone]
+```
+
+Builds use whatever toolchains the shell has: Go ≥ 1.24 with cgo (erigon),
+the JDK besu's Gradle toolchain asks for (25 on the devnet branches — set
+`JAVA_HOME`, also when running the campaign, since `evmtool` starts a JVM),
+the .NET SDK band nethermind's `global.json` pins (10.0.3xx), and CMake +
+C++20 (evmone).
+
+```console
+uv run fuzz clients --update          # clone and build each ref once
+tmux new -s fuzz
+uv run fuzz campaign devnet --hours 8 --fill-workers 24
+```
+
+Each batch produces one verdict per client per fixture:
+
+- every client passes — *agreed*;
+- every client fails — *all-fail*: EELS or the generated block is suspect,
+  so it is counted, never reported as a client finding;
+- some fail — a *divergence*; each failing client is judged on its own.
+
+A divergence produces one **signature per failing client**:
+`(client, error line)` with hashes and numbers stripped, so a bug that fires
+thousands of times is one row with a count. Per-client keying matters when
+two bugs co-occur — two clients both failing one case (common when both
+touch the block access list) become two rows, each with its own text, not
+one joint row wearing one client's error. The first case of each new
+signature is bundled under `corpus/<client>--<slug>-<digest>/`: `case.json`
+(replay or distill it as usual), `fixture.json`, every client's verdict, and
+`minimized.json` with `--minimize` (reduced while *that* client still
+fails). The first batch doubles as the baseline: a client failing more than
+half of it is stale and the run stops naming it (`--no-baseline`).
+
+A signature already understood — a bug that is filed, or a client known to
+lag the spec — is listed under `known:` in the campaign so it is counted but
+never bundled or minimized again, keeping the findings table to what is new:
+
+```yaml
+campaigns:
+  devnet:
+    fork: Amsterdam
+    clients: [geth, erigon, besu, nethermind]
+    known:
+      - {client: besu, reason: "chain header mismatch"}
+```
+
+`reason` is a substring matched against the normalized error; `client` is
+optional (any client when omitted). Known signatures render in a separate
+"Known (suppressed)" section of the report. The signature scheme is
+versioned in `state.json`; resuming a state written under an older scheme
+keeps its seed range and counts but recounts signatures afresh.
+
+`state.json` and `report.md` are rewritten after every batch, so Ctrl-C or a
+dead tmux leaves a valid report and rerunning the same command resumes;
+`--fresh` starts over. `--count` is a seed range from the campaign's
+`seed_start`; `--hours` is a budget per invocation. The report records the
+spec commit, each client's version line, counts per class, failures per
+client, and the signature table.
+
+| Option                    | Purpose                                                        |
+| ------------------------- | -------------------------------------------------------------- |
+| `--hours H` / `--count N` | budget; one is required                                        |
+| `--batch N`               | cases per fixture file and per runner invocation (default 200) |
+| `--fill-workers W`        | EELS fill processes; filling is the throughput floor           |
+| `--output DIR`            | state, report, corpus, fixtures (default `campaigns/NAME`)     |
+| `--minimize`              | ddmin each new signature's case                                |
+| `--keep-fixtures`         | keep every batch file, not only the bundled ones               |
+| `--no-baseline`, `--fresh`| skip the stale-client gate; discard saved state                |
+
+The runner binaries must carry their canonical names (`evm`, `evmtool`,
+`nethtest`, `evmone-blockchaintest`), which the recipes ensure. When
+`validate` lands (execution-specs #2622) the campaign will hand files to it
+instead of driving each runner itself.
+
+### 6. Replaying one case
 
 ```console
 uv run fuzz replay divergences/Amsterdam_divergence_seed42.json --campaign amsterdam
@@ -267,7 +368,7 @@ Re-runs a saved case through EELS and every client and prints each compared
 field per tool with the minority marked. Exits 1 on disagreement, so a fixed
 client can be re-checked from a script.
 
-### 6. Distillation into a reviewable test
+### 7. Distillation into a reviewable test
 
 ```console
 uv run fuzz distill divergences/Amsterdam_divergence_seed42.json tests/amsterdam/test_finding.py \
@@ -281,7 +382,7 @@ reproduce the original execution; `post` is left empty for the reviewer. Once
 reviewed it fills like any other test — a transient finding becomes a permanent
 fixture.
 
-### 7. Fuzzing inside an ordinary test
+### 8. Fuzzing inside an ordinary test
 
 The generator's strategies are public, so a normal seed-parametrized test can
 fuzz without any of the commands above:
@@ -414,6 +515,7 @@ current choice cited, and are never promoted to normative.
 | `execution_testing/cli/fuzzer_bridge/config.py`, `clients.py`               | `fuzz.yaml` model; client sources and the build cache              |
 | `execution_testing/cli/fuzzer_bridge/differential.py`                       | multi-client comparison, tiering, majority view                    |
 | `execution_testing/cli/fuzzer_bridge/baseline.py`, `run_manifest.py`        | stale-client gate; provenance record                               |
+| `execution_testing/cli/fuzzer_bridge/campaign.py`, `runners.py`             | long-running campaigns; whole-file client fixture runners          |
 | `execution_testing/cli/fuzzer_bridge/`                                      | generator, engine, corpus, distill                                 |
 | `execution_testing/fuzzing/strategies.py`                                   | public `fuzzed_bytecode` / `fuzzed_calldata`                       |
 | `execution_testing/cli/mutation/`                                           | mutant enumeration and runner                                      |

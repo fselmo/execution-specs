@@ -2,7 +2,6 @@
 
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from click.testing import CliRunner
@@ -121,8 +120,8 @@ def test_status_reports_version_or_error(
     exe.write_text("")
     monkeypatch.setattr(
         clients_module,
-        "build_client_tool",
-        lambda _path: SimpleNamespace(version=lambda: "evm version 9\nmore"),
+        "binary_version",
+        lambda _path: "evm version 9",
     )
     line = client_status(ClientConfig(name="geth", path=exe))
     assert "path" in line and "evm version 9" in line and "more" not in line
@@ -142,8 +141,8 @@ def test_clients_command_lists_each_client(
     )
     monkeypatch.setattr(
         clients_module,
-        "build_client_tool",
-        lambda _path: SimpleNamespace(version=lambda: "evm version 9"),
+        "binary_version",
+        lambda _path: "evm version 9",
     )
     result = CliRunner().invoke(
         fuzz, ["clients", "--config", str(tmp_path / "fuzz.yaml")]
@@ -161,8 +160,8 @@ def test_status_never_builds_but_update_does(
     monkeypatch.setenv(clients_module.CACHE_ENV, str(cache))
     monkeypatch.setattr(
         clients_module,
-        "build_client_tool",
-        lambda _path: SimpleNamespace(version=lambda: "v version 1"),
+        "binary_version",
+        lambda _path: "v version 1",
     )
     client = ClientConfig(
         name="demo",
