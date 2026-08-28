@@ -6,6 +6,7 @@ from execution_testing.cli.fuzzer_bridge.signature_baseline import (
     NoveltyTracker,
     novelty_curve,
     render_curve,
+    render_unreached,
     signature_baseline,
 )
 from execution_testing.evm_tools.t8n.evm_trace.signature import (
@@ -74,6 +75,18 @@ def test_fill_signature_is_deterministic() -> None:
     eels.last_signature = None
     fill_case(generate_fuzzer_output(Amsterdam, 1), Amsterdam, eels)
     assert eels.last_signature == first
+
+
+def test_unreached_maps_shrink_as_signatures_arrive() -> None:
+    """Observed events and frame cells leave the unreached complement."""
+    tracker = NoveltyTracker()
+    assert "create" in tracker.unreached_events()
+    cells_before = len(tracker.unreached_frames())
+    tracker.observe(_sig(frames={(0, "call", "CALL")}, events={"create"}))
+    assert "create" not in tracker.unreached_events()
+    assert (0, "call", "CALL") not in tracker.unreached_frames()
+    assert len(tracker.unreached_frames()) == cells_before - 1
+    assert "unreached events" in render_unreached(tracker)
 
 
 def test_novelty_curve_checkpoints_are_cumulative() -> None:
