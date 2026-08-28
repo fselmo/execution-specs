@@ -2,7 +2,17 @@
 
 import random
 
-from ..strategies import fuzzed_bytecode, fuzzed_calldata
+import pytest
+
+from ..strategies import (
+    _CALL_SLOT_BASE,
+    _CHARGE_SLOT,
+    _EPILOGUE_SLOT,
+    _PRECOMPILE_SLOT_BASE,
+    _WITNESS_RANGE,
+    fuzzed_bytecode,
+    fuzzed_calldata,
+)
 
 TERMINATORS = {0x00, 0xF3, 0xFD}  # STOP, RETURN, REVERT
 STATICCALL = 0xFA
@@ -189,6 +199,28 @@ def test_epilogue_witnesses_gas_returndata_and_balance() -> None:
         tail = ops[-12:]
         assert GAS in tail and RETURNDATASIZE in tail and SELFBALANCE in tail
         assert tail.count(SSTORE) >= 3
+
+
+def test_witness_ranges_are_disjoint_and_ordered() -> None:
+    """The hand-allocated witness ranges never overlap."""
+    assert _PRECOMPILE_SLOT_BASE + _WITNESS_RANGE <= _CALL_SLOT_BASE
+    assert _CALL_SLOT_BASE + _WITNESS_RANGE <= _EPILOGUE_SLOT
+    assert _EPILOGUE_SLOT < _CHARGE_SLOT
+
+
+def test_max_ops_overflowing_witness_slots_raises() -> None:
+    """A max_ops large enough to overflow a witness range fails loudly."""
+    fuzzed_bytecode(
+        random.Random(0),
+        max_ops=_WITNESS_RANGE // 2,
+        precompiles=PRECOMPILES,
+    )
+    with pytest.raises(ValueError, match="witness"):
+        fuzzed_bytecode(
+            random.Random(0),
+            max_ops=_WITNESS_RANGE // 2 + 1,
+            precompiles=PRECOMPILES,
+        )
 
 
 def test_shapes_emit_creation_and_selfdestruct_calls() -> None:
