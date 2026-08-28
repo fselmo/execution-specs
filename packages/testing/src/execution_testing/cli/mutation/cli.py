@@ -6,6 +6,14 @@ from typing import List, Optional, Sequence
 
 import click
 
+from .held_out import (
+    DEFAULT_STRATA,
+    check_held_out,
+    freeze_held_out,
+    held_out_report,
+    load_held_out,
+    run_held_out,
+)
 from .reach_log import (
     append_reach_log,
     eels_commit,
@@ -125,6 +133,34 @@ from .shapes import SHAPES
     default=None,
     help="Print the reach trend from this log and exit.",
 )
+@click.option(
+    "--freeze-held-out",
+    "freeze_held_out_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Freeze a stratified held-out mutant set to this manifest and exit.",
+)
+@click.option(
+    "--held-out",
+    "held_out_path",
+    type=click.Path(exists=True, path_type=Path, dir_okay=False),
+    default=None,
+    help="Run a frozen held-out set through the differential oracle.",
+)
+@click.option(
+    "--held-out-check",
+    "held_out_check_path",
+    type=click.Path(exists=True, path_type=Path, dir_okay=False),
+    default=None,
+    help="Report which frozen held-out mutants have drifted, and exit.",
+)
+@click.option(
+    "--held-out-per-stratum",
+    type=int,
+    default=8,
+    show_default=True,
+    help="Mutants per stratum when freezing a held-out set.",
+)
 def mutate(
     module_path: Optional[Path],
     shape_names: Sequence[str],
@@ -142,6 +178,10 @@ def mutate(
     include_constants: bool,
     reach_log_path: Optional[Path],
     reach_trend_path: Optional[Path],
+    freeze_held_out_path: Optional[Path],
+    held_out_path: Optional[Path],
+    held_out_check_path: Optional[Path],
+    held_out_per_stratum: int,
 ) -> None:
     """
     Mutation-test a spec module: measure how many small spec errors the
@@ -153,6 +193,49 @@ def mutate(
     """
     if reach_trend_path is not None:
         click.echo(reach_trend(reach_trend_path))
+        return
+    if held_out_check_path is not None:
+        drift = check_held_out(held_out_check_path)
+        click.echo(
+            f"held-out drift: {len(drift.valid)} valid, "
+            f"{len(drift.drifted)} drifted"
+        )
+        for held in drift.drifted:
+            click.echo(
+                f"  DRIFTED {held.module} [{held.operator}] "
+                f"{held.original!r} -> {held.mutated!r}"
+            )
+        return
+    if freeze_held_out_path is not None:
+        freeze_held_out(
+            list(DEFAULT_STRATA),
+            freeze_held_out_path,
+            per_stratum=held_out_per_stratum,
+            seed=seed,
+        )
+        count = len(load_held_out(freeze_held_out_path))
+        click.echo(
+            f"froze {count} held-out mutant(s) -> {freeze_held_out_path}"
+        )
+        return
+    if held_out_path is not None:
+        if not fork:
+            raise click.UsageError("--fork is required for --held-out")
+        if campaign is None and not clients:
+            raise click.UsageError("--held-out needs --campaign or --client")
+        held_out_results = run_held_out(
+            held_out_path,
+            DifferentialOptions(
+                fork=fork,
+                count=diff_count,
+                campaign=campaign,
+                clients=tuple(clients),
+                workers=workers,
+                config=config_path,
+            ),
+            timeout=timeout,
+        )
+        click.echo(held_out_report(held_out_results))
         return
     oracle_choice = Oracle(oracle)
     if (module_path is None) == (not shape_names):
