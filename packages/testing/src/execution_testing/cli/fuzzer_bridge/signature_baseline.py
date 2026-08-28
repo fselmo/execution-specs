@@ -49,13 +49,14 @@ class BaselineReport:
     frames: int
     events: int
     bigrams: int
+    max_depth: int
 
     def summary(self) -> str:
         """Render the report as one line."""
         return (
             f"novel {self.novel}/{self.seeds}; "
             f"distinct frames={self.frames} events={self.events} "
-            f"bigrams={self.bigrams}"
+            f"bigrams={self.bigrams}; max depth {self.max_depth}"
         )
 
 
@@ -73,11 +74,16 @@ def signature_baseline(fork: "Fork", seeds: range) -> BaselineReport:
     eels.compute_signature = True
     tracker = NoveltyTracker()
     novel = 0
+    max_depth = 0
     for seed in seeds:
         eels.last_signature = None
         fill_case(generate_fuzzer_output(fork, seed), fork, eels)
         signature = eels.last_signature
-        if signature is not None and tracker.observe(signature):
-            novel += 1
+        if signature is not None:
+            max_depth = max(max_depth, signature.max_depth)
+            if tracker.observe(signature):
+                novel += 1
     frames, events, bigrams = tracker.counts()
-    return BaselineReport(len(seeds), novel, frames, events, bigrams)
+    return BaselineReport(
+        len(seeds), novel, frames, events, bigrams, max_depth
+    )
