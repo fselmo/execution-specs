@@ -63,6 +63,34 @@ OPERAND_WEIGHTS = MixtureWeights(
 )
 
 
+@dataclass(frozen=True)
+class WalkWeights:
+    """
+    Per-op action weights for the bytecode walk.
+
+    Each weight is checked sequentially against the remaining walk, and
+    whatever falls through lands on a plain palette op. Halt kinds and
+    deliberate invalidity are first-class, low-weight actions.
+    """
+
+    precompile_call: float = 0.15
+    message_call: float = 0.15
+    halting_child: float = 0.10
+    create2_self_copy: float = 0.08
+    destructor_call: float = 0.06
+    raw_byte: float = 0.05
+    terminator: float = 0.03
+
+    def __post_init__(self) -> None:
+        """Reject weights outside [0, 1]."""
+        for name, weight in vars(self).items():
+            if not 0.0 <= weight <= 1.0:
+                raise ValueError(f"{name} weight {weight} outside [0, 1]")
+
+
+WALK_WEIGHTS = WalkWeights()
+
+
 def draw_mixed(
     rng: random.Random,
     weights: MixtureWeights,
@@ -98,6 +126,7 @@ class ValueDomains:
     value_boundaries: Tuple[int, ...] = (1, 2)
     storage_keys: Tuple[int, ...] = tuple(range(8))
     storage_values: Tuple[int, ...] = (1, 2, 3)
+    walk: WalkWeights = WALK_WEIGHTS
     gas_weights: MixtureWeights = GAS_WEIGHTS
     value_weights: MixtureWeights = VALUE_WEIGHTS
     size_weights: MixtureWeights = SIZE_WEIGHTS

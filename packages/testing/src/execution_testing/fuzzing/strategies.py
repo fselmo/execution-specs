@@ -266,6 +266,41 @@ def _halting_child_then_state_charge(
     return code
 
 
+_TERMINATOR_KINDS = (Op.RETURN, Op.REVERT, Op.INVALID, Op.SELFDESTRUCT)
+
+# A raw walk byte is a deliberately unconditioned opcode: undefined bytes
+# (InvalidOpcode), defined ops over a thin stack (StackUnderflow), a bare
+# JUMP onto garbage (InvalidJumpDest). PUSH opcodes are excluded so the
+# byte never swallows the epilogue witnesses that follow as immediate data.
+_RAW_WALK_BYTES = tuple(b for b in range(256) if not 0x60 <= b <= 0x7F)
+
+
+def _early_terminator(
+    rng: random.Random,
+    domains: ValueDomains,
+    call_targets: Optional[Sequence[int]],
+) -> Bytecode:
+    """
+    End the frame mid-walk: RETURN/REVERT over a drawn span, INVALID, or
+    SELFDESTRUCT to a pool address (the contract itself without a pool).
+    """
+    kind = rng.choice(_TERMINATOR_KINDS)
+    code = Bytecode()
+    if kind in (Op.RETURN, Op.REVERT):
+        code += Op.PUSH2(domains.byte_size(rng))
+        code += Op.PUSH0
+        code += kind
+    elif kind == Op.INVALID:
+        code += Op.INVALID
+    elif call_targets:
+        code += Op.PUSH20(rng.choice(call_targets))
+        code += Op.SELFDESTRUCT
+    else:
+        code += Op.ADDRESS
+        code += Op.SELFDESTRUCT
+    return code
+
+
 def _epilogue() -> Bytecode:
     """
     Record what the frame has left before it ends.
@@ -307,10 +342,14 @@ def fuzzed_bytecode(
     followed by a cold state charge, and ``CREATE2`` self-replication.
     ``selfdestructor`` names a helper whose code is ``ORIGIN SELFDESTRUCT``
     for calls that destroy the caller or the callee. ``domains`` supplies
-    the value mixtures and fork-derived boundary sets (fork-free generic
-    defaults when omitted). Every body ends with an epilogue that stores
-    remaining gas, return-data size and balance. Fully determined by
-    ``rng``.
+    the value mixtures, fork-derived boundary sets and walk-action
+    weights (fork-free generic defaults when omitted). Halt kind is a
+    first-class action: a body may end early in RETURN, REVERT, INVALID
+    or SELFDESTRUCT -- skipping the epilogue, the early halt being the
+    observation -- and a low-weight raw byte emits one unconditioned
+    opcode: undefined bytes and stack underflows on purpose. Every body
+    that runs its full walk ends with an epilogue that stores remaining
+    gas, return-data size and balance. Fully determined by ``rng``.
     """
     if 2 * max_ops > _WITNESS_RANGE:
         raise ValueError(
@@ -327,34 +366,43 @@ def fuzzed_bytecode(
     witness_slot = _PRECOMPILE_SLOT_BASE
     call_slot = _CALL_SLOT_BASE
     emitted_precompile_call = False
+    terminated = False
+    walk = domains.walk
 
     for _ in range(num_ops):
-        if precompiles and rng.random() < 0.15:
+        if precompiles and rng.random() < walk.precompile_call:
             code += _precompile_call(rng, domains, precompiles, witness_slot)
             witness_slot += 2
             emitted_precompile_call = True
             continue
-        if call_targets and rng.random() < 0.15:
+        if call_targets and rng.random() < walk.message_call:
             target = rng.choice([None, *call_targets])
             code += _message_call(
                 rng, domains, target, rng.choice(_CALL_KINDS), call_slot
             )
             call_slot += 2
             continue
-        if call_targets and rng.random() < 0.1:
+        if call_targets and rng.random() < walk.halting_child:
             code += _halting_child_then_state_charge(
                 rng, domains, rng.choice(call_targets), call_slot
             )
             call_slot += 2
             continue
-        if call_targets and rng.random() < 0.08:
+        if call_targets and rng.random() < walk.create2_self_copy:
             code += _create2_self_copy(rng, domains, call_slot)
             call_slot += 2
             continue
-        if selfdestructor is not None and rng.random() < 0.06:
+        if selfdestructor is not None and rng.random() < walk.destructor_call:
             code += _call_into_destructor(rng, selfdestructor, call_slot)
             call_slot += 2
             continue
+        if rng.random() < walk.raw_byte:
+            code += bytes([rng.choice(_RAW_WALK_BYTES)])
+            continue
+        if rng.random() < walk.terminator:
+            code += _early_terminator(rng, domains, call_targets)
+            terminated = True
+            break
         op = rng.choice(PALETTE)
         while stack_height < op.min_stack_height:
             code += Op.PUSH32(domains.operand(rng))
@@ -364,6 +412,9 @@ def fuzzed_bytecode(
         if stack_height > 900:
             code += Op.POP
             stack_height -= 1
+
+    if terminated:
+        return code
 
     if precompiles and not emitted_precompile_call:
         code += _precompile_call(rng, domains, precompiles, witness_slot)
