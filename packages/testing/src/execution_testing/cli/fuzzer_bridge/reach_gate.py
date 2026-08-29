@@ -40,10 +40,10 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 7
+BASELINE_GENERATOR_VERSION = 8
 BASELINE_FORK = "Amsterdam"
 
-GATE_SEEDS: Tuple[int, ...] = (15, 30, 114, 164, 217, 239, 267)
+GATE_SEEDS: Tuple[int, ...] = (35, 96, 97, 115, 183, 285)
 """Greedy cover over the 400-seed baseline: together these fire every
 target below."""
 
@@ -61,66 +61,67 @@ GATE_EVENTS: FrozenSet[str] = frozenset(
     }
 )
 
+_ALL_CALLS = (
+    "CALL",
+    "CALLCODE",
+    "CREATE",
+    "CREATE2",
+    "DELEGATECALL",
+    "STATICCALL",
+)
+
 _GATE_CELLS: Dict[int, Dict[str, Tuple[str, ...]]] = {
     0: {
-        "call": (
-            "CALL",
-            "CALLCODE",
-            "CREATE",
-            "CREATE2",
-            "DELEGATECALL",
-            "STATICCALL",
-        ),
+        "call": _ALL_CALLS,
         "halt": (
             "InvalidOpcode",
             "InvalidParameter",
             "KZGProofError",
+            "OutOfBoundsRead",
             "OutOfGasError",
             "Revert",
             "STOP",
+            "StackOverflowError",
             "StackUnderflowError",
         ),
     },
     1: {
-        "call": (
-            "CALL",
-            "CALLCODE",
-            "CREATE",
-            "CREATE2",
-            "DELEGATECALL",
-            "STATICCALL",
-        ),
+        "call": _ALL_CALLS,
         "halt": (
             "InvalidOpcode",
             "InvalidParameter",
             "KZGProofError",
+            "OutOfBoundsRead",
             "OutOfGasError",
             "Revert",
             "STOP",
-            "StackUnderflowError",
+            "StackOverflowError",
             "WriteInStaticContext",
         ),
     },
     2: {
-        "call": ("CALL", "CALLCODE", "CREATE2", "DELEGATECALL", "STATICCALL"),
+        "call": _ALL_CALLS,
         "halt": (
             "InvalidOpcode",
             "InvalidParameter",
-            "KZGProofError",
+            "OutOfBoundsRead",
             "OutOfGasError",
+            "Revert",
             "STOP",
-            "StackUnderflowError",
+            "StackOverflowError",
             "WriteInStaticContext",
         ),
     },
     3: {
-        "call": ("CALL", "CALLCODE", "CREATE2", "DELEGATECALL", "STATICCALL"),
+        "call": _ALL_CALLS,
         "halt": (
             "InvalidOpcode",
             "InvalidParameter",
-            "KZGProofError",
+            "OutOfBoundsRead",
             "OutOfGasError",
+            "Revert",
             "STOP",
+            "StackOverflowError",
             "WriteInStaticContext",
         ),
     },
