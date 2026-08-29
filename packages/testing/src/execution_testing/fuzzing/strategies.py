@@ -22,6 +22,8 @@ from typing import Optional, Sequence
 from execution_testing.vm import Bytecode
 from execution_testing.vm import Opcodes as Op
 
+from .domains import GENERIC_DOMAINS, ValueDomains
+
 _ARITHMETIC = [
     Op.ADD,
     Op.MUL,
@@ -103,19 +105,23 @@ _PRECOMPILE_CALL_KINDS = (Op.STATICCALL, Op.STATICCALL, Op.CALL, Op.CALLCODE)
 
 
 def _message_call(
-    rng: random.Random, target: Optional[int], kind: Op, slot: int
+    rng: random.Random,
+    domains: ValueDomains,
+    target: Optional[int],
+    kind: Op,
+    slot: int,
 ) -> Bytecode:
     """
     Draw a stack-neutral message call of ``kind`` with fuzzed gas, value
     and calldata; ``target`` None means the contract calls itself.
 
-    Gas is drawn from a set that straddles the stipend and typical
-    precompile costs, so calls fail about as often as they succeed, and
-    value stays small so a transfer only bounces when the caller is really
-    unfunded. The success flag and returndata size are written to ``slot``
-    and ``slot + 1`` as post-state witnesses.
+    Gas, value and calldata size come from ``domains``: four-mode
+    mixtures over the fork's own boundary sets, so calls fail about as
+    often as they succeed and the edges move with a reprice. The success
+    flag and returndata size are written to ``slot`` and ``slot + 1`` as
+    post-state witnesses.
     """
-    size = rng.choice([0, rng.randint(0, 64), rng.randint(0, 256)])
+    size = domains.byte_size(rng)
     data = rng.randbytes(size)
 
     code = Bytecode()
@@ -132,10 +138,10 @@ def _message_call(
     code += Op.PUSH2(size)
     code += Op.PUSH1(0)
     if kind in (Op.CALL, Op.CALLCODE):
-        code += Op.PUSH2(rng.choice([0, 1, 8, 1000]))
+        code += Op.PUSH32(domains.call_value(rng))
     code += Op.ADDRESS if target is None else Op.PUSH20(target)
-    gas = rng.choice([0, 2300, 50_000, None])
-    code += Op.GAS if gas is None else Op.PUSH3(gas)
+    gas = domains.call_gas(rng)
+    code += Op.GAS if gas is None else Op.PUSH32(gas)
     code += kind
 
     code += Op.PUSH2(slot)
@@ -149,7 +155,10 @@ def _message_call(
 
 
 def _precompile_call(
-    rng: random.Random, precompiles: Sequence[int], slot: int
+    rng: random.Random,
+    domains: ValueDomains,
+    precompiles: Sequence[int],
+    slot: int,
 ) -> Bytecode:
     """
     Draw a message call into a precompile with fuzzed input.
@@ -162,11 +171,13 @@ def _precompile_call(
     else:
         address = max(precompiles) + 1
     return _message_call(
-        rng, address, rng.choice(_PRECOMPILE_CALL_KINDS), slot
+        rng, domains, address, rng.choice(_PRECOMPILE_CALL_KINDS), slot
     )
 
 
-def _create2_self_copy(rng: random.Random, slot: int) -> Bytecode:
+def _create2_self_copy(
+    rng: random.Random, domains: ValueDomains, slot: int
+) -> Bytecode:
     """
     Write a gas-keyed storage slot, then deploy a copy of this contract's
     own code with ``CREATE2``.
@@ -174,7 +185,9 @@ def _create2_self_copy(rng: random.Random, slot: int) -> Bytecode:
     The copy's initcode is this code, so each deployment recurses until the
     63/64 rule starves it and the deepest frames fail -- many independent
     reverting frames, each having read and written a fresh account's
-    storage, in one transaction. The created address is a witness.
+    storage, in one transaction. The created address is a witness. The
+    salt comes from a tiny domain, so repeated deployments collide by
+    construction.
     """
     code = Bytecode()
     code += Op.PUSH1(rng.choice([1, 2, 0xFF]))
@@ -184,7 +197,7 @@ def _create2_self_copy(rng: random.Random, slot: int) -> Bytecode:
     code += Op.PUSH0
     code += Op.PUSH0
     code += Op.CODECOPY
-    code += Op.PUSH2(rng.randrange(0, 0x10000))
+    code += Op.PUSH2(rng.choice(domains.salt_domain))
     code += Op.CODESIZE
     code += Op.PUSH0
     code += Op.SELFBALANCE if rng.random() < 0.5 else Op.PUSH0
@@ -221,7 +234,7 @@ def _call_into_destructor(
 
 
 def _halting_child_then_state_charge(
-    rng: random.Random, target: int, slot: int
+    rng: random.Random, domains: ValueDomains, target: int, slot: int
 ) -> Bytecode:
     """
     Call ``target`` with too little gas for any state work, so the child
@@ -235,7 +248,7 @@ def _halting_child_then_state_charge(
     for _ in range(5):
         code += Op.PUSH0
     code += Op.PUSH20(target)
-    code += Op.PUSH2(rng.choice([0, 700, 2300]))
+    code += Op.PUSH2(rng.choice(domains.starve_gas))
     code += Op.CALL
     code += Op.PUSH2(slot)
     code += Op.SSTORE
@@ -280,6 +293,7 @@ def fuzzed_bytecode(
     precompiles: Optional[Sequence[int]] = None,
     call_targets: Optional[Sequence[int]] = None,
     selfdestructor: Optional[int] = None,
+    domains: Optional[ValueDomains] = None,
 ) -> Bytecode:
     """
     Draw a stack-safe contract body ending in a clean terminator.
@@ -292,9 +306,11 @@ def fuzzed_bytecode(
     along with the shapes real consensus bugs have taken: a halting child
     followed by a cold state charge, and ``CREATE2`` self-replication.
     ``selfdestructor`` names a helper whose code is ``ORIGIN SELFDESTRUCT``
-    for calls that destroy the caller or the callee. Every body ends with an
-    epilogue that stores remaining gas, return-data size and balance.
-    Fully determined by ``rng``.
+    for calls that destroy the caller or the callee. ``domains`` supplies
+    the value mixtures and fork-derived boundary sets (fork-free generic
+    defaults when omitted). Every body ends with an epilogue that stores
+    remaining gas, return-data size and balance. Fully determined by
+    ``rng``.
     """
     if 2 * max_ops > _WITNESS_RANGE:
         raise ValueError(
@@ -303,6 +319,8 @@ def fuzzed_bytecode(
             f"witnesses below the call range (0x100) and call witnesses "
             f"below the epilogue (0x200)"
         )
+    if domains is None:
+        domains = GENERIC_DOMAINS
     code: Bytecode = Bytecode() + Op.JUMPDEST  # harmless leading anchor
     stack_height = 0
     num_ops = rng.randint(1, max_ops)
@@ -312,25 +330,25 @@ def fuzzed_bytecode(
 
     for _ in range(num_ops):
         if precompiles and rng.random() < 0.15:
-            code += _precompile_call(rng, precompiles, witness_slot)
+            code += _precompile_call(rng, domains, precompiles, witness_slot)
             witness_slot += 2
             emitted_precompile_call = True
             continue
         if call_targets and rng.random() < 0.15:
             target = rng.choice([None, *call_targets])
             code += _message_call(
-                rng, target, rng.choice(_CALL_KINDS), call_slot
+                rng, domains, target, rng.choice(_CALL_KINDS), call_slot
             )
             call_slot += 2
             continue
         if call_targets and rng.random() < 0.1:
             code += _halting_child_then_state_charge(
-                rng, rng.choice(call_targets), call_slot
+                rng, domains, rng.choice(call_targets), call_slot
             )
             call_slot += 2
             continue
         if call_targets and rng.random() < 0.08:
-            code += _create2_self_copy(rng, call_slot)
+            code += _create2_self_copy(rng, domains, call_slot)
             call_slot += 2
             continue
         if selfdestructor is not None and rng.random() < 0.06:
@@ -339,7 +357,7 @@ def fuzzed_bytecode(
             continue
         op = rng.choice(PALETTE)
         while stack_height < op.min_stack_height:
-            code += Op.PUSH32(rng.getrandbits(256))
+            code += Op.PUSH32(domains.operand(rng))
             stack_height += 1
         code += op
         stack_height += op.pushed_stack_items - op.popped_stack_items
@@ -348,7 +366,7 @@ def fuzzed_bytecode(
             stack_height -= 1
 
     if precompiles and not emitted_precompile_call:
-        code += _precompile_call(rng, precompiles, witness_slot)
+        code += _precompile_call(rng, domains, precompiles, witness_slot)
 
     code += _epilogue()
 
@@ -364,6 +382,16 @@ def fuzzed_bytecode(
     return code
 
 
-def fuzzed_calldata(rng: random.Random, *, max_size: int = 64) -> bytes:
-    """Draw a random calldata payload of up to ``max_size`` bytes."""
-    return rng.randbytes(rng.randint(0, max_size))
+def fuzzed_calldata(
+    rng: random.Random,
+    *,
+    max_size: int = 64,
+    domains: Optional[ValueDomains] = None,
+) -> bytes:
+    """
+    Draw a calldata payload of up to ``max_size`` bytes, with sizes
+    weighted toward the 32-byte word edges that price calldata.
+    """
+    if domains is None:
+        domains = GENERIC_DOMAINS
+    return rng.randbytes(domains.byte_size(rng, cap=max_size))

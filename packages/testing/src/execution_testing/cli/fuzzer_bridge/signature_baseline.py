@@ -133,7 +133,13 @@ def unreachable_on_fork(
     )
 
     events: Set[str] = set()
-    cells = {(0, "halt", "WriteInStaticContext")}
+    # AddressCollision raises only on the transaction-level create path,
+    # before any frame exists; the in-EVM CREATE* collision consumes the
+    # child grant and pushes 0 without raising (`generic_create`), so it
+    # is never a frame halt kind.
+    cells = {(0, "halt", "WriteInStaticContext")} | {
+        (bucket, "halt", "AddressCollision") for bucket in DEPTH_BUCKETS
+    }
     cap = fork.transaction_gas_limit_cap()
     if cap is not None and cap < _GAS_TO_REACH_DEPTH_LIMIT:
         events.add("call-depth-limit")
