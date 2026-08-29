@@ -23,7 +23,12 @@ from execution_testing.base_types import (
 )
 from execution_testing.eip_properties import fuzz_precompile_targets
 from execution_testing.forks import Fork
-from execution_testing.fuzzing import fuzzed_bytecode, fuzzed_calldata
+from execution_testing.fuzzing import (
+    fork_domains,
+    fuzzed_bytecode,
+    fuzzed_calldata,
+    mixed_address_pool,
+)
 from execution_testing.test_types import Environment
 from execution_testing.test_types.account_types import EOA
 from execution_testing.vm import Opcodes as Op
@@ -38,15 +43,11 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 5
+GENERATOR_VERSION = 6
 
 DESTRUCTOR_ADDRESS = 0x1FFFF
 """Helper contract whose code is `ORIGIN SELFDESTRUCT`."""
 
-TX_GAS_CAP = 16_777_216
-"""EIP-7825 cap; recursion shapes need the whole budget to go deep."""
-
-TX_GAS_CHOICES = (100_000, 500_000, 2_000_000, TX_GAS_CAP)
 BLOCK_GAS_LIMIT = 30_000_000
 
 
@@ -93,17 +94,32 @@ def generate_fuzzer_output(
     # Manifest-driven: precompiles the fork introduced are up-weighted, so
     # the fuzzer aims at the changed surface (see eip_properties.targeting).
     precompiles = fuzz_precompile_targets(fork)
+    domains = fork_domains(fork)
 
-    # Every contract may call every sibling (including ones generated
-    # later), so nested frames and recursion arise naturally.
-    call_targets = [0x10000 + i for i in range(num_contracts)]
+    # One mixed pool: contracts call every sibling (nested frames and
+    # recursion arise naturally) but also senders, the precompile-range
+    # boundary, and addresses that do not exist yet -- and transactions
+    # can enter at any of them, precompiles included.
+    contract_ints = [0x10000 + i for i in range(num_contracts)]
+    pool = mixed_address_pool(
+        precompiles,
+        code=contract_ints,
+        senders=[int.from_bytes(bytes(a), "big") for a in sender_addresses],
+    )
+    # A funded precompile is an edge every client must handle; the pool's
+    # nonexistent addresses stay out of the pre-state so touching them
+    # exercises cold account creation.
+    for one_wei in pool.one_wei_accounts():
+        accounts[Address(one_wei)] = FuzzerAccountInput(
+            balance=HexNumber(1),
+        )
     accounts[Address(DESTRUCTOR_ADDRESS)] = FuzzerAccountInput(
         balance=HexNumber(0),
         nonce=HexNumber(1),
         code=Bytes(bytes(Op.ORIGIN + Op.SELFDESTRUCT)),
     )
     contract_addresses: List[Address] = []
-    for target in call_targets:
+    for target in contract_ints:
         address = Address(target)
         accounts[address] = FuzzerAccountInput(
             balance=HexNumber(rng.randrange(0, 10**18)),
@@ -114,24 +130,33 @@ def generate_fuzzer_output(
                         rng,
                         max_ops=max_ops_per_contract,
                         precompiles=precompiles,
-                        call_targets=call_targets,
+                        call_targets=pool.call_targets(),
                         selfdestructor=DESTRUCTOR_ADDRESS,
+                        domains=domains,
                     )
                 )
             ),
+            storage={
+                HexNumber(key): HexNumber(value)
+                for key, value in domains.storage_seed(rng).items()
+            },
         )
         contract_addresses.append(address)
 
     nonces: Dict[Address, int] = dict.fromkeys(sender_addresses, 0)
-    targets = contract_addresses + sender_addresses
+    tx_targets = pool.tx_targets()
 
     transactions: List[FuzzerTransactionInput] = []
     # Transactions must fit the block, or the block itself is invalid.
     gas_budget = BLOCK_GAS_LIMIT
+    tx_gas_cap = fork.transaction_gas_limit_cap() or BLOCK_GAS_LIMIT
+    tx_gas_choices = tuple(
+        tx_gas_cap // divisor for divisor in (128, 32, 8, 1)
+    )
     for _ in range(num_transactions):
         sender = rng.choice(sender_addresses)
-        to = rng.choice(targets)
-        affordable = [g for g in TX_GAS_CHOICES if g <= gas_budget]
+        to = Address(rng.choice(tx_targets))
+        affordable = [g for g in tx_gas_choices if g <= gas_budget]
         if not affordable:
             break
         gas = rng.choice(affordable)
@@ -144,7 +169,7 @@ def generate_fuzzer_output(
                 gas_price=HexNumber(10),
                 nonce=HexNumber(nonces[sender]),
                 value=HexNumber(rng.randrange(0, 10**16)),
-                data=Bytes(fuzzed_calldata(rng)),
+                data=Bytes(fuzzed_calldata(rng, domains=domains)),
             )
         )
         nonces[sender] += 1
