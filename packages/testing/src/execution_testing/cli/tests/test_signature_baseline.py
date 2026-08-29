@@ -111,6 +111,9 @@ def test_capped_fork_marks_depth_limit_unreachable() -> None:
     # In-EVM collisions push 0 without raising; the tx-level raise
     # happens before any frame, so no depth ever halts with it.
     assert (1, "halt", "AddressCollision") in cells
+    # InvalidContractPrefix is raised off the trace stream (create
+    # finalization), so the tracer never records it as a frame.
+    assert (1, "halt", "InvalidContractPrefix") in cells
 
 
 def test_render_unreached_separates_fork_unreachable() -> None:

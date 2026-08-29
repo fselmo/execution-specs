@@ -142,12 +142,17 @@ def unreachable_on_fork(
     )
 
     events: Set[str] = set()
-    # AddressCollision raises only on the transaction-level create path,
-    # before any frame exists; the in-EVM CREATE* collision consumes the
-    # child grant and pushes 0 without raising (`generic_create`), so it
-    # is never a frame halt kind.
+    # These halts occur in EELS but never reach the tracer as a frame:
+    # AddressCollision is raised before any frame exists (tx-level create)
+    # or pushes 0 without raising (in-EVM `generic_create`), and
+    # InvalidContractPrefix is raised in `process_create_message`'s
+    # finalization, which -- unlike the execute_code loop -- emits no
+    # OpException. The motifs still exercise both paths for the client
+    # differential; the signature simply cannot witness them.
     cells = {(0, "halt", "WriteInStaticContext")} | {
-        (bucket, "halt", "AddressCollision") for bucket in DEPTH_BUCKETS
+        (bucket, "halt", name)
+        for bucket in DEPTH_BUCKETS
+        for name in ("AddressCollision", "InvalidContractPrefix")
     }
     cap = fork.transaction_gas_limit_cap()
     if cap is not None and cap < _GAS_TO_REACH_DEPTH_LIMIT:

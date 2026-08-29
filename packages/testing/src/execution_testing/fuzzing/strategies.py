@@ -301,6 +301,76 @@ def _early_terminator(
     return code
 
 
+_EF_INITCODE = 0x60EF5F5360015FF3
+"""``PUSH1 0xEF; PUSH0; MSTORE8; PUSH1 1; PUSH0; RETURN`` -- initcode that
+returns the single byte 0xEF, the EOF-reserved prefix a deploy must reject."""
+
+_STACK_LIMIT = 1024  # EIP-3860 era stack ceiling; the 1025th push overflows
+
+
+def _returndata_overread(slot: int) -> Bytecode:
+    """
+    Copy one byte past the current returndata, halting the frame.
+
+    ``RETURNDATASIZE + 1`` is exactly one past whatever the last call
+    returned (empty when none has), so the boundary check fails by one --
+    the edge the historical splits lived at, not a deep overrun. The
+    pre-copy witness rolls back, proving the frame halted here.
+    """
+    code = Bytecode()
+    code += Op.PUSH1(1)
+    code += Op.PUSH2(slot)
+    code += Op.SSTORE  # a marker that survives iff the copy does not halt
+    code += Op.RETURNDATASIZE
+    code += Op.PUSH1(1)
+    code += Op.ADD  # size = returndatasize + 1
+    code += Op.PUSH0  # offset into returndata
+    code += Op.PUSH0  # destination in memory
+    code += Op.RETURNDATACOPY
+    return code
+
+
+def _initcode_ef_prefix(slot: int) -> Bytecode:
+    """
+    ``CREATE`` initcode that returns 0xEF-prefixed code -- rejected.
+
+    ``CREATE`` pushes zero and no code is deployed; the caller survives,
+    so the stored result is the behavioral witness (0 on rejection). The
+    signature cannot witness the rejection -- the spec raises
+    InvalidContractPrefix in create finalization, off the trace stream --
+    so this motif earns its keep in the client differential, where the
+    0xEF-initcode path has historically split implementations.
+    """
+    code = Bytecode()
+    code += Op.PUSH8(_EF_INITCODE)
+    code += Op.PUSH0
+    code += Op.MSTORE  # initcode right-aligned in mem[0..32): bytes [24, 32)
+    code += Op.PUSH1(8)  # size
+    code += Op.PUSH1(24)  # offset
+    code += Op.PUSH0  # value
+    code += Op.CREATE
+    code += Op.PUSH2(slot)
+    code += Op.SSTORE
+    return code
+
+
+def _stack_bomb(slot: int) -> Bytecode:
+    """
+    Push past the 1024 stack ceiling, halting the frame on overflow.
+
+    Exactly ``_STACK_LIMIT + 1`` pushes overflow from any starting height;
+    the pre-bomb witness rolls back, proving the frame halted. The push
+    count is fixed, so a test can assert it analytically.
+    """
+    code = Bytecode()
+    code += Op.PUSH1(1)
+    code += Op.PUSH2(slot)
+    code += Op.SSTORE
+    for _ in range(_STACK_LIMIT + 1):
+        code += Op.PUSH0
+    return code
+
+
 def _epilogue() -> Bytecode:
     """
     Record what the frame has left before it ends.
@@ -401,6 +471,20 @@ def fuzzed_bytecode(
             continue
         if rng.random() < walk.terminator:
             code += _early_terminator(rng, domains, call_targets)
+            terminated = True
+            break
+        if call_targets and rng.random() < walk.returndata_overread:
+            code += _returndata_overread(call_slot)
+            call_slot += 1
+            terminated = True
+            break
+        if call_targets and rng.random() < walk.initcode_ef_prefix:
+            code += _initcode_ef_prefix(call_slot)
+            call_slot += 1
+            continue
+        if call_targets and rng.random() < walk.stack_bomb:
+            code += _stack_bomb(call_slot)
+            call_slot += 1
             terminated = True
             break
         op = rng.choice(PALETTE)
