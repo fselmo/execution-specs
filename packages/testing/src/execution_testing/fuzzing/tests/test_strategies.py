@@ -14,9 +14,20 @@ from ..strategies import (
     fuzzed_calldata,
 )
 
-TERMINATORS = {0x00, 0xF3, 0xFD}  # STOP, RETURN, REVERT
+# A full walk ends in STOP/RETURN/REVERT; an early halt-kind action may
+# also end the body in INVALID or SELFDESTRUCT.
+TERMINATORS = {0x00, 0xF3, 0xFD, 0xFE, 0xFF}
+STOP, INVALID = 0x00, 0xFE
 STATICCALL = 0xFA
 PRECOMPILES = list(range(1, 12))
+# Bytes that are undefined opcodes and never emitted by the palette or any
+# snippet, so their appearance proves the raw-byte walk action fired.
+UNDEFINED_BYTES = {0x0C, 0x0D, 0x0E, 0x0F, 0x1E, 0x1F, 0x21, 0x22}
+
+
+def _ends_in_stop(code: bytes) -> bool:
+    """True if the body ran its full walk (only STOP ends that path)."""
+    return bool(code) and code[-1] == STOP
 
 
 def test_bytecode_is_deterministic() -> None:
@@ -98,24 +109,37 @@ def test_no_precompile_calls_without_addresses() -> None:
         assert not _has_opcode(code, STATICCALL)
 
 
-def test_precompile_calls_injected_when_supplied() -> None:
-    """Supplying precompiles guarantees at least one call into one per body."""
-    for seed in range(20):
+def test_full_walk_body_guarantees_precompile_call() -> None:
+    """
+    A body that runs its whole walk (ends in STOP) always carries a
+    precompile call; an early halt-kind action may pre-empt the fallback,
+    which is expected, so the guarantee is conditioned on the full walk.
+    """
+    checked = 0
+    for seed in range(60):
         code = bytes(
             fuzzed_bytecode(random.Random(seed), precompiles=PRECOMPILES)
         )
-        assert any(_has_opcode(code, op) for op in (0xF1, 0xF2, STATICCALL))
+        if _ends_in_stop(code):
+            checked += 1
+            assert any(
+                _has_opcode(code, op) for op in (0xF1, 0xF2, STATICCALL)
+            )
+    assert checked  # some bodies did run the full walk
 
 
 def test_precompile_call_targets_supplied_address() -> None:
-    """An injected call targets a supplied precompile (or the boundary)."""
+    """Across seeds, injected calls target the supplied precompiles."""
     allowed = {a.to_bytes(20, "big") for a in PRECOMPILES}
     allowed.add((max(PRECOMPILES) + 1).to_bytes(20, "big"))
-    for seed in range(20):
+    hits = 0
+    for seed in range(40):
         code = bytes(
             fuzzed_bytecode(random.Random(seed), precompiles=PRECOMPILES)
         )
-        assert any(operand in allowed for operand in _push20_operands(code))
+        if any(operand in allowed for operand in _push20_operands(code)):
+            hits += 1
+    assert hits  # precompile addresses are reached over the seed range
 
 
 def test_precompile_bytecode_is_deterministic() -> None:
@@ -192,13 +216,22 @@ def _instructions(code: bytes) -> list[int]:
     return ops
 
 
-def test_epilogue_witnesses_gas_returndata_and_balance() -> None:
-    """Every body ends by storing GAS, RETURNDATASIZE and SELFBALANCE."""
-    for seed in range(10):
-        ops = _instructions(bytes(fuzzed_bytecode(random.Random(seed))))
-        tail = ops[-12:]
+def test_full_walk_body_witnesses_gas_returndata_and_balance() -> None:
+    """
+    A body ending in STOP ran its full walk and so carries the epilogue;
+    an early halt-kind action skips it deliberately (the halt is the
+    observation), so the check is conditioned on the full walk.
+    """
+    checked = 0
+    for seed in range(40):
+        code = bytes(fuzzed_bytecode(random.Random(seed)))
+        if not _ends_in_stop(code):
+            continue
+        checked += 1
+        tail = _instructions(code)[-12:]
         assert GAS in tail and RETURNDATASIZE in tail and SELFBALANCE in tail
         assert tail.count(SSTORE) >= 3
+    assert checked
 
 
 def test_witness_ranges_are_disjoint_and_ordered() -> None:
@@ -257,3 +290,66 @@ def test_no_shapes_without_targets() -> None:
     for seed in range(20):
         ops = _instructions(bytes(fuzzed_bytecode(random.Random(seed))))
         assert not any(op in ops for op in (0xF1, 0xF2, 0xF4, 0xFA))
+
+
+def test_walk_weights_reject_out_of_range() -> None:
+    """A walk weight outside [0, 1] fails loudly."""
+    from ..domains import WalkWeights
+
+    with pytest.raises(ValueError, match="outside"):
+        WalkWeights(raw_byte=1.5)
+
+
+def test_raw_byte_action_emits_undefined_opcodes() -> None:
+    """
+    The raw-byte action reaches undefined opcodes -- bytes no palette op
+    or snippet emits -- which is how InvalidOpcode is populated.
+    """
+    seen: set[int] = set()
+    for seed in range(120):
+        seen |= set(_instructions(bytes(fuzzed_bytecode(random.Random(seed)))))
+    assert seen & UNDEFINED_BYTES
+
+
+def test_raw_byte_never_lands_on_a_push() -> None:
+    """
+    Raw walk bytes exclude the PUSH range, so they never swallow the
+    epilogue witnesses that follow them as immediate data.
+    """
+    from ..strategies import _RAW_WALK_BYTES
+
+    assert not any(0x60 <= b <= 0x7F for b in _RAW_WALK_BYTES)
+
+
+def test_halt_kind_actions_end_bodies_early() -> None:
+    """
+    Across seeds, some bodies end in INVALID or SELFDESTRUCT -- halt kind
+    is a first-class action, not only a clean STOP/RETURN/REVERT tail.
+    """
+    endings: set[int] = set()
+    for seed in range(120):
+        code = bytes(
+            fuzzed_bytecode(random.Random(seed), call_targets=TARGETS)
+        )
+        endings.add(code[-1])
+    assert INVALID in endings or 0xFF in endings  # SELFDESTRUCT
+    assert STOP in endings  # and some still run the full walk
+
+
+def test_early_terminated_body_skips_the_epilogue() -> None:
+    """A body ending in INVALID carries no trailing epilogue SSTOREs."""
+    for seed in range(200):
+        code = bytes(fuzzed_bytecode(random.Random(seed)))
+        if code[-1] == INVALID:
+            # The epilogue's last act is an SSTORE; an INVALID tail proves
+            # the walk halted before the epilogue was appended.
+            assert code[-2] != SSTORE
+            return
+    raise AssertionError("no INVALID-terminated body found in 200 seeds")
+
+
+def test_walk_action_bytecode_is_deterministic() -> None:
+    """Walk actions are fully determined by the rng."""
+    a = bytes(fuzzed_bytecode(random.Random(11), call_targets=TARGETS))
+    b = bytes(fuzzed_bytecode(random.Random(11), call_targets=TARGETS))
+    assert a == b
