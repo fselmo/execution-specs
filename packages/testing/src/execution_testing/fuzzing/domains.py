@@ -1,0 +1,269 @@
+"""
+Value domains and mixture distributions shared by all generation engines.
+
+Uniform random values almost never land where EVM semantics change, and
+exact boundary constants alone never explore the space between them.
+Every domain here draws from a four-mode mixture -- zero, a boundary
+set, a small uniform range, and full width -- with the weights held as
+data, so "which distribution" is a measurable campaign parameter rather
+than a property of the code.
+
+Boundary sets are computed from the fork object, never written as
+literals: a repriced opcode or a raised cap changes the distribution
+with no edit to this package.
+"""
+
+import random
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
+
+if TYPE_CHECKING:
+    from execution_testing.forks import Fork
+
+
+def boundary_values(bits: int) -> List[int]:
+    """Type-width edges where arithmetic and encoding behavior change."""
+    values = {0, 1, 2, (1 << bits) - 1, (1 << bits) - 2}
+    for exp in (7, 8, 15, 16, 31, 32, 63, 64, 127, 128, 255):
+        if exp < bits:
+            values.update({1 << exp, (1 << exp) - 1, (1 << exp) + 1})
+    return sorted(values)
+
+
+U256_BOUNDARIES: Tuple[int, ...] = tuple(boundary_values(256))
+
+WORD_BOUNDARY_SIZES: Tuple[int, ...] = (0, 1, 31, 32, 33, 63, 64, 65)
+"""Byte-string sizes straddling the 32-byte words that price memory."""
+
+SMALL_SIZE_MAX = 64
+"""Upper end of the small-uniform mode for byte-string sizes."""
+
+
+@dataclass(frozen=True)
+class MixtureWeights:
+    """Mode weights for one value domain; must sum to 1."""
+
+    zero: float
+    boundary: float
+    small: float
+    full: float
+
+    def __post_init__(self) -> None:
+        """Reject weight vectors that are not a distribution."""
+        total = self.zero + self.boundary + self.small + self.full
+        if abs(total - 1.0) > 1e-9:
+            raise ValueError(f"mixture weights sum to {total}, not 1")
+
+
+GAS_WEIGHTS = MixtureWeights(zero=0.10, boundary=0.40, small=0.10, full=0.40)
+VALUE_WEIGHTS = MixtureWeights(zero=0.30, boundary=0.25, small=0.35, full=0.10)
+SIZE_WEIGHTS = MixtureWeights(zero=0.20, boundary=0.30, small=0.35, full=0.15)
+OPERAND_WEIGHTS = MixtureWeights(
+    zero=0.05, boundary=0.20, small=0.10, full=0.65
+)
+
+
+def draw_mixed(
+    rng: random.Random,
+    weights: MixtureWeights,
+    *,
+    boundaries: Sequence[int],
+    full_bits: int = 256,
+    small_max: int = 255,
+) -> int:
+    """
+    Draw one value from the four-mode mixture.
+
+    An empty boundary set falls through to the small mode.
+    """
+    roll = rng.random()
+    if roll < weights.zero:
+        return 0
+    roll -= weights.zero
+    if roll < weights.boundary and boundaries:
+        return rng.choice(list(boundaries))
+    roll -= weights.boundary
+    if roll < weights.small:
+        return rng.randint(0, small_max)
+    return rng.getrandbits(full_bits)
+
+
+@dataclass(frozen=True)
+class ValueDomains:
+    """Fork-computed boundary sets with per-domain mixture weights."""
+
+    call_gas_boundaries: Tuple[int, ...]
+    starve_gas: Tuple[int, ...]
+    salt_domain: Tuple[int, ...]
+    value_boundaries: Tuple[int, ...] = (1, 2)
+    storage_keys: Tuple[int, ...] = tuple(range(8))
+    storage_values: Tuple[int, ...] = (1, 2, 3)
+    gas_weights: MixtureWeights = GAS_WEIGHTS
+    value_weights: MixtureWeights = VALUE_WEIGHTS
+    size_weights: MixtureWeights = SIZE_WEIGHTS
+    operand_weights: MixtureWeights = OPERAND_WEIGHTS
+
+    def call_gas(self, rng: random.Random) -> Optional[int]:
+        """Gas for a message call; None forwards everything via GAS."""
+        weights = self.gas_weights
+        roll = rng.random()
+        if roll < weights.zero:
+            return 0
+        roll -= weights.zero
+        if roll < weights.boundary:
+            return rng.choice(list(self.call_gas_boundaries))
+        roll -= weights.boundary
+        if roll < weights.small:
+            return rng.randint(0, 255)
+        return None
+
+    def call_value(self, rng: random.Random) -> int:
+        """Value for a message call; full width bounces on balance."""
+        return draw_mixed(
+            rng, self.value_weights, boundaries=self.value_boundaries
+        )
+
+    def operand(self, rng: random.Random) -> int:
+        """A PUSH operand: mostly full width, with a boundary tail."""
+        return draw_mixed(
+            rng, self.operand_weights, boundaries=U256_BOUNDARIES
+        )
+
+    def storage_seed(self, rng: random.Random) -> Dict[int, int]:
+        """
+        A tiny pre-state storage: keys drawn from the same small domain
+        later writes use, so reset/set/clear pricing transitions collide
+        by construction.
+        """
+        return {
+            rng.choice(self.storage_keys): rng.choice(self.storage_values)
+            for _ in range(rng.randrange(0, len(self.storage_keys)))
+        }
+
+    def byte_size(self, rng: random.Random, cap: int = 256) -> int:
+        """A byte-string size in [0, cap], word-boundary weighted."""
+        weights = self.size_weights
+        roll = rng.random()
+        if roll < weights.zero:
+            return 0
+        roll -= weights.zero
+        if roll < weights.boundary:
+            sizes = [s for s in WORD_BOUNDARY_SIZES if s <= cap]
+            if sizes:
+                return rng.choice(sizes)
+        roll -= weights.boundary
+        if roll < weights.small:
+            return rng.randint(0, min(SMALL_SIZE_MAX, cap))
+        return rng.randint(0, cap)
+
+
+GENERIC_DOMAINS = ValueDomains(
+    call_gas_boundaries=tuple(boundary_values(16)),
+    starve_gas=(0, 1),
+    salt_domain=tuple(range(4)),
+)
+"""Fork-free defaults for callers without a fork in hand."""
+
+
+def fork_domains(fork: "Fork") -> ValueDomains:
+    """
+    Compute the fork's value domains from its own gas schedule.
+
+    The call-gas boundary set brackets the stipend, warm and cold access,
+    a cold write, and the cost of creating a funded account -- each one a
+    gas amount at which a child frame's capabilities change.
+    """
+    costs = fork.gas_costs()
+    stipend = costs.CALL_STIPEND
+    create_funded = (
+        costs.COLD_ACCOUNT_ACCESS + costs.NEW_ACCOUNT + costs.CALL_VALUE
+    )
+    call_gas = sorted(
+        {
+            1,
+            costs.WARM_ACCESS,
+            stipend - 1,
+            stipend,
+            stipend + 1,
+            costs.COLD_ACCOUNT_ACCESS - 1,
+            costs.COLD_ACCOUNT_ACCESS,
+            costs.COLD_STORAGE_ACCESS,
+            costs.COLD_STORAGE_ACCESS + costs.STORAGE_SET,
+            create_funded,
+        }
+    )
+    starve = sorted({0, costs.WARM_ACCESS, stipend - 1, stipend})
+    return ValueDomains(
+        call_gas_boundaries=tuple(call_gas),
+        starve_gas=tuple(starve),
+        salt_domain=tuple(range(4)),
+    )
+
+
+@dataclass(frozen=True)
+class AddressPool:
+    """
+    One mixed pool: existence, warmth, and precompile dispatch are all
+    exercised by a single target draw.
+    """
+
+    code: Tuple[int, ...]
+    senders: Tuple[int, ...]
+    precompiles: Tuple[int, ...]
+    boundary: int
+    nonexistent: Tuple[int, ...]
+
+    def call_targets(self) -> List[int]:
+        """Weighted in-EVM call targets, biased toward code accounts."""
+        return (
+            list(self.code) * 2
+            + list(self.senders)
+            + [self.boundary]
+            + list(self.nonexistent)
+        )
+
+    def tx_targets(self) -> List[int]:
+        """
+        Weighted transaction targets: code accounts dominate, but every
+        transaction can also enter directly at a precompile, the range
+        boundary, a sender, or an address that does not exist yet.
+        """
+        return (
+            list(self.code) * 3
+            + list(self.senders)
+            + list(self.precompiles)
+            + [self.boundary]
+            + list(self.nonexistent)
+        )
+
+    def one_wei_accounts(self) -> List[int]:
+        """
+        Addresses the generator seeds with one wei so they exist: the
+        precompiles themselves (a funded precompile is a real edge every
+        client must handle).
+        """
+        return sorted(set(self.precompiles))
+
+
+def mixed_address_pool(
+    precompiles: Sequence[int],
+    *,
+    code: Sequence[int],
+    senders: Sequence[int],
+) -> AddressPool:
+    """
+    Build the pool around the fork's precompile range.
+
+    ``precompiles`` may carry repeats (a weighted list biased toward the
+    fork's new precompiles); the repeats are preserved so target draws
+    keep the bias. The nonexistent addresses sit just past the range
+    boundary, so touching them exercises cold account creation.
+    """
+    boundary = max(precompiles) + 1
+    return AddressPool(
+        code=tuple(code),
+        senders=tuple(senders),
+        precompiles=tuple(precompiles),
+        boundary=boundary,
+        nonexistent=(boundary + 1, boundary + 2),
+    )
