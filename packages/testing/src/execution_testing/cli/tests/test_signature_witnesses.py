@@ -205,3 +205,121 @@ def test_the_near_miss_catches_a_broken_any_oog_detector(
     parent, child = _child_oog_case()
     _, signature = _fill(parent, child)
     assert "call-entry-oog" in signature.events  # the near-miss would fail
+
+
+# ---- Boundary-halt motifs (design §3.6(e)) --------------------------------
+#
+# Each motif's claim is "this crafted frame halts with error X". The
+# behavioral witness is a pre-halt SSTORE that reverts iff the frame really
+# halted; the near-miss is the exact-boundary variant that must survive.
+
+RDC = Op.RETURNDATACOPY
+IDENTITY = 4  # the identity precompile echoes its input as returndata
+
+
+def _identity_returndata(size: int) -> Bytecode:
+    """Call identity with ``size`` bytes so returndata is exactly that."""
+    code = Op.PUSH0 + Op.PUSH0 + Op.MSTORE  # zero a word of args
+    code += Op.PUSH0  # retSize (read via RETURNDATASIZE, not memory)
+    code += Op.PUSH0  # retOffset
+    code += Op.PUSH1(size)  # argsSize
+    code += Op.PUSH0  # argsOffset
+    code += Op.PUSH20(IDENTITY)
+    code += Op.GAS
+    return code + Op.STATICCALL + Op.POP
+
+
+def _returndatacopy_at(offset_past: int) -> Bytecode:
+    """RETURNDATACOPY of RETURNDATASIZE + ``offset_past`` bytes."""
+    code = Bytecode() + Op.RETURNDATASIZE
+    if offset_past:
+        code += Op.PUSH1(offset_past) + Op.ADD
+    code += Op.PUSH0 + Op.PUSH0 + RDC
+    return code
+
+
+def test_returndata_overread_halts_one_past_the_boundary() -> None:
+    """
+    Positive + near-miss in one: copy exactly to the returndata boundary
+    survives (its post-write commits); one byte past halts the frame
+    (its pre-write reverts). The tracer records the OutOfBoundsRead.
+    """
+    exact = _store_before() + _identity_returndata(32)
+    exact += _returndatacopy_at(0) + _store_after() + Op.STOP
+    fixture, signature = _fill(exact)
+    stored = _storage(fixture, PARENT)
+    assert stored.get(BEFORE_SLOT) == 1 and stored.get(AFTER_SLOT) == 1
+
+    over = _store_before() + _identity_returndata(32)
+    over += _returndatacopy_at(1) + _store_after() + Op.STOP
+    fixture, signature = _fill(over)
+    stored = _storage(fixture, PARENT)
+    assert BEFORE_SLOT not in stored and AFTER_SLOT not in stored
+    assert (0, "halt", "OutOfBoundsRead") in signature.frames
+
+
+def _create_ef(prefix_at: int) -> Bytecode:
+    """
+    CREATE initcode returning code with 0xEF at byte ``prefix_at``.
+
+    ``prefix_at == 0`` is rejected (InvalidContractPrefix); byte 1 (a
+    0x00 0xEF body) deploys, the near-miss.
+    """
+    if prefix_at == 0:
+        body = Op.PUSH1(0xEF) + Op.PUSH0 + Op.MSTORE8 + Op.PUSH1(1)
+    else:
+        body = Op.PUSH1(0xEF) + Op.PUSH1(1) + Op.MSTORE8 + Op.PUSH1(2)
+    initcode = body + Op.PUSH0 + Op.RETURN
+    # Deploy the initcode: store it left-aligned, CREATE over its length.
+    packed = int.from_bytes(bytes(initcode).ljust(32, b"\x00"), "big")
+    code = Op.PUSH32(packed) + Op.PUSH0 + Op.MSTORE
+    code += Op.PUSH1(len(bytes(initcode)))  # size
+    code += Op.PUSH0  # offset
+    code += Op.PUSH0  # value
+    code += Op.CREATE
+    code += Op.PUSH2(0xC0) + Op.SSTORE  # store the CREATE result
+    return code
+
+
+def test_initcode_ef_prefix_is_rejected_at_byte_zero_only() -> None:
+    """
+    Near-miss at byte 1: 0xEF one byte in deploys (CREATE returns an
+    address); 0xEF at byte 0 is rejected (CREATE returns 0, no code).
+
+    The claim is behavioral only: the spec raises InvalidContractPrefix
+    in process_create_message's finalization, which -- unlike the
+    execute_code loop -- emits no OpException, so the tracer cannot see
+    it (see unreachable_on_fork). The witness is CREATE's own result.
+    """
+    fixture, _ = _fill(_create_ef(prefix_at=1) + Op.STOP)
+    assert _storage(fixture, PARENT).get(0xC0, 0) != 0  # deployed
+
+    fixture, _ = _fill(_create_ef(prefix_at=0) + Op.STOP)
+    assert _storage(fixture, PARENT).get(0xC0, 0) == 0  # rejected, no address
+
+
+def _pushes(count: int) -> Bytecode:
+    code = Bytecode()
+    for _ in range(count):
+        code += Op.PUSH0
+    return code
+
+
+def test_stack_bomb_overflows_at_1025_not_1024() -> None:
+    """
+    Near-miss at exactly the ceiling: 1024 pushes survive (post-write
+    commits); 1025 overflow the frame (pre-write reverts). Analytic
+    witness: the halting body carries exactly 1025 PUSH0 opcodes.
+    """
+    # 1024 pushes leave the stack exactly full, so nothing may push after;
+    # reaching STOP proves the ceiling was not crossed.
+    full = _store_before() + _pushes(1024) + Op.STOP
+    fixture, _ = _fill(full)
+    assert _storage(fixture, PARENT).get(BEFORE_SLOT) == 1
+
+    bomb_body = _pushes(1025)
+    assert bytes(bomb_body).count(0x5F) == 1025  # analytic witness
+    over = _store_before() + bomb_body
+    fixture, signature = _fill(over)
+    assert BEFORE_SLOT not in _storage(fixture, PARENT)
+    assert (0, "halt", "StackOverflowError") in signature.frames
