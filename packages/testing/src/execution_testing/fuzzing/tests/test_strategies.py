@@ -112,7 +112,7 @@ def test_no_precompile_calls_without_addresses() -> None:
 def test_full_walk_body_guarantees_precompile_call() -> None:
     """
     A body that runs its whole walk (ends in STOP) always carries a
-    precompile call; an early halt-kind action may pre-empt the fallback,
+    precompile call; an early halt-kind action may preempt the fallback,
     which is expected, so the guarantee is conditioned on the full walk.
     """
     checked = 0
