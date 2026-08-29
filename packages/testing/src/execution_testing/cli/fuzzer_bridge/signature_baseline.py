@@ -127,6 +127,20 @@ def fork_reach_space(
     )
 
 
+TRACER_INVISIBLE_HALTS: FrozenSet[str] = frozenset(
+    {"AddressCollision", "InvalidContractPrefix"}
+)
+"""Halts that are reachable and behaviorally witnessable but NOT
+signature-visible -- the fourth witness category. EELS raises them in
+`process_create_message`'s finalization (and the tx-level create path),
+which sets `evm.error` without an `OpException`, so the signature tracer
+never records them. This is an EELS trace-completeness gap, not a fork
+limit; the fix is one `evm_trace` emit upstream. The motifs that reach
+them (0xEF initcode, repeated-salt CREATE2) serve the client differential,
+where these paths have historically split implementations. Do not invent
+an L1 event for them -- see the note in `signature.EVENT_WITNESSES`."""
+
+
 _GAS_TO_REACH_DEPTH_LIMIT = 30_000_000_000
 """Roughly 2600 * (64/63)**1024: the transaction gas the 63/64 rule needs
 to still leave a workable remainder at depth 1024. A fork whose tx-gas cap
@@ -142,17 +156,15 @@ def unreachable_on_fork(
     )
 
     events: Set[str] = set()
-    # These halts occur in EELS but never reach the tracer as a frame:
-    # AddressCollision is raised before any frame exists (tx-level create)
-    # or pushes 0 without raising (in-EVM `generic_create`), and
-    # InvalidContractPrefix is raised in `process_create_message`'s
-    # finalization, which -- unlike the execute_code loop -- emits no
-    # OpException. The motifs still exercise both paths for the client
-    # differential; the signature simply cannot witness them.
+    # Tracer-invisible-but-reachable halts (see TRACER_INVISIBLE_HALTS):
+    # a distinct category from fork-impossible cells. They occur in EELS
+    # and are behaviorally witnessable, but are raised off the trace
+    # stream, so the signature cannot carry them. Grouped here only so the
+    # reach map does not report them as perpetually-missing targets.
     cells = {(0, "halt", "WriteInStaticContext")} | {
         (bucket, "halt", name)
         for bucket in DEPTH_BUCKETS
-        for name in ("AddressCollision", "InvalidContractPrefix")
+        for name in TRACER_INVISIBLE_HALTS
     }
     cap = fork.transaction_gas_limit_cap()
     if cap is not None and cap < _GAS_TO_REACH_DEPTH_LIMIT:
@@ -357,6 +369,25 @@ def event_rates(fork: "Fork", seeds: range) -> Dict[str, Dict[str, int]]:
     return rates
 
 
+RATE_FLOOR_FRACTION = 0.01
+"""Soft floor: an event firing in under 1% of fillable cases is one bad
+weight change from dark, and the reach gate (which proves existence, not
+rate) cannot see it. Below this the trend warns -- it never auto-corrects.
+Fixing a sub-floor rate by hand-tuning weights would contaminate the
+distribution-arms comparison; that experiment is where weights are set."""
+
+
+def rate_floor_warnings(record: Dict[str, Any]) -> List[str]:
+    """Events firing below the soft floor -- the ones near going dark."""
+    seeds = record["seeds"]
+    floor = RATE_FLOOR_FRACTION * seeds
+    return sorted(
+        f"{event} {entry['count']}/{seeds}"
+        for event, entry in record["rates"].items()
+        if entry["count"] < floor
+    )
+
+
 def event_rate_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
     """One trendable reach-log record of per-event firing rates."""
     from datetime import datetime, timezone
@@ -366,26 +397,33 @@ def event_rate_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
     )
     from execution_testing.cli.mutation.reach_log import eels_commit
 
-    return {
+    record = {
         "kind": "event-rates",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "eels_commit": eels_commit(),
         "fork": fork.name(),
         "generator_version": GENERATOR_VERSION,
         "seeds": len(seeds),
+        "rate_floor_fraction": RATE_FLOOR_FRACTION,
         "rates": event_rates(fork, seeds),
     }
+    record["below_floor"] = rate_floor_warnings(record)
+    return record
 
 
 def render_event_rates(record: Dict[str, Any]) -> str:
-    """Render one event-rate record as a small table."""
+    """Render one event-rate record as a small table, flagging the floor."""
+    seeds = record["seeds"]
+    floor = RATE_FLOOR_FRACTION * seeds
     lines = [
         f"event rates (generator v{record['generator_version']}, "
-        f"{record['fork']}, {record['seeds']} seeds):"
+        f"{record['fork']}, {seeds} seeds; floor "
+        f"{RATE_FLOOR_FRACTION:.0%}):"
     ]
     for event, entry in sorted(record["rates"].items()):
+        flag = "  <- below floor" if entry["count"] < floor else ""
         lines.append(
-            f"  {event}: {entry['count']}/{record['seeds']} "
-            f"(first seed {entry['first']})"
+            f"  {event}: {entry['count']}/{seeds} "
+            f"(first seed {entry['first']}){flag}"
         )
     return "\n".join(lines)

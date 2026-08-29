@@ -62,7 +62,19 @@ its detector -- an event registers here only with one:
 
 The witness validates the detector's claim about what EELS did; whether
 EELS itself is right is a different claim, owned by the invariants, the
-property suite, and the client differential."""
+property suite, and the client differential.
+
+There is a fourth category that is deliberately NOT here: halts that are
+reachable and behaviorally witnessable but not signature-visible, because
+EELS raises them off the trace stream (its ``process_create_message``
+finalization sets ``evm.error`` without an ``OpException``). Those --
+AddressCollision, InvalidContractPrefix, and the rest of the
+create-finalization class -- are recorded in ``TRACER_INVISIBLE_HALTS``
+and marked unreachable in the signature. Do NOT invent an L1 event to
+"reach" them: that would fabricate a signal for a phenomenon the trace
+stream genuinely does not carry. The real fix is upstream (one
+``evm_trace`` emit in that finalization); until it lands the motifs earn
+their keep in the client differential, not the signature."""
 
 KNOWN_EVENTS = frozenset(EVENT_WITNESSES)
 """The unreached complement is computed against this set, so a new event

@@ -40,10 +40,20 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 8
+BASELINE_GENERATOR_VERSION = 9
 BASELINE_FORK = "Amsterdam"
 
-GATE_SEEDS: Tuple[int, ...] = (35, 96, 97, 115, 183, 285)
+GATE_SEEDS: Tuple[int, ...] = (
+    62,
+    117,
+    120,
+    121,
+    148,
+    203,
+    205,
+    231,
+    396,
+)
 """Greedy cover over the 400-seed baseline: together these fire every
 target below."""
 
@@ -70,10 +80,27 @@ _ALL_CALLS = (
     "STATICCALL",
 )
 
+_DEEP_HALTS = (
+    "InvalidJumpDestError",
+    "InvalidOpcode",
+    "InvalidParameter",
+    "KZGProofError",
+    "OutOfBoundsRead",
+    "OutOfGasError",
+    "STOP",
+    "StackOverflowError",
+    "StackUnderflowError",
+    "WriteInStaticContext",
+)
+# Revert at depth >= 2 is reachable but rare (the terminating motifs
+# preempt deep recursion), so it is not in the baseline; the event-rate
+# trend, not the gate, watches revert's rarity.
+
 _GATE_CELLS: Dict[int, Dict[str, Tuple[str, ...]]] = {
     0: {
         "call": _ALL_CALLS,
         "halt": (
+            "InvalidJumpDestError",
             "InvalidOpcode",
             "InvalidParameter",
             "KZGProofError",
@@ -88,6 +115,7 @@ _GATE_CELLS: Dict[int, Dict[str, Tuple[str, ...]]] = {
     1: {
         "call": _ALL_CALLS,
         "halt": (
+            "InvalidJumpDestError",
             "InvalidOpcode",
             "InvalidParameter",
             "KZGProofError",
@@ -96,35 +124,12 @@ _GATE_CELLS: Dict[int, Dict[str, Tuple[str, ...]]] = {
             "Revert",
             "STOP",
             "StackOverflowError",
+            "StackUnderflowError",
             "WriteInStaticContext",
         ),
     },
-    2: {
-        "call": _ALL_CALLS,
-        "halt": (
-            "InvalidOpcode",
-            "InvalidParameter",
-            "OutOfBoundsRead",
-            "OutOfGasError",
-            "Revert",
-            "STOP",
-            "StackOverflowError",
-            "WriteInStaticContext",
-        ),
-    },
-    3: {
-        "call": _ALL_CALLS,
-        "halt": (
-            "InvalidOpcode",
-            "InvalidParameter",
-            "OutOfBoundsRead",
-            "OutOfGasError",
-            "Revert",
-            "STOP",
-            "StackOverflowError",
-            "WriteInStaticContext",
-        ),
-    },
+    2: {"call": _ALL_CALLS, "halt": _DEEP_HALTS},
+    3: {"call": _ALL_CALLS, "halt": _DEEP_HALTS},
 }
 
 GATE_FRAMES: FrozenSet[Tuple[int, str, str]] = frozenset(

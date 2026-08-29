@@ -8,6 +8,7 @@ from execution_testing.cli.fuzzer_bridge.signature_baseline import (
     event_rates,
     fork_reach_space,
     novelty_curve,
+    rate_floor_warnings,
     render_curve,
     render_event_rates,
     render_unreached,
@@ -161,4 +162,21 @@ def test_event_rate_record_is_trendable() -> None:
     assert record["kind"] == "event-rates"
     assert record["generator_version"] >= 7
     assert record["seeds"] == 2 and "rates" in record
+    assert "below_floor" in record
     assert "event rates" in render_event_rates(record)
+
+
+def test_rate_floor_flags_the_near_dark_events() -> None:
+    """An event below the soft floor is warned; a common one is not."""
+    record = {
+        "seeds": 400,
+        "generator_version": 9,
+        "fork": "Amsterdam",
+        "rates": {
+            "rare": {"first": 300, "count": 1},
+            "common": {"first": 0, "count": 200},
+        },
+    }
+    warnings = rate_floor_warnings(record)
+    assert warnings == ["rare 1/400"]
+    assert "below floor" in render_event_rates(record)
