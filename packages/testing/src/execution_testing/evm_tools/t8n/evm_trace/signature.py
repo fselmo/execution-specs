@@ -38,21 +38,35 @@ CALL_OPS = frozenset(
     {"CALL", "CALLCODE", "DELEGATECALL", "STATICCALL", "CREATE", "CREATE2"}
 )
 
-KNOWN_EVENTS = frozenset(
-    {
-        "create",
-        "revert",
-        "child-revert",
-        "child-exception",
-        "precompile",
-        "state-gas",
-        "sstore-stipend",
-        "refund-clamp",
-        "call-depth-limit",
-    }
-)
-"""Every L1 tag the tracer can emit; the unreached complement is computed
-against this set, so a new event must be registered here."""
+EVENT_WITNESSES = {
+    "create": "behavioral",
+    "revert": "behavioral",
+    "child-revert": "behavioral",
+    "child-exception": "behavioral",
+    "precompile": "behavioral",
+    "state-gas": "behavioral",
+    "sstore-stipend": "behavioral",
+    "refund-clamp": "behavioral",
+    "call-depth-limit": "behavioral",
+    "call-entry-oog": "behavioral",
+}
+"""Every L1 tag the tracer can emit, with the witness kind that validates
+its detector -- an event registers here only with one:
+
+- ``behavioral``: a post-state or gas footprint of the same real execution
+  proves the phenomenon without the tracer.
+- ``trace``: an independent reader of EELS's own EIP-3155 output (a
+  different code path from this tracer) confirms it.
+- ``analytic``: the expected value is computable from the input (e.g. the
+  bigram set of a straight-line program).
+
+The witness validates the detector's claim about what EELS did; whether
+EELS itself is right is a different claim, owned by the invariants, the
+property suite, and the client differential."""
+
+KNOWN_EVENTS = frozenset(EVENT_WITNESSES)
+"""The unreached complement is computed against this set, so a new event
+must be registered in EVENT_WITNESSES (with its witness kind) to count."""
 
 KNOWN_HALT_KINDS = frozenset(
     {
@@ -151,6 +165,12 @@ class SignatureTracer:
         self._frames: Set[Tuple[int, str, str]] = set()
         self._events: Set[str] = set()
         self._max_depth = 0
+        # True only between a CALL-family OpStart and the next OpStart or
+        # PrecompileStart: the window in which an OutOfGasError means the
+        # caller could not afford to enter the child at all. Cleared once
+        # any child op runs (or a precompile begins), so a child-frame or
+        # precompile-internal OOG is never mistaken for a call-entry OOG.
+        self._call_pending = False
 
     def __call__(self, evm: object, event: TraceEvent) -> None:
         """Fold one trace event into the accumulating signature."""
@@ -161,8 +181,11 @@ class SignatureTracer:
             if self._prev_op is not None:
                 self._bigrams.add((self._prev_op, name))
             self._prev_op = name
+            # A new op has begun, so any pending call charged successfully.
+            self._call_pending = False
             if name in CALL_OPS:
                 self._frames.add((_bucket(depth), "call", name))
+                self._call_pending = True
                 if name in ("CREATE", "CREATE2"):
                     self._events.add("create")
                 if depth >= _STACK_DEPTH_LIMIT:
@@ -173,6 +196,7 @@ class SignatureTracer:
                     self._events.add("sstore-stipend")
         elif isinstance(event, EvmStop):
             self._frames.add((_bucket(depth), "halt", event.op.name))
+            self._call_pending = False
             if event.op.name == "REVERT":
                 self._events.add("revert")
                 if depth > 0:
@@ -182,6 +206,9 @@ class SignatureTracer:
             # EvmStop(REVERT) -- the unreached map exposed the dead path.
             error_kind = type(event.error).__name__
             self._frames.add((_bucket(depth), "halt", error_kind))
+            if self._entry_oog(error_kind):
+                self._events.add("call-entry-oog")
+            self._call_pending = False
             if error_kind == "Revert":
                 self._events.add("revert")
                 if depth > 0:
@@ -189,12 +216,25 @@ class SignatureTracer:
             elif depth > 0:
                 self._events.add("child-exception")
         elif isinstance(event, PrecompileStart):
+            self._call_pending = False
             self._events.add("precompile")
         elif isinstance(event, StateGasAndRefund):
             self._events.add("state-gas")
         elif isinstance(event, TransactionEnd):
             if _refund_is_clamped(evm):
                 self._events.add("refund-clamp")
+
+    def _entry_oog(self, error_kind: str) -> bool:
+        """
+        Whether this exception is a call op that died charging its entry
+        cost: an OutOfGasError inside the pending window -- after a
+        CALL-family OpStart, before any child op or precompile began.
+
+        Kept as its own predicate so the witness tests can prove they
+        discriminate: flipping it to fire on any OutOfGasError must turn
+        the child-OOG and precompile-OOG near-misses red.
+        """
+        return self._call_pending and error_kind == "OutOfGasError"
 
     def signature(self) -> Signature:
         """Return the accumulated signature."""

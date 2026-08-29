@@ -128,6 +128,59 @@ def test_call_depth_limit_fires_at_the_ceiling_not_below() -> None:
     assert "call-depth-limit" not in miss.signature().events
 
 
+def test_call_entry_oog_fires_inside_the_pending_window() -> None:
+    """An OOG right after a CALL OpStart is a call-entry OOG."""
+
+    class OutOfGasError(Exception):
+        pass
+
+    tracer = SignatureTracer()
+    tracer(_evm(0), OpStart(op=Ops.CALL))
+    tracer(_evm(0), OpException(error=OutOfGasError()))
+    assert "call-entry-oog" in tracer.signature().events
+
+
+def test_child_op_closes_the_pending_window() -> None:
+    """Once any child op ran, an OOG is a child OOG, not call-entry."""
+
+    class OutOfGasError(Exception):
+        pass
+
+    tracer = SignatureTracer()
+    tracer(_evm(0), OpStart(op=Ops.CALL))
+    tracer(_evm(1), OpStart(op=Ops.SSTORE))
+    tracer(_evm(1), OpException(error=OutOfGasError()))
+    assert "call-entry-oog" not in tracer.signature().events
+
+
+def test_precompile_start_closes_the_pending_window() -> None:
+    """A precompile-internal OOG is never a call-entry OOG."""
+
+    class OutOfGasError(Exception):
+        pass
+
+    tracer = SignatureTracer()
+    tracer(_evm(0), OpStart(op=Ops.STATICCALL))
+    tracer(_evm(1), PrecompileStart(address=b"\x02"))
+    tracer(_evm(1), OpException(error=OutOfGasError()))
+    assert "call-entry-oog" not in tracer.signature().events
+
+
+def test_non_oog_exception_in_the_window_is_not_call_entry() -> None:
+    """
+    Only OutOfGasError counts: a child InvalidOpcode before its first
+    OpStart (undefined byte at pc 0) must not fire call-entry-oog.
+    """
+
+    class InvalidOpcode(Exception):  # noqa: N818 - mirrors the spec's name
+        pass
+
+    tracer = SignatureTracer()
+    tracer(_evm(0), OpStart(op=Ops.CALL))
+    tracer(_evm(1), OpException(error=InvalidOpcode()))
+    assert "call-entry-oog" not in tracer.signature().events
+
+
 def test_merge_unions_layers_and_empty_is_empty() -> None:
     """Merging unions each layer; the empty signature reports empty."""
     assert EMPTY_SIGNATURE.is_empty()
