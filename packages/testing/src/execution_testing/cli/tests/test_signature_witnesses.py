@@ -323,3 +323,28 @@ def test_stack_bomb_overflows_at_1025_not_1024() -> None:
     fixture, signature = _fill(over)
     assert BEFORE_SLOT not in _storage(fixture, PARENT)
     assert (0, "halt", "StackOverflowError") in signature.frames
+
+
+def _jump_to(offset_from_pc: int, landing: Bytecode) -> Bytecode:
+    """PC-relative JUMP to ``landing``, ``offset_from_pc`` bytes past PC."""
+    code = _store_before()
+    code += Op.PC + Op.PUSH1(offset_from_pc) + Op.ADD + Op.JUMP
+    return code + landing
+
+
+def test_jump_lands_on_jumpdest_not_on_a_pushed_5b() -> None:
+    """
+    CD's split: a jump to a JUMPDEST *opcode* succeeds; a jump to a 0x5B
+    byte that sits in PUSH data fails. Both bytes are 0x5B -- only
+    jumpdest analysis tells them apart, and that is where clients split.
+    """
+    # Success: PC..JUMP is 5 bytes, so X+5 is the JUMPDEST opcode.
+    landing = Op.JUMPDEST + Op.PUSH1(1) + Op.PUSH2(0xD0) + Op.SSTORE + Op.STOP
+    fixture, _ = _fill(_jump_to(5, landing))
+    assert _storage(fixture, PARENT).get(0xD0) == 1
+    assert _storage(fixture, PARENT).get(BEFORE_SLOT) == 1
+
+    # Fail: X+6 is the 0x5B *inside* the PUSH1 immediate below.
+    fixture, signature = _fill(_jump_to(6, Op.PUSH1(0x5B) + Op.STOP))
+    assert BEFORE_SLOT not in _storage(fixture, PARENT)
+    assert (0, "halt", "InvalidJumpDestError") in signature.frames
