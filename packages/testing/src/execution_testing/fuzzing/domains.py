@@ -83,6 +83,7 @@ class WalkWeights:
     returndata_overread: float = 0.03
     initcode_ef_prefix: float = 0.03
     stack_bomb: float = 0.02
+    bad_jump: float = 0.03
 
     def __post_init__(self) -> None:
         """Reject weights outside [0, 1]."""

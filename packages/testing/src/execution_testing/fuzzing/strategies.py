@@ -371,6 +371,29 @@ def _stack_bomb(slot: int) -> Bytecode:
     return code
 
 
+def _bad_jump(slot: int) -> Bytecode:
+    """
+    ``JUMP`` onto a 0x5B byte that sits inside PUSH data -- rejected.
+
+    A real JUMPDEST (a 0x5B *opcode*) is a valid target; a 0x5B that is a
+    PUSH immediate is not, and jumpdest-analysis bugs have split clients
+    at exactly that distinction. ``PC`` makes the target position-
+    independent: from the ``PC`` opcode at offset X the layout is
+    ``PC, PUSH1 6, ADD, JUMP, PUSH1 0x5B``, so the jump targets X+6 -- the
+    0x5B held as PUSH data. The pre-jump witness rolls back on the halt.
+    """
+    code = Bytecode()
+    code += Op.PUSH1(1)
+    code += Op.PUSH2(slot)
+    code += Op.SSTORE
+    code += Op.PC
+    code += Op.PUSH1(6)
+    code += Op.ADD
+    code += Op.JUMP
+    code += Op.PUSH1(0x5B)
+    return code
+
+
 def _epilogue() -> Bytecode:
     """
     Record what the frame has left before it ends.
@@ -484,6 +507,11 @@ def fuzzed_bytecode(
             continue
         if call_targets and rng.random() < walk.stack_bomb:
             code += _stack_bomb(call_slot)
+            call_slot += 1
+            terminated = True
+            break
+        if call_targets and rng.random() < walk.bad_jump:
+            code += _bad_jump(call_slot)
             call_slot += 1
             terminated = True
             break
