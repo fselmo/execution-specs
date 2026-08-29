@@ -14,6 +14,12 @@ Re-baseline deliberately, never silently: the version guard fails first
 with instructions, and ``compute_gate_baseline`` produces the
 replacement constants, so a generator bump can never quietly weaken the
 gate.
+
+The gate detects dark, not rare: a capability dropping from 10% of
+cases to 0.1% still passes while the chosen seeds fire. Pair every
+re-baseline with an event-rate record
+(``signature_baseline.event_rate_record``) appended to the reach log --
+the trend a human reads to catch a capability quietly becoming rare.
 """
 
 from typing import (

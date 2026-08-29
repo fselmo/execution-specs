@@ -56,6 +56,8 @@ def reach_trend(path: Path) -> str:
     by_shape: Dict[str, List[Dict[str, Any]]] = {}
     for line in path.read_text().splitlines():
         record = json.loads(line)
+        if "shape" not in record:
+            continue  # other kinds (e.g. event-rates) trend elsewhere
         by_shape.setdefault(record["shape"], []).append(record)
     lines = []
     for shape in sorted(by_shape):
