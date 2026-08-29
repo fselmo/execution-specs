@@ -4,9 +4,12 @@ from typing import Iterable, Tuple
 
 from execution_testing.cli.fuzzer_bridge.signature_baseline import (
     NoveltyTracker,
+    event_rate_record,
+    event_rates,
     fork_reach_space,
     novelty_curve,
     render_curve,
+    render_event_rates,
     render_unreached,
     signature_baseline,
     unreachable_on_fork,
@@ -138,3 +141,21 @@ def test_baseline_over_real_seeds_reports_novelty() -> None:
     assert report.frames > 0 and report.bigrams > 0
     assert report.max_depth >= 1  # real fills reach a child frame
     assert "novel" in report.summary() and "max depth" in report.summary()
+
+
+def test_event_rates_carry_first_seed_and_count() -> None:
+    """Rates hold a first-firing seed and a count within the range."""
+    rates = event_rates(Amsterdam, range(3))
+    assert rates  # real fills fire events
+    for entry in rates.values():
+        assert 0 <= entry["first"] <= 2
+        assert 1 <= entry["count"] <= 3
+
+
+def test_event_rate_record_is_trendable() -> None:
+    """The record names its kind, version and range, and renders."""
+    record = event_rate_record(Amsterdam, range(2))
+    assert record["kind"] == "event-rates"
+    assert record["generator_version"] >= 7
+    assert record["seeds"] == 2 and "rates" in record
+    assert "event rates" in render_event_rates(record)

@@ -11,7 +11,16 @@ fresh-seed-only curve at equal budget.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, FrozenSet, List, Optional, Set, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    FrozenSet,
+    List,
+    Optional,
+    Set,
+    Tuple,
+)
 
 if TYPE_CHECKING:
     from execution_testing.evm_tools.t8n.evm_trace.signature import Signature
@@ -305,3 +314,73 @@ def signature_baseline(fork: "Fork", seeds: range) -> BaselineReport:
     return BaselineReport(
         len(seeds), novel, frames, events, bigrams, max_depth
     )
+
+
+def event_rates(fork: "Fork", seeds: range) -> Dict[str, Dict[str, int]]:
+    """
+    Per-event firing rate over a seed range: first-firing seed + count.
+
+    The reach gate proves a capability exists; it is structurally blind
+    to one quietly becoming rare -- its chosen seeds still fire, and a
+    re-baseline will hunt for seeds that fire even a nearly-unreachable
+    event. This is the trend a human reads to catch that: append a
+    record per GENERATOR_VERSION bump and compare the counts.
+    """
+    from execution_testing.cli.fuzzer_bridge.campaign import fill_case
+    from execution_testing.cli.fuzzer_bridge.generator import (
+        generate_fuzzer_output,
+    )
+    from execution_testing.client_clis.clis.execution_specs import (
+        ExecutionSpecsTransitionTool,
+    )
+
+    eels = ExecutionSpecsTransitionTool()
+    eels.compute_signature = True
+    rates: Dict[str, Dict[str, int]] = {}
+    for seed in seeds:
+        eels.last_signature = None
+        try:
+            fill_case(generate_fuzzer_output(fork, seed), fork, eels)
+        except Exception:  # noqa: BLE001 - unfillable is data
+            continue
+        signature = eels.last_signature
+        if signature is None:
+            continue
+        for event in signature.events:
+            entry = rates.setdefault(event, {"first": seed, "count": 0})
+            entry["count"] += 1
+    return rates
+
+
+def event_rate_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
+    """One trendable reach-log record of per-event firing rates."""
+    from datetime import datetime, timezone
+
+    from execution_testing.cli.fuzzer_bridge.generator import (
+        GENERATOR_VERSION,
+    )
+    from execution_testing.cli.mutation.reach_log import eels_commit
+
+    return {
+        "kind": "event-rates",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "eels_commit": eels_commit(),
+        "fork": fork.name(),
+        "generator_version": GENERATOR_VERSION,
+        "seeds": len(seeds),
+        "rates": event_rates(fork, seeds),
+    }
+
+
+def render_event_rates(record: Dict[str, Any]) -> str:
+    """Render one event-rate record as a small table."""
+    lines = [
+        f"event rates (generator v{record['generator_version']}, "
+        f"{record['fork']}, {record['seeds']} seeds):"
+    ]
+    for event, entry in sorted(record["rates"].items()):
+        lines.append(
+            f"  {event}: {entry['count']}/{record['seeds']} "
+            f"(first seed {entry['first']})"
+        )
+    return "\n".join(lines)
