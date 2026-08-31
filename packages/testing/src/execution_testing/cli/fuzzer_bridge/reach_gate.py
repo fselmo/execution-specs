@@ -40,17 +40,18 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 10
+BASELINE_GENERATOR_VERSION = 11
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    105,
-    111,
-    143,
-    169,
-    218,
-    293,
-    376,
+    3,
+    20,
+    103,
+    136,
+    155,
+    160,
+    209,
+    362,
 )
 """Greedy cover over the 400-seed baseline: together these fire every
 target below."""
@@ -79,10 +80,10 @@ _ALL_CALLS = (
 )
 
 _DEEP_HALTS = (
+    "InvalidJumpDestError",
     "InvalidOpcode",
     "InvalidParameter",
     "KZGProofError",
-    "OutOfBoundsRead",
     "OutOfGasError",
     "Revert",
     "STOP",
@@ -90,9 +91,10 @@ _DEEP_HALTS = (
     "StackUnderflowError",
     "WriteInStaticContext",
 )
-# InvalidJumpDestError at depth >= 2 is reachable but rare (bad-jump is a
-# low-weight terminating motif, so it seldom lands deep); it is not in the
-# baseline. The event-rate trend, not the gate, watches rarity.
+_DEEPEST_HALTS = tuple(h for h in _DEEP_HALTS if h != "Revert")
+# Which rare halts land deep shifts between generator versions as the
+# motif weights move; the baseline records what a version actually
+# reaches, and the event-rate and density trends watch the rates.
 
 _GATE_CELLS: Dict[int, Dict[str, Tuple[str, ...]]] = {
     0: {
@@ -127,7 +129,7 @@ _GATE_CELLS: Dict[int, Dict[str, Tuple[str, ...]]] = {
         ),
     },
     2: {"call": _ALL_CALLS, "halt": _DEEP_HALTS},
-    3: {"call": _ALL_CALLS, "halt": _DEEP_HALTS},
+    3: {"call": _ALL_CALLS, "halt": _DEEPEST_HALTS},
 }
 
 GATE_FRAMES: FrozenSet[Tuple[int, str, str]] = frozenset(
