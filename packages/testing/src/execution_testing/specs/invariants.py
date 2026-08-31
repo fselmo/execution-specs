@@ -15,7 +15,7 @@ fixture's ``_info`` metadata via ``FillResult.metadata``.
 """
 
 import warnings
-from typing import TYPE_CHECKING, List, Type
+from typing import TYPE_CHECKING, Any, List, Type
 
 from pydantic import BaseModel
 
@@ -294,6 +294,45 @@ def check_nonce_monotonicity(
     return violations
 
 
+def check_bal_access_witness(
+    witness: Any,
+    block_access_list: Any,
+) -> List[InvariantViolation]:
+    """
+    Check the block access list against an independent observation.
+
+    Every other check here compares the spec against itself or against
+    arithmetic. This one compares the list the spec built against the
+    accesses the spec was traced performing -- a different code path from
+    the builder, which reads the state tracker's collections directly.
+
+    That matters because a missing access is invisible to the client
+    differential: a client faithful to the reference reproduces the
+    omission, every runner passes, and the campaign records agreement. It
+    is the "all clients agree, the spec is wrong" class, and it is where
+    the erigon self-destruct read lived.
+
+    Silent when the transition tool produced no witness, which is every
+    tool but the reference one.
+    """
+    if witness is None or block_access_list is None:
+        return []
+    from execution_testing.evm_tools.t8n.evm_trace.bal_witness import (
+        bal_slots_from_model,
+        check_bal_relation,
+    )
+
+    return [
+        InvariantViolation(
+            invariant="bal_access_witness",
+            message=str(disagreement),
+        )
+        for disagreement in check_bal_relation(
+            witness, bal_slots_from_model(block_access_list)
+        )
+    ]
+
+
 def check_block_invariants(
     fork: Type["BaseFork"],
     pre_alloc: "Alloc",
@@ -303,6 +342,8 @@ def check_block_invariants(
     txs: List["Transaction"],
     reward: int | None = None,
     base_fee_per_gas: int | None = None,
+    bal_witness: Any = None,
+    block_access_list: Any = None,
 ) -> List[InvariantViolation]:
     """Run all block-level invariant checks and warn on violations."""
     violations = [
@@ -318,6 +359,7 @@ def check_block_invariants(
         ),
         *check_gas_accounting(fork, result, env),
         *check_nonce_monotonicity(pre_alloc, post_alloc, txs, result),
+        *check_bal_access_witness(bal_witness, block_access_list),
     ]
     for violation in violations:
         warnings.warn(
