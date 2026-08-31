@@ -198,7 +198,8 @@ def replay(
 
     case = load_case(case_path)
     tools = build_tools(clients)
-    results, errors, allocs = run_tools(tools, case, case.fork)
+    results, errors, rejections, allocs = run_tools(tools, case, case.fork)
+    errors = {**errors, **rejections}
     divergence_list = compare_results(results) if results else []
     divergences = {d.field: d for d in divergence_list}
 

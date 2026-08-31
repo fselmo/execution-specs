@@ -81,11 +81,21 @@ class CaseOutcome:
     eels_ran: bool = True
     post_state_diff: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     """Per minority tool, the accounts on which it differs from EELS."""
+    rejections: Dict[str, str] = field(default_factory=dict)
+    """Tools that refused to run the input at all. Reported, never a
+    divergence -- see TOOL_REJECTION_PATTERNS."""
 
     @property
     def asymmetric_failure(self) -> bool:
-        """Some tools failed while others produced a result."""
-        return bool(self.errors) and len(self.errors) < self.tool_count
+        """
+        Some tools failed while others produced a result.
+
+        A tool that *rejected* the input never ran, so it is excluded
+        from both sides: it neither counts as a failure nor as a tool
+        that could have agreed.
+        """
+        ran = self.tool_count - len(self.rejections)
+        return bool(self.errors) and len(self.errors) < ran
 
     @property
     def diverged(self) -> bool:
@@ -191,7 +201,27 @@ def compare_results(results: Dict[str, Result]) -> List[FieldDivergence]:
     return divergences
 
 
-ToolRuns = Tuple[Dict[str, Result], Dict[str, str], Dict[str, Alloc]]
+ToolRuns = Tuple[
+    Dict[str, Result], Dict[str, str], Dict[str, str], Dict[str, Alloc]
+]
+
+TOOL_REJECTION_PATTERNS = ("unable to validate",)
+"""Substrings marking a tool that *refused the input* rather than
+executing it -- geth's t8n validates bytecode up front and rejects EOF
+and undefined opcodes (``Unable to validate CALLF``), which the
+generator's raw-byte action emits deliberately.
+
+A refusal to run is not a consensus disagreement. Conflating the two
+turns a tool limitation into a divergence at a rate that tracks how much
+undefined bytecode a generator emits -- which would silently confound any
+comparison between generator variants. Rejections are counted and
+reported separately, never as divergence."""
+
+
+def is_tool_rejection(message: str) -> bool:
+    """Whether a tool failure is a refusal to run, not an execution result."""
+    lowered = message.lower()
+    return any(p in lowered for p in TOOL_REJECTION_PATTERNS)
 
 
 def run_tools(
@@ -204,16 +234,21 @@ def run_tools(
     prepared = _prepare(case, fork)
     results: Dict[str, Result] = {}
     errors: Dict[str, str] = {}
+    rejections: Dict[str, str] = {}
     allocs: Dict[str, Alloc] = {}
     for name, tool in tools.items():
         try:
             results[name], alloc = _transition(tool, prepared)
         except Exception as exc:  # noqa: BLE001
-            errors[name] = f"{type(exc).__name__}: {exc}"
+            message = f"{type(exc).__name__}: {exc}"
+            if is_tool_rejection(message):
+                rejections[name] = message
+            else:
+                errors[name] = message
             continue
         if alloc is not None:
             allocs[name] = alloc
-    return results, errors, allocs
+    return results, errors, rejections, allocs
 
 
 def post_state_diff(
@@ -262,27 +297,33 @@ def evaluate_case(
     """
     clients = {name: tool for name, tool in tools.items() if name != REFERENCE}
     if tiered and REFERENCE in tools and len(clients) > 1:
-        results, errors, allocs = run_tools(clients, case, fork)
+        results, errors, rejections, allocs = run_tools(clients, case, fork)
         if _agree(results, errors):
             return CaseOutcome(
                 seed=-1,
                 tool_count=len(clients),
                 errors=errors,
+                rejections=rejections,
                 eels_ran=False,
             )
-        reference, reference_error, reference_alloc = run_tools(
-            {REFERENCE: tools[REFERENCE]}, case, fork
-        )
+        (
+            reference,
+            reference_error,
+            reference_rejection,
+            reference_alloc,
+        ) = run_tools({REFERENCE: tools[REFERENCE]}, case, fork)
         results.update(reference)
         errors.update(reference_error)
+        rejections.update(reference_rejection)
         allocs.update(reference_alloc)
     else:
-        results, errors, allocs = run_tools(tools, case, fork)
+        results, errors, rejections, allocs = run_tools(tools, case, fork)
 
     outcome = CaseOutcome(
         seed=-1,
         tool_count=len(tools),
         errors=errors,
+        rejections=rejections,
         eels_ran=REFERENCE in tools,
     )
     if len(results) > 1:

@@ -225,6 +225,7 @@ def test_diff_writes_summary_and_exits_nonzero_on_divergence(
         seed=7,
         divergences=[divergence],
         errors={},
+        rejections={},
         asymmetric_failure=False,
         diverged=True,
         eels_ran=True,
