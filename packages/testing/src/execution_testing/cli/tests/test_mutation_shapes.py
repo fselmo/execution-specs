@@ -140,3 +140,30 @@ def test_summary_detail_reads_first_divergent_seed(tmp_path: Path) -> None:
         json.dumps({"seeds": 300, "diverged": 0, "first_divergent_seed": None})
     )
     assert runner_mod.summary_detail(summary) == "0/300 diverged"
+
+
+def test_a_reach_probe_says_so_in_structured_form() -> None:
+    """
+    A shape that over-approximates its named bug must be marked, so the
+    calibration column can refuse to quote its kill rate.
+
+    Both state-gas shapes are probes and both were measured that way:
+    `child-spill-credit` kills 35% in-spec against 0 divergences in 2,000
+    cases on a binary verified pre-fix (>=233x), and
+    `halt-spill-to-reservoir` kills 83%. Neither is coverage of
+    nethermind#12965; the reproducer test is.
+    """
+    assert SHAPES["child-spill-credit"].models_client_bug is False
+    assert SHAPES["halt-spill-to-reservoir"].models_client_bug is False
+    # The two that have never failed calibration stay models.
+    assert SHAPES["child-read-rollback"].models_client_bug is True
+    assert SHAPES["precompile-value-callcode-refund"].models_client_bug
+
+
+def test_every_probe_explains_itself() -> None:
+    """A probe's description must say it is not coverage, in the open."""
+    for shape in SHAPES.values():
+        if shape.models_client_bug:
+            continue
+        lowered = shape.description.lower()
+        assert "not a" in lowered or "not coverage" in lowered, shape.name

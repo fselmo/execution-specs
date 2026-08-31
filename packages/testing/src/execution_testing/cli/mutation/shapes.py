@@ -39,6 +39,22 @@ class Shape:
     name: str
     description: str
     edits: Tuple[Edit, ...]
+    models_client_bug: bool = True
+    """Whether this shape is a faithful model of the client bug it names.
+
+    A shape set `False` is a **reach probe**: it exercises the mechanism
+    but over-approximates the defect, so its kill rate is not coverage of
+    that bug and must never be cited as such. Structured rather than
+    prose because the calibration column reads it: a probe records "no
+    faithful mutant constructible" in place of a number.
+
+    A faithful mutant is not always constructible. Where the client's
+    defect has no counterpart in the spec's structure -- nethermind#12965
+    was a reservoir snapshot captured at the wrong moment, and the spec
+    holds no equivalent variable to mis-time -- every mutation of the
+    centralised machinery fires on each frame that touches it. The
+    coverage evidence is then the bug's reproducer test, not a rate.
+    """
 
 
 class ShapeMismatchError(Exception):
@@ -117,9 +133,15 @@ SHAPES: Dict[str, Shape] = {
     "child-spill-credit": Shape(
         name="child-spill-credit",
         description=(
-            "State gas a child frame spilled into execution gas is credited "
-            "back to the parent's reservoir when the child halts, instead of "
-            "being consumed (nethermind, EIP-8037)."
+            "REACH PROBE, NOT A CLIENT MODEL. State gas a child frame "
+            "spilled into execution gas is credited back to the parent's "
+            "reservoir when the child halts, instead of being consumed "
+            "(EIP-8037). Calibrated against a nethermind build verified "
+            "pre-fix at symbol granularity: 35% in-spec kill against 0 "
+            "divergences in 2,000 cases, a gap of at least 233x. It "
+            "exercises the settlement path but is not the defect of "
+            "nethermind#12965, so its rate is not coverage of it -- the "
+            "reproducer test in `test_state_gas_witnesses.py` is."
         ),
         edits=(
             Edit(
@@ -151,14 +173,30 @@ SHAPES: Dict[str, Shape] = {
                 replace="        pass\n",
             ),
         ),
+        # Calibrated against a nethermind build verified pre-fix at symbol
+        # granularity: 35% in-spec kill against 0 divergences in 2,000
+        # cases, a gap of at least 233x. It exercises the settlement path
+        # but is not the defect, so its rate is not coverage.
+        models_client_bug=False,
     ),
     "halt-spill-to-reservoir": Shape(
         name="halt-spill-to-reservoir",
         description=(
-            "On rollback the outstanding spill is credited to the state "
-            "gas reservoir instead of `gas_left`, so it survives the "
-            "forfeit that burns a halted frame's gas and flows back to "
-            "the parent (nethermind#12965, EIP-8037)."
+            "REACH PROBE, NOT A CLIENT MODEL. On rollback the outstanding "
+            "spill is credited to the state gas reservoir instead of "
+            "`gas_left`, so it survives the forfeit that burns a halted "
+            "frame's gas and flows back to the parent. Kills 83% of cases "
+            "at generator v13 (seeds 9000-9059), which is not coverage of "
+            "the spill/credit path and must never be quoted as such: it "
+            "is not a model of nethermind#12965. That bug was a reservoir "
+            "snapshot captured at the wrong moment, and the spec holds no "
+            "equivalent variable to mis-time, so no faithful mutant is "
+            "constructible here -- the reproducer test in "
+            "`test_state_gas_witnesses.py` is the coverage evidence. Its "
+            "one sound use is containment: every case firing "
+            "`state-gas-interleave` is killed by it (17/17, none "
+            "detected-and-not-killed), so the tag never fires on "
+            "something this does not break."
         ),
         edits=(
             Edit(
@@ -181,6 +219,7 @@ SHAPES: Dict[str, Shape] = {
                 ),
             ),
         ),
+        models_client_bug=False,
     ),
     "precompile-value-callcode-refund": Shape(
         name="precompile-value-callcode-refund",
