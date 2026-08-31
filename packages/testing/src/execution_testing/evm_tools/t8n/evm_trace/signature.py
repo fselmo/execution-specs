@@ -52,6 +52,7 @@ EVENT_WITNESSES = {
     "child-state-gas-spill": "behavioral",
     "state-gas-reservoir": "behavioral",
     "state-gas-from-reservoir": "behavioral",
+    "state-gas-interleave": "trace",
 }
 """Every L1 tag the tracer can emit, with the witness kind that validates
 its detector -- an event registers here only with one:
@@ -193,6 +194,10 @@ class Signature:
     events: FrozenSet[str]
     bigrams: FrozenSet[Tuple[str, str]]
     max_depth: int = 0
+    interleavings: FrozenSet[Tuple[int, int]] = frozenset()
+    """`(spilling depth, crediting depth)` pairs -- see
+    `state-gas-interleave`. Carried so the reach map can tell an
+    interleaving at depth 1 from one running down a chain."""
 
     def is_empty(self) -> bool:
         """Return whether nothing was observed."""
@@ -209,6 +214,7 @@ def merge_signatures(a: Signature, b: Signature) -> Signature:
         a.events | b.events,
         a.bigrams | b.bigrams,
         max(a.max_depth, b.max_depth),
+        a.interleavings | b.interleavings,
     )
 
 
@@ -227,6 +233,46 @@ class SignatureTracer:
         # any child op runs (or a precompile begins), so a child-frame or
         # precompile-internal OOG is never mistaken for a call-entry OOG.
         self._call_pending = False
+        # Depth-relational state. Every other L1 tag is a property of a
+        # single event; the interleaving is a property of a *pair* of
+        # frames, so it needs the reservoir level carried per depth.
+        self._spilled_depths: Set[int] = set()
+        self._reservoir_at: dict = {}
+        self._interleavings: Set[Tuple[int, int]] = set()
+
+    def _fold_state_gas(self, evm: object, depth: int) -> None:
+        """
+        Record spills, and credits that land one frame below a spill.
+
+        The settlement bug this pins (EIP-8037, nethermind#12965) is not
+        "a child spilled" -- a child that spills and halts is common and
+        harmless. It is a spill at one depth whose state gas is credited
+        back a frame deeper, which is what an alternating write chain
+        produces: the fresh set spills into execution gas, the
+        restoration below it credits the reservoir, and the frame that
+        halts settles a reservoir it was never charged for.
+
+        A restoration refills the reservoir, so by the time the deeper
+        frame charges there is nothing left to spill -- which is why a
+        spill-in-a-child detector is blind to exactly this shape.
+        """
+        meter = getattr(evm, "gas_meter", None)
+        spilled = getattr(meter, "state_gas_spilled", None)
+        left = getattr(meter, "state_gas_left", None)
+        if spilled is None or left is None:
+            return
+        if int(spilled) > 0:
+            self._spilled_depths.add(depth)
+        # A frame entered at this depth starts fresh; anything recorded
+        # deeper belongs to a frame that has already returned.
+        for stale in [d for d in self._reservoir_at if d > depth]:
+            del self._reservoir_at[stale]
+        previous = self._reservoir_at.get(depth)
+        if previous is not None and int(left) > previous:
+            if depth - 1 in self._spilled_depths:
+                self._interleavings.add((depth - 1, depth))
+                self._events.add("state-gas-interleave")
+        self._reservoir_at[depth] = int(left)
 
     def __call__(self, evm: object, event: TraceEvent) -> None:
         """Fold one trace event into the accumulating signature."""
@@ -234,6 +280,7 @@ class SignatureTracer:
         self._max_depth = max(self._max_depth, depth)
         if _child_state_gas_spilled(evm, depth):
             self._events.add("child-state-gas-spill")
+        self._fold_state_gas(evm, depth)
         if isinstance(event, OpStart):
             name = event.op.name
             if self._prev_op is not None:
@@ -317,4 +364,5 @@ class SignatureTracer:
             frozenset(self._events),
             frozenset(self._bigrams),
             self._max_depth,
+            frozenset(self._interleavings),
         )

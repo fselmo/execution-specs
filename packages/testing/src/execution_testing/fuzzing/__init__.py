@@ -47,7 +47,11 @@ from .domains import (
     fork_domains,
     mixed_address_pool,
 )
-from .strategies import fuzzed_bytecode, fuzzed_calldata
+from .strategies import (
+    fuzzed_bytecode,
+    fuzzed_calldata,
+    interleaving_spill_code,
+)
 
 __all__ = [
     "ARMS",
@@ -61,6 +65,7 @@ __all__ = [
     "draw_mixed",
     "fork_domains",
     "fuzzed_bytecode",
+    "interleaving_spill_code",
     "fuzzed_calldata",
     "mixed_address_pool",
 ]
