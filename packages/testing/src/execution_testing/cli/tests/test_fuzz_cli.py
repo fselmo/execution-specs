@@ -318,3 +318,59 @@ def test_campaign_command_needs_a_budget(tmp_path: Path) -> None:
         fuzz, ["campaign", "x", "--config", str(tmp_path / "fuzz.yaml")]
     )
     assert result.exit_code != 0 and "--hours" in result.output
+
+
+def _two_client_config(tmp_path: Path) -> Path:
+    exe = tmp_path / "evm"
+    exe.write_text("")
+    (tmp_path / "fuzz.yaml").write_text(
+        f"clients:\n"
+        f"  - name: geth\n    path: {exe}\n"
+        f"  - name: erigon\n    path: {exe}\n"
+    )
+    return tmp_path / "fuzz.yaml"
+
+
+def test_blanket_update_is_refused(tmp_path: Path) -> None:
+    """
+    `--update` without `--client` would re-resolve every branch-pinned
+    client, quietly replacing a pre-fix binary with a fixed one.
+    """
+    result = CliRunner().invoke(
+        fuzz,
+        ["clients", "--update", "--config", str(_two_client_config(tmp_path))],
+    )
+    assert result.exit_code != 0
+    assert "--client" in result.output
+
+
+def test_client_filter_selects_one(tmp_path: Path) -> None:
+    """Naming a client limits the command to it."""
+    result = CliRunner().invoke(
+        fuzz,
+        [
+            "clients",
+            "--client",
+            "geth",
+            "--config",
+            str(_two_client_config(tmp_path)),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "geth" in result.output and "erigon" not in result.output
+
+
+def test_an_unknown_client_name_is_an_error(tmp_path: Path) -> None:
+    """A typo must not silently select nothing."""
+    result = CliRunner().invoke(
+        fuzz,
+        [
+            "clients",
+            "--client",
+            "gteh",
+            "--config",
+            str(_two_client_config(tmp_path)),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "gteh" in result.output

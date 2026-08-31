@@ -40,18 +40,18 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 11
+BASELINE_GENERATOR_VERSION = 12
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    3,
-    20,
-    103,
-    136,
-    155,
-    160,
-    209,
-    362,
+    7,
+    48,
+    108,
+    115,
+    116,
+    120,
+    311,
+    365,
 )
 """Greedy cover over the 400-seed baseline: together these fire every
 target below."""
@@ -61,12 +61,15 @@ GATE_EVENTS: FrozenSet[str] = frozenset(
         "call-entry-oog",
         "child-exception",
         "child-revert",
+        "child-state-gas-spill",
         "create",
         "precompile",
         "refund-clamp",
         "revert",
         "sstore-stipend",
         "state-gas",
+        "state-gas-from-reservoir",
+        "state-gas-reservoir",
     }
 )
 
@@ -84,6 +87,7 @@ _DEEP_HALTS = (
     "InvalidOpcode",
     "InvalidParameter",
     "KZGProofError",
+    "OutOfBoundsRead",
     "OutOfGasError",
     "Revert",
     "STOP",
@@ -91,7 +95,6 @@ _DEEP_HALTS = (
     "StackUnderflowError",
     "WriteInStaticContext",
 )
-_DEEPEST_HALTS = tuple(h for h in _DEEP_HALTS if h != "Revert")
 # Which rare halts land deep shifts between generator versions as the
 # motif weights move; the baseline records what a version actually
 # reaches, and the event-rate and density trends watch the rates.
@@ -129,7 +132,7 @@ _GATE_CELLS: Dict[int, Dict[str, Tuple[str, ...]]] = {
         ),
     },
     2: {"call": _ALL_CALLS, "halt": _DEEP_HALTS},
-    3: {"call": _ALL_CALLS, "halt": _DEEPEST_HALTS},
+    3: {"call": _ALL_CALLS, "halt": _DEEP_HALTS},
 }
 
 GATE_FRAMES: FrozenSet[Tuple[int, str, str]] = frozenset(

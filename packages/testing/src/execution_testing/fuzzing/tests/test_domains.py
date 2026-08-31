@@ -83,7 +83,8 @@ def test_fork_boundaries_come_from_the_gas_schedule() -> None:
         costs.COLD_STORAGE_ACCESS + costs.STORAGE_SET
         in domains.call_gas_boundaries
     )
-    assert stipend in domains.starve_gas
+    cold_write = costs.COLD_STORAGE_ACCESS + costs.STORAGE_SET
+    assert min(domains.spill_gas) >= cold_write
 
 
 def test_call_gas_reaches_forward_all_and_boundaries() -> None:
