@@ -356,3 +356,66 @@ def test_corpus_name_leads_with_the_most_telling_field() -> None:
     assert corpus_name(fork, outcome) == (  # type: ignore[arg-type]
         "Amsterdam_divergence_seed7_state_root_evm.json"
     )
+
+
+def test_tool_rejection_is_not_a_divergence(monkeypatch: Any) -> None:
+    """
+    A tool that refuses the input never ran, so it cannot disagree.
+
+    The generator emits undefined and EOF opcodes on purpose; geth's t8n
+    validates bytecode up front and rejects them. Counting that as a
+    divergence would make the rate track how much undefined bytecode a
+    generator emits -- silently confounding any comparison between
+    generator variants.
+    """
+    monkeypatch.setattr(
+        differential,
+        "_transition",
+        _fake_transition(
+            {
+                "eels": _result(),
+                "geth": Exception("Unable to validate CALLF"),
+            }
+        ),
+    )
+    outcome = evaluate_case({"eels": "eels", "geth": "geth"}, NO_CASE, NO_FORK)
+    assert not outcome.diverged
+    assert outcome.errors == {}
+    assert "geth" in outcome.rejections
+
+
+def test_a_real_failure_is_still_a_divergence(monkeypatch: Any) -> None:
+    """Only refusal-to-run is excused; a genuine failure still counts."""
+    monkeypatch.setattr(
+        differential,
+        "_transition",
+        _fake_transition(
+            {"eels": _result(), "geth": Exception("state root mismatch")}
+        ),
+    )
+    outcome = evaluate_case({"eels": "eels", "geth": "geth"}, NO_CASE, NO_FORK)
+    assert outcome.diverged
+    assert outcome.rejections == {}
+
+
+def test_rejection_does_not_mask_a_divergence_among_the_rest(
+    monkeypatch: Any,
+) -> None:
+    """One tool rejecting leaves the others still compared."""
+    monkeypatch.setattr(
+        differential,
+        "_transition",
+        _fake_transition(
+            {
+                "eels": _result(gas_used=1),
+                "besu": _result(gas_used=2),
+                "geth": Exception("Unable to validate CALLF"),
+            }
+        ),
+    )
+    outcome = evaluate_case(
+        {"eels": "eels", "besu": "besu", "geth": "geth"}, NO_CASE, NO_FORK
+    )
+    assert outcome.diverged
+    assert "geth" in outcome.rejections
+    assert any(d.field == "gas_used" for d in outcome.divergences)
