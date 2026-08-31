@@ -152,6 +152,36 @@ SHAPES: Dict[str, Shape] = {
             ),
         ),
     ),
+    "halt-spill-to-reservoir": Shape(
+        name="halt-spill-to-reservoir",
+        description=(
+            "On rollback the outstanding spill is credited to the state "
+            "gas reservoir instead of `gas_left`, so it survives the "
+            "forfeit that burns a halted frame's gas and flows back to "
+            "the parent (nethermind#12965, EIP-8037)."
+        ),
+        edits=(
+            Edit(
+                module=f"{_AMSTERDAM}/vm/gas.py",
+                find=(
+                    "    gas_meter.gas_left = ExecutionGas(\n"
+                    "        gas_meter.gas_left + "
+                    "Uint(gas_meter.state_gas_spilled)\n"
+                    "    )\n"
+                    "    gas_meter.state_gas_spilled = StateGas(Uint(0))\n"
+                    "    gas_meter.state_gas_left = "
+                    "gas_meter.state_gas_baseline\n"
+                ),
+                replace=(
+                    "    gas_meter.state_gas_left = StateGas(\n"
+                    "        gas_meter.state_gas_baseline\n"
+                    "        + gas_meter.state_gas_spilled\n"
+                    "    )\n"
+                    "    gas_meter.state_gas_spilled = StateGas(Uint(0))\n"
+                ),
+            ),
+        ),
+    ),
     "precompile-value-callcode-refund": Shape(
         name="precompile-value-callcode-refund",
         description=(
