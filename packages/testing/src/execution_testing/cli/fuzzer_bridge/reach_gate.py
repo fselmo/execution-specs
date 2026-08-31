@@ -40,18 +40,18 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 12
+BASELINE_GENERATOR_VERSION = 13
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    7,
-    48,
-    108,
-    115,
-    116,
-    120,
-    311,
-    365,
+    12,
+    96,
+    103,
+    141,
+    186,
+    192,
+    199,
+    203,
 )
 """Greedy cover over the 400-seed baseline: together these fire every
 target below."""
@@ -69,6 +69,7 @@ GATE_EVENTS: FrozenSet[str] = frozenset(
         "sstore-stipend",
         "state-gas",
         "state-gas-from-reservoir",
+        "state-gas-interleave",
         "state-gas-reservoir",
     }
 )

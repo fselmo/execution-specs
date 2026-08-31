@@ -28,6 +28,7 @@ from execution_testing.fuzzing import (
     fork_domains,
     fuzzed_bytecode,
     fuzzed_calldata,
+    interleaving_spill_code,
     mixed_address_pool,
 )
 from execution_testing.test_types import Environment
@@ -44,10 +45,28 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 12
+GENERATOR_VERSION = 13
 
 DESTRUCTOR_ADDRESS = 0x1FFFF
 """Helper contract whose code is `ORIGIN SELFDESTRUCT`."""
+
+INTERLEAVER_ADDRESS = 0x1FFFD
+"""Helper whose code recurses into itself through `DELEGATECALL`, flipping
+one storage slot between zero and all-ones at every level, and halts
+exceptionally on the way out.
+
+Byte-shaped after the reproducer in nethermind#12965's own regression
+test, because a detector aimed at a known client bug earns its keep
+against that bug's reproducer, not against a construction of ours. The
+fresh set at one depth spills its state charge into execution gas; the
+restoration one frame deeper credits the reservoir back. A frame then
+settles a halt holding state gas it was never charged -- the shape a
+spill-in-a-child motif cannot reach, because the restoration refills the
+reservoir before the deeper frame ever charges.
+
+It is called, not delegated into: `ADDRESS ADDRESS DELEGATECALL` only
+recurses into *this* helper when it runs in its own context.
+"""
 
 SPILLER_ADDRESS = 0x1FFFE
 """Helper contract that charges state gas and then halts exceptionally.
@@ -173,6 +192,11 @@ def generate_fuzzer_output(
         nonce=HexNumber(1),
         code=Bytes(bytes(Op.ORIGIN + Op.SELFDESTRUCT)),
     )
+    accounts[Address(INTERLEAVER_ADDRESS)] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(1),
+        code=Bytes(interleaving_spill_code(rng)),
+    )
     accounts[Address(SPILLER_ADDRESS)] = FuzzerAccountInput(
         balance=HexNumber(0),
         nonce=HexNumber(1),
@@ -193,6 +217,7 @@ def generate_fuzzer_output(
                         call_targets=pool.call_targets(),
                         selfdestructor=DESTRUCTOR_ADDRESS,
                         spiller=SPILLER_ADDRESS,
+                        interleaver=INTERLEAVER_ADDRESS,
                         domains=domains,
                     )
                 )

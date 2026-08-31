@@ -279,6 +279,61 @@ def _halting_child_then_state_charge(
     return code
 
 
+def interleaving_spill_code(rng: random.Random) -> bytes:
+    """
+    Body of the interleaving helper: flip one slot, recurse, then halt.
+
+    Shaped after nethermind#12965's regression reproducer. `ADDRESS`
+    supplies the gas operand, which is far more than the frame holds, so
+    the recursion runs until gas is exhausted rather than to a fixed
+    depth. The trailing `CALL` reuses the all-ones value as a memory-size
+    operand, so its expansion overflows and the frame halts exceptionally
+    on unwind -- the settlement the rule under test governs.
+
+    Only the slot varies. The stack discipline is what makes the
+    alternation land, so the shape stays fixed until the motif is shown
+    to fire.
+    """
+    slot = rng.choice((0x0B, 0x17, 0x2F, 0x41))
+    code = Bytecode()
+    code += Op.PUSH0
+    code += Op.PUSH0
+    code += Op.PUSH1(slot)
+    code += Op.SLOAD
+    code += Op.NOT
+    code += Op.PUSH1(slot)
+    code += Op.DUP2
+    code += Op.DUP2
+    code += Op.SSTORE
+    code += Op.CALLDATASIZE
+    code += Op.DUP2
+    code += Op.DUP2
+    code += Op.ADDRESS
+    code += Op.ADDRESS
+    code += Op.DELEGATECALL
+    code += Op.DUP4
+    code += Op.CALLER
+    code += Op.CALLER
+    code += Op.CALL
+    return bytes(code)
+
+
+def _alternating_spill_chain(
+    rng: random.Random, domains: ValueDomains, interleaver: int, slot: int
+) -> Bytecode:
+    """Call the interleaving helper, then witness that it returned."""
+    code = Bytecode()
+    for _ in range(4):
+        code += Op.PUSH0
+    code += Op.PUSH0
+    code += Op.PUSH20(interleaver)
+    code += Op.PUSH3(rng.choice(domains.spill_gas))
+    code += Op.CALL
+    code += Op.PUSH2(slot)
+    code += Op.SSTORE
+    return code
+
+
 _TERMINATOR_KINDS = (Op.RETURN, Op.REVERT, Op.INVALID, Op.SELFDESTRUCT)
 
 # A raw walk byte is a deliberately unconditioned opcode: undefined bytes
@@ -435,6 +490,7 @@ def fuzzed_bytecode(
     call_targets: Optional[Sequence[int]] = None,
     selfdestructor: Optional[int] = None,
     spiller: Optional[int] = None,
+    interleaver: Optional[int] = None,
     domains: Optional[ValueDomains] = None,
 ) -> Bytecode:
     """
@@ -535,6 +591,12 @@ def fuzzed_bytecode(
             call_slot += 1
             terminated = True
             break
+        if interleaver is not None and rng.random() < walk.spill_interleave:
+            code += _alternating_spill_chain(
+                rng, domains, interleaver, call_slot
+            )
+            call_slot += 2
+            continue
         op = rng.choice(PALETTE)
         while stack_height < op.min_stack_height:
             code += Op.PUSH32(domains.operand(rng))

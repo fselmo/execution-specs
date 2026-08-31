@@ -68,13 +68,26 @@ def test_contract_code_is_rendered_faithfully() -> None:
 
 def test_transaction_targets_use_sender_variables() -> None:
     """A tx to a known account references its variable, not an address."""
-    # With a single sender and no contracts, any self-directed tx must
-    # reference sender_0 rather than an Address literal.
-    case = generate_fuzzer_output(
-        Osaka, 2, num_senders=1, num_contracts=0, num_transactions=3
-    )
+    # Targets are drawn from a pool that includes precompiles and
+    # never-existing addresses, so which seed sends to the sender is a
+    # draw -- pinning one makes the test fail on any generation change
+    # for a reason unrelated to what it checks.
+    sender_directed = None
+    for seed in range(40):
+        case = generate_fuzzer_output(
+            Osaka, seed, num_senders=1, num_contracts=0, num_transactions=3
+        )
+        senders = {
+            address
+            for address, account in case.accounts.items()
+            if account.private_key is not None
+        }
+        if any(tx.to in senders for tx in case.transactions):
+            sender_directed = (case, seed)
+            break
+    assert sender_directed is not None, "no seed sent to the sender"
+    case, seed = sender_directed
     source = distill_source(
-        case, fork_name="Osaka", reason="target check", seed=2
+        case, fork_name="Osaka", reason="target check", seed=seed
     )
-    # The only account is sender_0; every `to=` must be sender_0 or None.
-    assert "to=sender_0" in source or "to=None" in source
+    assert "to=sender_0" in source
