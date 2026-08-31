@@ -76,6 +76,7 @@ class WalkWeights:
     precompile_call: float = 0.15
     message_call: float = 0.15
     halting_child: float = 0.10
+    spill_interleave: float = 0.08
     create2_self_copy: float = 0.08
     destructor_call: float = 0.06
     raw_byte: float = 0.05
