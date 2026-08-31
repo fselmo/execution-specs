@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, TypeVar
 
@@ -235,10 +236,18 @@ def differential(
     if baseline_seeds:
         click.echo(f"baseline: all clients agree on {baseline_seeds} seeds")
 
+    rejected = Counter(
+        tool for outcome in report.outcomes for tool in outcome.rejections
+    )
     click.echo(
         f"\nagreed {report.agreed}/{report.seeds}  diverged {report.diverged}"
         f"  (eels adjudicated {report.eels_runs}/{report.seeds})"
     )
+    if rejected:
+        summary = ", ".join(f"{t}={n}" for t, n in sorted(rejected.items()))
+        click.echo(
+            f"tool-rejected (refused the input, not a divergence): {summary}"
+        )
     for outcome in report.outcomes:
         if outcome.asymmetric_failure:
             for tool, error in outcome.errors.items():
