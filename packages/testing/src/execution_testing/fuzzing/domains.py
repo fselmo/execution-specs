@@ -79,11 +79,16 @@ class WalkWeights:
     create2_self_copy: float = 0.08
     destructor_call: float = 0.06
     raw_byte: float = 0.05
-    terminator: float = 0.03
-    returndata_overread: float = 0.03
-    initcode_ef_prefix: float = 0.03
-    stack_bomb: float = 0.02
-    bad_jump: float = 0.03
+    # Frame-ending actions are charged PER OP, so they compound over the
+    # walk: at 0.03 each they ended ~90% of bodies early, cutting call
+    # sites per case in half. They only need to fire often enough to keep
+    # their reach cells alive (~25% of cases at these weights), so they
+    # stay low -- density is what finds bugs, coverage only proves reach.
+    terminator: float = 0.01
+    returndata_overread: float = 0.005
+    initcode_ef_prefix: float = 0.01
+    stack_bomb: float = 0.005
+    bad_jump: float = 0.005
 
     def __post_init__(self) -> None:
         """Reject weights outside [0, 1]."""
@@ -247,9 +252,16 @@ class AddressPool:
     nonexistent: Tuple[int, ...]
 
     def call_targets(self) -> List[int]:
-        """Weighted in-EVM call targets, biased toward code accounts."""
+        """
+        Weighted in-EVM call targets, heavily biased toward code accounts.
+
+        A call into a codeless account returns immediately, so every such
+        draw is a frame that does no work; the non-code targets earn their
+        place (cold accounts, the precompile-range boundary) but must stay
+        a minority or nested-frame density collapses.
+        """
         return (
-            list(self.code) * 2
+            list(self.code) * 6
             + list(self.senders)
             + [self.boundary]
             + list(self.nonexistent)
@@ -257,14 +269,20 @@ class AddressPool:
 
     def tx_targets(self) -> List[int]:
         """
-        Weighted transaction targets: code accounts dominate, but every
-        transaction can also enter directly at a precompile, the range
-        boundary, a sender, or an address that does not exist yet.
+        Weighted transaction targets: code accounts dominate heavily.
+
+        A transaction entering at a precompile or an EOA executes no
+        fuzzed bytecode, so those draws spend the block's transaction
+        budget without exercising the generated program. They stay in the
+        pool -- entering directly at a precompile reaches cells nothing
+        else does -- but at a few percent, not half the budget. The
+        precompile list is deduplicated here: its per-address weighting
+        is for *call* targeting, and would otherwise dominate this draw.
         """
         return (
-            list(self.code) * 3
-            + list(self.senders)
-            + list(self.precompiles)
+            list(self.code) * 30
+            + list(self.senders) * 3
+            + sorted(set(self.precompiles))
             + [self.boundary]
             + list(self.nonexistent)
         )
