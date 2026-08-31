@@ -40,19 +40,17 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 9
+BASELINE_GENERATOR_VERSION = 10
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    62,
-    117,
-    120,
-    121,
-    148,
-    203,
-    205,
-    231,
-    396,
+    105,
+    111,
+    143,
+    169,
+    218,
+    293,
+    376,
 )
 """Greedy cover over the 400-seed baseline: together these fire every
 target below."""
@@ -81,20 +79,20 @@ _ALL_CALLS = (
 )
 
 _DEEP_HALTS = (
-    "InvalidJumpDestError",
     "InvalidOpcode",
     "InvalidParameter",
     "KZGProofError",
     "OutOfBoundsRead",
     "OutOfGasError",
+    "Revert",
     "STOP",
     "StackOverflowError",
     "StackUnderflowError",
     "WriteInStaticContext",
 )
-# Revert at depth >= 2 is reachable but rare (the terminating motifs
-# preempt deep recursion), so it is not in the baseline; the event-rate
-# trend, not the gate, watches revert's rarity.
+# InvalidJumpDestError at depth >= 2 is reachable but rare (bad-jump is a
+# low-weight terminating motif, so it seldom lands deep); it is not in the
+# baseline. The event-rate trend, not the gate, watches rarity.
 
 _GATE_CELLS: Dict[int, Dict[str, Tuple[str, ...]]] = {
     0: {

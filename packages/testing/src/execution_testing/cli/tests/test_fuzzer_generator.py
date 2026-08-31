@@ -123,9 +123,15 @@ def test_truncation_never_splits_a_push_immediate() -> None:
         assert cut <= target or cut == len(code)
 
 
-def test_generator_version_is_five() -> None:
-    """Shapes, the epilogue and the wider palette shipped as v5."""
-    assert GENERATOR_VERSION == 5
+def test_generator_version_covers_the_shape_era() -> None:
+    """
+    Shapes, the epilogue and the wider palette shipped as v5.
+
+    Pinned as a floor, not an equality: the exact version is enforced
+    where it carries meaning -- the reach gate's baseline check, which
+    fails on any bump until the gate is deliberately re-baselined.
+    """
+    assert GENERATOR_VERSION >= 5
 
 
 def test_generated_cases_reach_creation_and_the_gas_cap() -> None:
