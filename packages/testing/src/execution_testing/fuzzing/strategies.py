@@ -528,7 +528,14 @@ def fuzzed_bytecode(
     if terminated:
         return code
 
-    if precompiles and not emitted_precompile_call:
+    # Guarantee one precompile call per body -- but only when the walk was
+    # meant to make them (weight > 0); an arm that zeroes the weight wants
+    # none, so the fallback must honour that rather than force one.
+    if (
+        precompiles
+        and walk.precompile_call > 0
+        and not emitted_precompile_call
+    ):
         code += _precompile_call(rng, domains, precompiles, witness_slot)
 
     code += _epilogue()
