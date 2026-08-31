@@ -35,6 +35,7 @@ is just a parametrized test; under a fuzzing service the same authoring
 artifact is driven over an unbounded seed range.
 """
 
+from .arms import ARMS, arm_domains
 from .domains import (
     GENERIC_DOMAINS,
     AddressPool,
@@ -49,8 +50,10 @@ from .domains import (
 from .strategies import fuzzed_bytecode, fuzzed_calldata
 
 __all__ = [
+    "ARMS",
     "AddressPool",
     "GENERIC_DOMAINS",
+    "arm_domains",
     "MixtureWeights",
     "ValueDomains",
     "WalkWeights",
