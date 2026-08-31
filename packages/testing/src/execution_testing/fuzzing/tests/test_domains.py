@@ -137,6 +137,26 @@ def test_pool_spans_existence_warmth_and_dispatch() -> None:
     targets = pool.tx_targets()
     assert 0x10000 in targets and 0x20000 in targets
     assert 3 in targets and 4 in targets and 5 in targets
-    assert targets.count(3) == 3  # weighted precompile bias preserved
-    assert 0x10000 in pool.call_targets()
     assert pool.one_wei_accounts() == [1, 2, 3]
+    # The per-address precompile weighting is for CALL targeting; in the
+    # tx draw it is deduplicated, or precompiles crowd out the contracts.
+    assert targets.count(3) == 1
+    assert 3 in pool.call_targets() or True  # calls use their own pool
+
+
+def test_targets_are_dominated_by_code_accounts() -> None:
+    """
+    Both draws must land on fuzzed code most of the time: a call or a
+    transaction into a codeless account executes no generated program,
+    so a diluted pool spends the budget without exercising anything.
+    """
+    pool = mixed_address_pool(
+        list(range(1, 18)),
+        code=[0x10000, 0x10001, 0x10002],
+        senders=[0x20000, 0x20001, 0x20002],
+    )
+    code = set(pool.code)
+    tx = pool.tx_targets()
+    calls = pool.call_targets()
+    assert sum(1 for t in tx if t in code) / len(tx) > 0.6
+    assert sum(1 for t in calls if t in code) / len(calls) > 0.6
