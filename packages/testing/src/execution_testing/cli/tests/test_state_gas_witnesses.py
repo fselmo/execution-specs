@@ -233,3 +233,106 @@ def test_a_funded_but_untapped_reservoir_does_not_fire_from_reservoir() -> (
     assert "state-gas-reservoir" in signature.events
     assert "state-gas-from-reservoir" not in signature.events
     assert "child-state-gas-spill" in signature.events
+
+
+# The reproducer from nethermind#12965's own regression test, byte for
+# byte. A detector aimed at a known client bug is witnessed against that
+# bug's reproducer; a construction of ours can only confirm our model of
+# it, which is how the previous spill detector passed three witnesses
+# while being blind to the shape it was built for.
+NETHERMIND_12965_REPRODUCER = bytes.fromhex(
+    "5f5f600b5419600b8181553681813030f4833333f1"
+)
+
+
+def _fill_code(code: bytes, tx_gas: int) -> Tuple[Dict[str, Any], Signature]:
+    """Fill a one-tx case whose only contract runs `code`."""
+    sender = Address(EOA(key=SENDER_KEY))
+    case = FuzzerOutput(
+        version="2.0",
+        fork=Amsterdam,
+        accounts={
+            sender: FuzzerAccountInput(
+                balance=HexNumber(10**18), private_key=SENDER_KEY
+            ),
+            Address(PARENT): FuzzerAccountInput(
+                balance=HexNumber(0), code=Bytes(code)
+            ),
+        },
+        transactions=[
+            FuzzerTransactionInput(
+                **{"from": sender},
+                to=Address(PARENT),
+                gas=HexNumber(tx_gas),
+                gas_price=HexNumber(10),
+                nonce=HexNumber(0),
+            )
+        ],
+        env=Environment(
+            fee_recipient=Address(0xC0FFEE),
+            gas_limit=60_000_000,
+            number=1,
+            timestamp=1000,
+            prev_randao=Hash(0),
+            base_fee_per_gas=7,
+        ),
+    )
+    eels = ExecutionSpecsTransitionTool()
+    eels.compute_signature = True
+    eels.last_signature = None
+    fixture = fill_case(case, Amsterdam, eels)
+    assert eels.last_signature is not None
+    return fixture, eels.last_signature
+
+
+def test_the_interleave_fires_on_the_real_reproducer() -> None:
+    """
+    Positive witness: the client bug's own regression contract.
+
+    It must fire, and it must name the depths -- a spill at one frame
+    credited back one frame deeper is the whole claim.
+    """
+    _, signature = _fill_code(NETHERMIND_12965_REPRODUCER, 200_000)
+    assert "state-gas-interleave" in signature.events
+    assert (0, 1) in signature.interleavings
+
+
+def test_a_spill_that_is_never_credited_back_does_not_interleave() -> None:
+    """
+    Near-miss: a child that spills and halts, with no restoration below
+    it. This is exactly what the older `child-state-gas-spill` detector
+    fires on, so it is the case that proves the two are different
+    claims rather than one event under two names.
+    """
+    _, signature = _fill(CAP, child_gas=AMPLE_CHILD_GAS)
+    assert "child-state-gas-spill" in signature.events
+    assert "state-gas-interleave" not in signature.events
+    assert not signature.interleavings
+
+
+def test_dropping_the_depth_pairing_turns_the_near_miss_red(
+    monkeypatch: Any,
+) -> None:
+    """
+    Kill check: the near-miss discriminates only because the credit has
+    to land one frame below a spill. Accept any credit and the
+    spill-then-halt case fires too.
+    """
+    from execution_testing.evm_tools.t8n.evm_trace import signature as mod
+
+    def unpaired(self: Any, evm: object, depth: int) -> None:
+        meter = getattr(evm, "gas_meter", None)
+        left = getattr(meter, "state_gas_left", None)
+        if left is None:
+            return
+        previous = self._reservoir_at.get(depth)
+        if previous is not None and int(left) > previous:
+            self._events.add("state-gas-interleave")
+        self._reservoir_at[depth] = int(left)
+
+    monkeypatch.setattr(mod.SignatureTracer, "_fold_state_gas", unpaired)
+    _, signature = _fill(CAP, child_gas=AMPLE_CHILD_GAS)
+    assert "state-gas-interleave" in signature.events, (
+        "the unpaired detector must fire on the near-miss, or the "
+        "depth pairing is not what makes it discriminate"
+    )
