@@ -113,6 +113,12 @@ def clients(
 @click.option(
     "--no-baseline", is_flag=True, help="Skip the stale-client check."
 )
+@click.option(
+    "--invariant-checks",
+    is_flag=True,
+    help="Check spec-side invariants on every fill, counting violations "
+    "(costs ~2% of fill; catches errors no client comparison can).",
+)
 @click.option("--keep-fixtures", is_flag=True, help="Keep every batch file.")
 @click.option(
     "--config",
@@ -131,6 +137,7 @@ def campaign(
     minimize: bool,
     fresh: bool,
     no_baseline: bool,
+    invariant_checks: bool,
     keep_fixtures: bool,
     config_path: Optional[Path],
 ) -> None:
@@ -159,6 +166,7 @@ def campaign(
         fresh=fresh,
         baseline=not no_baseline,
         keep_fixtures=keep_fixtures,
+        invariant_checks=invariant_checks,
         known=tuple((k.client, k.reason) for k in campaign_config.known),
     )
     click.echo(

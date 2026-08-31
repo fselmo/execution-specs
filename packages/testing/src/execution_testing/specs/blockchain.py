@@ -970,6 +970,12 @@ class BlockchainTest(BaseTest):
                     "exception must be the last transaction in the block"
                 )
 
+        # The access witness is traced, so it has to be asked for before
+        # the run rather than read off the result afterwards. Only the
+        # reference tool offers it.
+        if invariant_checks_enabled() and hasattr(t8n, "compute_bal_witness"):
+            t8n.compute_bal_witness = True
+
         transition_tool_output = t8n.evaluate(
             transition_tool_data=TransitionTool.TransitionToolData(
                 alloc=previous_alloc,
@@ -1230,6 +1236,11 @@ class BlockchainTest(BaseTest):
         if invariant_checks_enabled() and block.exception is None:
             self._invariant_violations.extend(
                 check_block_invariants(
+                    # Only the reference tool traces itself, so the
+                    # witness is absent for every other t8n and the
+                    # access check stays silent rather than guessing.
+                    bal_witness=getattr(t8n, "last_bal_witness", None),
+                    block_access_list=t8n_bal,
                     fork=fork,
                     pre_alloc=(
                         previous_alloc.materialize()

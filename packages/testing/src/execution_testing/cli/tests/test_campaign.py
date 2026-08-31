@@ -175,7 +175,9 @@ def _campaign(
     )
     monkeypatch.setattr(campaign_module, "_eels_commit", lambda: "abc123")
     monkeypatch.setattr(
-        campaign_module, "_fill_pool", lambda _workers, _fork: _FakePool()
+        campaign_module,
+        "_fill_pool",
+        lambda _workers, _fork, _invariants=False: _FakePool(),
     )
     options = CampaignOptions(
         fork=Osaka,
@@ -455,8 +457,10 @@ def test_a_timed_out_case_is_recorded_and_the_slice_continues(
 
     monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
 
-    def fake_fill(case: Any, fork: Any, eels: Any) -> Dict[str, Any]:
-        del fork, eels
+    def fake_fill(
+        case: Any, fork: Any, eels: Any, violations: Any = None
+    ) -> Dict[str, Any]:
+        del fork, eels, violations
         if case == 2:
             _time.sleep(5)
         return {"ok": case}
@@ -510,10 +514,70 @@ def test_a_fill_slice_reports_its_own_generator_version(
 
     monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
 
-    def fake_fill(case: Any, fork: Any, eels: Any) -> Dict[str, Any]:
-        del fork, eels
+    def fake_fill(
+        case: Any, fork: Any, eels: Any, violations: Any = None
+    ) -> Dict[str, Any]:
+        del fork, eels, violations
         return {"ok": case}
 
     monkeypatch.setattr(mod, "fill_case", fake_fill)
     result = mod._fill_slice(([1, 2], str(tmp_path)))
     assert result["generator_version"] == GENERATOR_VERSION
+
+
+def test_invariant_violations_are_counted_not_warned(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A violation has to survive the run as a number with its seed.
+
+    Warned-only diagnostics are the failure that lost the per-case
+    timings twice: they land in a log stream nobody retains and the first
+    real one is scrolled past in a 600-minute run.
+    """
+    from types import SimpleNamespace
+
+    from ..fuzzer_bridge import campaign as mod
+
+    class _Eels:
+        opcode_count_per_block: list = []
+        last_bal_witness = None
+
+        def reset_opcode_count(self) -> None:
+            pass
+
+    monkeypatch.setattr(mod, "_FILL", {"fork": Osaka, "eels": _Eels()})
+
+    def fake_generate(fork: Any, seed: int) -> int:
+        del fork
+        return seed
+
+    def fake_fill(
+        case: Any, fork: Any, eels: Any, violations: Any = None
+    ) -> Dict[str, Any]:
+        del fork, eels
+        if case == 2 and violations is not None:
+            violations.append(SimpleNamespace(invariant="bal_access_witness"))
+        return {"ok": case}
+
+    monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
+    monkeypatch.setattr(mod, "fill_case", fake_fill)
+    result = mod._fill_slice(([1, 2, 3], str(tmp_path)))
+
+    assert result["violations"] == {2: ["bal_access_witness"]}
+    meta = json.loads(next(tmp_path.glob("*.meta.json")).read_text())
+    assert meta["invariant_violations"] == {"2": ["bal_access_witness"]}
+    assert "bracket_width_max" in meta
+
+
+def test_the_campaign_leaves_invariant_checks_off_by_default() -> None:
+    """
+    Enabling them is a per-run choice, not a default: they are a
+    process-global switch and a long lane should not acquire one
+    implicitly.
+    """
+    from ..fuzzer_bridge.campaign import CampaignOptions
+
+    assert CampaignOptions.__dataclass_fields__[
+        "invariant_checks"
+    ].default is (False)

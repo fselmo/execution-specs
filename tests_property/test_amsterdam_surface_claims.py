@@ -50,14 +50,15 @@ def test_the_sstore_gas_gate_is_the_stipend_for_warm_and_cold_alike() -> None:
     """
     SSTORE's pre-access gas check is `max(access cost, CALL_STIPEND + 1)`,
     and today the `max` is inert: both access costs sit below the stipend,
-    so the gate is 2301 whichever side it takes.
+    so the gate is the stipend whichever side it takes.
 
     The `max` exists against a future repricing -- its own comment says
     the access cost "can exceed the stipend" -- so this is the assertion
     that goes stale first. A repricing that lifts `COLD_STORAGE_ACCESS`
     past the stipend moves the cold gate without moving the warm one, and
-    any boundary case generated at 2300/2301/2302 stops testing the edge
-    it was written for.
+    any boundary case generated around the stipend stops testing the edge
+    it was written for. Asserted against the constants rather than the
+    value they currently produce, so a repricing fails here.
     """
     gate = Uint(GasCosts.CALL_STIPEND) + Uint(1)
     assert Uint(GasCosts.WARM_ACCESS) < gate

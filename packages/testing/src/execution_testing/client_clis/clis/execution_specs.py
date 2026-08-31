@@ -30,6 +30,9 @@ from execution_testing.forks import Fork
 
 if TYPE_CHECKING:
     from execution_testing.evm_tools.t8n import ForkCache
+    from execution_testing.evm_tools.t8n.evm_trace.bal_witness import (
+        BalWitness,
+    )
     from execution_testing.evm_tools.t8n.evm_trace.signature import (
         Signature,
     )
@@ -53,6 +56,8 @@ class ExecutionSpecsTransitionTool(TransitionTool):
         self.trace = trace
         self.compute_signature = False
         self.last_signature: Optional["Signature"] = None
+        self.compute_bal_witness = False
+        self.last_bal_witness: Optional["BalWitness"] = None
         self._info_metadata: Optional[Dict[str, Any]] = {}
         # Defer importing the `ethereum` package (see `fork_cache` and
         # `version`) until the tool is actually used. The tool is constructed
@@ -146,6 +151,17 @@ class ExecutionSpecsTransitionTool(TransitionTool):
                 tracers = GroupTracer()
             tracers.add(count_tracer)
 
+        bal_tracer = None
+        if self.compute_bal_witness:
+            from execution_testing.evm_tools.t8n.evm_trace.bal_witness import (
+                BalWitnessTracer,
+            )
+
+            bal_tracer = BalWitnessTracer()
+            if tracers is None:
+                tracers = GroupTracer()
+            tracers.add(bal_tracer)
+
         signature_tracer = None
         if self.compute_signature:
             from execution_testing.evm_tools.t8n.evm_trace.signature import (
@@ -169,6 +185,9 @@ class ExecutionSpecsTransitionTool(TransitionTool):
             output.result.opcode_count = OpcodeCount.model_validate(
                 count_tracer.results()
             )
+
+        if bal_tracer is not None:
+            self.last_bal_witness = bal_tracer.witness()
 
         if signature_tracer is not None:
             from execution_testing.evm_tools.t8n.evm_trace.signature import (
