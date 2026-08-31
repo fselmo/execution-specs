@@ -41,19 +41,54 @@ def fuzz() -> None:
     help="Re-resolve refs and build new commits for source builds.",
 )
 @click.option(
+    "--client",
+    "only",
+    multiple=True,
+    help="Limit to these clients; repeat for several. Required with "
+    "--update, which would otherwise re-resolve every branch-ref client.",
+)
+@click.option(
     "--config",
     "config_path",
     type=click.Path(path_type=Path, dir_okay=False),
     default=None,
     help="fuzz.yaml to read (default: nearest one in parent directories).",
 )
-def clients(update: bool, config_path: Optional[Path]) -> None:
-    """Show each configured client: source, binary, and version."""
+def clients(
+    update: bool, only: Sequence[str], config_path: Optional[Path]
+) -> None:
+    """
+    Show each configured client: source, binary, and version.
+
+    `--update` re-resolves a client's ref, so on a client pinned to a
+    branch it silently replaces the binary with whatever that branch now
+    points at. A rediscovery run depends on its clients being *older*
+    than the fix they are meant to carry, and a blanket update destroys
+    that premise without anyone choosing it -- erigon's block-access-list
+    fix reached its devnet branch the day before the campaign that found
+    the bug. So an update names its clients.
+    """
     config = load_config_or_fail(config_path)
     if not config.clients:
         click.echo("no clients configured; declare them in fuzz.yaml")
         return
-    for client in config.clients:
+    known = {client.name for client in config.clients}
+    unknown = sorted(set(only) - known)
+    if unknown:
+        raise click.BadParameter(
+            f"unknown client(s): {', '.join(unknown)}; "
+            f"declared: {', '.join(sorted(known))}",
+            param_hint="--client",
+        )
+    if update and not only:
+        raise click.UsageError(
+            "--update needs --client NAME (repeat for several): updating "
+            "every client at once re-resolves branch-pinned clients to "
+            "their current heads. Pass --client for each one you mean to "
+            "rebuild."
+        )
+    selected = [c for c in config.clients if not only or c.name in only]
+    for client in selected:
         click.echo(f"{client.name:<14} {client_status(client, update=update)}")
 
 

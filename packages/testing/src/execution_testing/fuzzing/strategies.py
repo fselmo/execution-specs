@@ -234,21 +234,34 @@ def _call_into_destructor(
 
 
 def _halting_child_then_state_charge(
-    rng: random.Random, domains: ValueDomains, target: int, slot: int
+    rng: random.Random,
+    domains: ValueDomains,
+    spiller: int,
+    slot: int,
 ) -> Bytecode:
     """
-    Call ``target`` with too little gas for any state work, so the child
-    halts, then pay a cold state charge in this frame: a fresh storage
-    slot, and a value transfer that creates a fresh account.
+    Call a helper that charges state gas and *then* halts exceptionally,
+    and pay a cold state charge in this frame afterwards.
 
-    A halted child settled wrongly (state gas credited back instead of
-    consumed) only becomes visible when the parent *spends* afterwards.
+    The child must be able to *afford* its state charge: a charge that
+    the frame cannot cover raises `OutOfGasError` before any spill is
+    recorded, and a frame that never spilled cannot witness the
+    settlement rule at all. So the call is funded generously -- the
+    opposite of starving it -- and the helper (`SPILLER_CODE`) does one
+    SSTORE before running onto an undefined byte.
+
+    The halt must be exceptional, not a REVERT: only the exceptional
+    path forfeits the frame's gas, and the rule under test is that the
+    spill is consumed there rather than handed back to the parent. A
+    wrongly-settled child only becomes visible when the parent *spends*
+    afterwards, so a fresh storage slot and an account-creating value
+    transfer follow the call.
     """
     code = Bytecode()
     for _ in range(5):
         code += Op.PUSH0
-    code += Op.PUSH20(target)
-    code += Op.PUSH2(rng.choice(domains.starve_gas))
+    code += Op.PUSH20(spiller)
+    code += Op.PUSH3(rng.choice(domains.spill_gas))
     code += Op.CALL
     code += Op.PUSH2(slot)
     code += Op.SSTORE
@@ -421,6 +434,7 @@ def fuzzed_bytecode(
     precompiles: Optional[Sequence[int]] = None,
     call_targets: Optional[Sequence[int]] = None,
     selfdestructor: Optional[int] = None,
+    spiller: Optional[int] = None,
     domains: Optional[ValueDomains] = None,
 ) -> Bytecode:
     """
@@ -434,7 +448,9 @@ def fuzzed_bytecode(
     along with the shapes real consensus bugs have taken: a halting child
     followed by a cold state charge, and ``CREATE2`` self-replication.
     ``selfdestructor`` names a helper whose code is ``ORIGIN SELFDESTRUCT``
-    for calls that destroy the caller or the callee. ``domains`` supplies
+    for calls that destroy the caller or the callee. ``spiller`` names a
+    helper that charges state gas and then halts exceptionally, so a
+    child frame settles a halt with an outstanding spill. ``domains`` supplies
     the value mixtures, fork-derived boundary sets and walk-action
     weights (fork-free generic defaults when omitted). Halt kind is a
     first-class action: a body may end early in RETURN, REVERT, INVALID
@@ -479,9 +495,9 @@ def fuzzed_bytecode(
             )
             call_slot += 2
             continue
-        if call_targets and rng.random() < walk.halting_child:
+        if spiller is not None and rng.random() < walk.halting_child:
             code += _halting_child_then_state_charge(
-                rng, domains, rng.choice(call_targets), call_slot
+                rng, domains, spiller, call_slot
             )
             call_slot += 2
             continue

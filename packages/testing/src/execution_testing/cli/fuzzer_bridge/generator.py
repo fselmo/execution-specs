@@ -44,12 +44,50 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 11
+GENERATOR_VERSION = 12
 
 DESTRUCTOR_ADDRESS = 0x1FFFF
 """Helper contract whose code is `ORIGIN SELFDESTRUCT`."""
 
+SPILLER_ADDRESS = 0x1FFFE
+"""Helper contract that charges state gas and then halts exceptionally.
+
+It writes a fresh storage slot -- keyed on `GAS`, so repeat calls in one
+block keep paying the full set cost rather than rewriting one slot -- and
+then runs onto an undefined byte. A frame that charges state gas it could
+afford has spilled (the reservoir is empty for any transaction under the
+execution-gas cap), and halting exceptionally is the only path that
+forfeits the frame's gas: together they are the precondition for the
+halt-chain settlement rule of EIP-8037.
+"""
+
 BLOCK_GAS_LIMIT = 30_000_000
+
+RESERVOIR_TX_RATE = 0.35
+"""Fraction of transactions drawn above the execution-gas cap, so the
+transaction carries a non-empty state gas reservoir.
+
+`validate_transaction` caps the intrinsic cost against
+`TX_MAX_GAS_LIMIT`, never `tx.gas`, so gas above the cap is valid and
+becomes the reservoir (EIP-8037). Drawing only at or below the cap left
+the reservoir empty in every case, which made every state charge spill
+and left the branch that serves a charge *from* the reservoir dark.
+"""
+
+DISCARDED_DRAWS: Dict[str, int] = {}
+"""Per-domain count of drawn values the gas budget could not accept.
+
+A domain value that never fits is dead weight in the mixture, and
+dropping it quietly reads downstream as a mysteriously low event rate
+rather than as a narrowed domain. Counting it makes the narrowing a
+number. Reset by `reset_discarded_draws` before a measured run.
+"""
+
+
+def reset_discarded_draws() -> None:
+    """Clear the discarded-draw counters before a measured run."""
+    DISCARDED_DRAWS.clear()
+
 
 PRECOMPILE_FUNDING_RATE = 0.25
 """Fraction of cases that seed the precompiles into the pre-state. The
@@ -107,7 +145,7 @@ def generate_fuzzer_output(
     # the fuzzer aims at the changed surface (see eip_properties.targeting).
     precompiles = fuzz_precompile_targets(fork)
     if domains is None:
-        domains = fork_domains(fork)
+        domains = fork_domains(fork, BLOCK_GAS_LIMIT)
 
     # One mixed pool: contracts call every sibling (nested frames and
     # recursion arise naturally) but also senders, the precompile-range
@@ -135,6 +173,11 @@ def generate_fuzzer_output(
         nonce=HexNumber(1),
         code=Bytes(bytes(Op.ORIGIN + Op.SELFDESTRUCT)),
     )
+    accounts[Address(SPILLER_ADDRESS)] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(1),
+        code=Bytes(bytes(Op.PUSH1(1) + Op.GAS + Op.SSTORE + Op.INVALID)),
+    )
     contract_addresses: List[Address] = []
     for target in contract_ints:
         address = Address(target)
@@ -149,6 +192,7 @@ def generate_fuzzer_output(
                         precompiles=precompiles,
                         call_targets=pool.call_targets(),
                         selfdestructor=DESTRUCTOR_ADDRESS,
+                        spiller=SPILLER_ADDRESS,
                         domains=domains,
                     )
                 )
@@ -173,7 +217,15 @@ def generate_fuzzer_output(
     for _ in range(num_transactions):
         sender = rng.choice(sender_addresses)
         to = Address(rng.choice(tx_targets))
-        affordable = [g for g in tx_gas_choices if g <= gas_budget]
+        choices = tx_gas_choices
+        if domains.reservoir_tx_gas and rng.random() < RESERVOIR_TX_RATE:
+            choices = domains.reservoir_tx_gas + tx_gas_choices
+        affordable = [g for g in choices if g <= gas_budget]
+        for rejected in choices:
+            if rejected > gas_budget:
+                DISCARDED_DRAWS["tx_gas"] = (
+                    DISCARDED_DRAWS.get("tx_gas", 0) + 1
+                )
         if not affordable:
             break
         gas = rng.choice(affordable)
