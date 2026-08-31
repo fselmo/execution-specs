@@ -494,6 +494,18 @@ def _case_opcodes(eels: Any) -> int:
     return total
 
 
+class MixedGeneratorError(RuntimeError):
+    """
+    A shard was filled by a different generator than the run started with.
+
+    Editing the working tree during a long campaign is enough to cause it:
+    the parent holds the version it imported at start, while a pool worker
+    respawned after a fill timeout imports whatever is on disk then. The
+    result is a run whose cases come from two generators with no record of
+    which is which, which is not a result that can be quoted.
+    """
+
+
 def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
     """
     Fill a slice of seeds, write its shard and metadata, return a summary.
@@ -564,6 +576,9 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
         "names": list(fixtures),
         "errors": errors,
         "timeouts": timeouts,
+        # The worker's own value, not the parent's: a pool worker
+        # respawned mid-run imports whatever is on disk at that moment.
+        "generator_version": GENERATOR_VERSION,
         "seconds": seconds,
         "rss_mb": rss_mb,
     }
@@ -735,6 +750,14 @@ def run_campaign(
             state.counts["fill_error"] = state.counts.get(
                 "fill_error", 0
             ) + len(fill_errors)
+            shard_version = slice_result.get("generator_version")
+            if shard_version != GENERATOR_VERSION:
+                raise MixedGeneratorError(
+                    f"shard filled by generator v{shard_version} while this "
+                    f"run is v{GENERATOR_VERSION}: a worker respawned onto a "
+                    "different checkout, so the batch is a mix of two "
+                    "generators. Stop, do not quote the run."
+                )
             state.counts["fill_timeout"] = state.counts.get(
                 "fill_timeout", 0
             ) + len(slice_result.get("timeouts", {}))
