@@ -16,6 +16,7 @@ import json
 import re
 import resource
 import shutil
+import signal
 import sys
 import tempfile
 import time
@@ -32,6 +33,7 @@ from typing import (
     Callable,
     Deque,
     Dict,
+    Iterator,
     List,
     Mapping,
     Optional,
@@ -48,7 +50,7 @@ from execution_testing.forks import Fork
 from .baseline import StaleClientError
 from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
-from .differential import _fork_by_name
+from .differential import _fork_by_name, is_tool_rejection
 from .generator import GENERATOR_VERSION, generate_fuzzer_output
 from .models import FuzzerOutput
 from .run_manifest import RunManifest, _eels_commit
@@ -111,12 +113,41 @@ def is_known(signature: Signature, known: Sequence[KnownSignature]) -> bool:
     return False
 
 
+SEED_SAMPLE_CAP = 500
+"""Seeds retained per signature. A signature that fires rarely is the one
+worth bucketing by mechanism later, and it is kept whole; a signature
+firing tens of thousands of times is sampled. Recording only `first_seed`
+made the 46 erigon hits of the first blind campaign unrecoverable."""
+
+
+def partition_rejections(
+    verdicts: Mapping[str, Verdict],
+) -> "Tuple[Dict[str, Verdict], Dict[str, Verdict]]":
+    """
+    Split verdicts into tools that ran and tools that refused the input.
+
+    A refusal is not a consensus disagreement, so it is excluded from
+    both sides of the comparison exactly as the t8n lane excludes it: it
+    neither counts as a client failure nor lets the remaining clients
+    read as a divergence against it.
+    """
+    ran, rejected = {}, {}
+    for name, verdict in verdicts.items():
+        if not verdict.passed and is_tool_rejection(verdict.error):
+            rejected[name] = verdict
+        else:
+            ran[name] = verdict
+    return ran, rejected
+
+
 def classify(verdicts: Mapping[str, Verdict]) -> str:
     """
     ``agreed`` when every client accepts, ``all-fail`` when none does (a
     suspect block or a spec-side change, never a client finding), else
     ``divergence``.
     """
+    if not verdicts:
+        return "all-rejected"
     failed = sum(1 for v in verdicts.values() if not v.passed)
     if failed == 0:
         return "agreed"
@@ -154,10 +185,13 @@ class CampaignState:
             "agreed": 0,
             "divergence": 0,
             "all-fail": 0,
+            "all-rejected": 0,
             "fill_error": 0,
+            "fill_timeout": 0,
         }
     )
     client_failures: Dict[str, int] = field(default_factory=dict)
+    rejections: Dict[str, int] = field(default_factory=dict)
     signatures: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     signatures_reset: bool = field(default=False, compare=False)
 
@@ -176,6 +210,7 @@ class CampaignState:
                 started=data.get("started", time.time()),
                 counts=data.get("counts", {}),
                 client_failures=data.get("client_failures", {}),
+                rejections=data.get("rejections", {}),
                 signatures=signatures,
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
@@ -193,6 +228,7 @@ class CampaignState:
                     "started": self.started,
                     "counts": self.counts,
                     "client_failures": self.client_failures,
+                    "rejections": self.rejections,
                     "signatures": self.signatures,
                 },
                 indent=1,
@@ -218,11 +254,15 @@ class CampaignState:
                 "reason": reason,
                 "count": 1,
                 "first_seed": seed,
+                "seeds": [seed],
                 "bundle": bundle,
                 "known": known,
             }
             return True
         entry["count"] += 1
+        seeds = entry.setdefault("seeds", [entry["first_seed"]])
+        if len(seeds) < SEED_SAMPLE_CAP:
+            seeds.append(seed)
         return False
 
     def unique_findings(self) -> int:
@@ -256,6 +296,9 @@ def render_report(
         f"| divergences | {state.counts.get('divergence', 0)} "
         f"({state.unique_findings()} unique) |",
         f"| all-fail (suspect) | {state.counts.get('all-fail', 0)} |",
+        f"| all-rejected (no tool ran) | "
+        f"{state.counts.get('all-rejected', 0)} |",
+        f"| fill timeouts | {state.counts.get('fill_timeout', 0)} |",
         f"| fill errors | {fill_errors} "
         f"({fill_error_rate:.1%} of {generated} candidates) |",
     ]
@@ -278,12 +321,13 @@ def render_report(
         "",
         "## Failures per client",
         "",
-        "| client | fixtures failed |",
-        "| --- | --- |",
+        "| client | fixtures failed | inputs refused |",
+        "| --- | --- | --- |",
     ]
     lines += [
-        f"| {name} | {count} |"
-        for name, count in sorted(state.client_failures.items())
+        f"| {name} | {state.client_failures.get(name, 0)} "
+        f"| {state.rejections.get(name, 0)} |"
+        for name in sorted(set(state.client_failures) | set(state.rejections))
     ]
     findings = sorted(
         (e for e in state.signatures.values() if not e.get("known")),
@@ -399,6 +443,57 @@ def _worker_rss_mb() -> int:
     return int(peak / divisor)
 
 
+FILL_TIMEOUT_SECONDS = 30.0
+"""Per-case fill budget. One pathological case can hold a whole slice:
+seed 800030 of the v12 smoke ran 112 s on the server against a 62 ms
+median -- 80% of that shard's fill time in one case, which moved the
+shard's mean ms/case by more than 2x with nothing else changing.
+
+The timeout protects throughput; it is not the fix. Cost is linear in
+opcodes executed (that case ran 297,066 against a neighbour's 346, at a
+*lower* cost per opcode), so the fix is the per-shape depth budget that
+bounds the recursive fan-out generating them.
+"""
+
+
+class FillTimeoutError(Exception):
+    """One case exceeded the per-case fill budget."""
+
+
+@contextlib.contextmanager
+def _case_deadline(seconds: float) -> Iterator[None]:
+    """
+    Raise `FillTimeoutError` in this worker if a case outruns its budget.
+
+    SIGALRM only fires on a process's main thread, which is what a pool
+    worker is. Where it is unavailable the budget is simply not enforced.
+    """
+    if seconds <= 0 or not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def _fire(signum: int, frame: object) -> None:
+        del signum, frame  # the handler needs neither
+        raise FillTimeoutError(f"fill exceeded {seconds:g}s")
+
+    previous = signal.signal(signal.SIGALRM, _fire)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def _case_opcodes(eels: Any) -> int:
+    """Opcodes executed by the case just filled, 0 when uncounted."""
+    total = 0
+    for block in eels.opcode_count_per_block or []:
+        root = block.root if hasattr(block, "root") else block
+        total += sum(dict(root).values())
+    return total
+
+
 def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
     """
     Fill a slice of seeds, write its shard and metadata, return a summary.
@@ -412,13 +507,28 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
     started = time.perf_counter()
     fixtures: Dict[str, Dict[str, Any]] = {}
     errors: Dict[int, str] = {}
+    timeouts: Dict[int, float] = {}
+    case_ms: List[Tuple[int, float]] = []
+    opcodes: Dict[int, int] = {}
     for seed in seeds:
+        case_started = time.perf_counter()
+        _FILL["eels"].reset_opcode_count()
         try:
-            fixtures[f"seed_{seed}"] = fill_case(
-                generate_fuzzer_output(fork, seed), fork, _FILL["eels"]
-            )
+            with _case_deadline(FILL_TIMEOUT_SECONDS):
+                fixtures[f"seed_{seed}"] = fill_case(
+                    generate_fuzzer_output(fork, seed), fork, _FILL["eels"]
+                )
+        except FillTimeoutError:
+            timeouts[seed] = FILL_TIMEOUT_SECONDS
+            # The interrupted fill may have left the tool mid-transition,
+            # so the worker takes a fresh one rather than carrying that
+            # into the next case.
+            _FILL["eels"] = ExecutionSpecsTransitionTool()
         except Exception as exc:  # noqa: BLE001 - a fill failure is data
             errors[seed] = f"{type(exc).__name__}: {exc}"[:200]
+        else:
+            opcodes[seed] = _case_opcodes(_FILL["eels"])
+        case_ms.append((seed, (time.perf_counter() - case_started) * 1000))
     seconds = time.perf_counter() - started
     path = shard_path(Path(fixtures_dir), seeds)
     if fixtures:
@@ -435,6 +545,15 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
                 "ms_per_case": round(seconds / len(fixtures) * 1000, 2)
                 if fixtures
                 else None,
+                # A mean over this distribution hides the tail that
+                # dominates it; the quantiles are what make a slow shard
+                # readable without a rerun.
+                **_timing_summary(case_ms),
+                "opcodes_per_case_median": _median(
+                    [float(v) for v in opcodes.values()]
+                ),
+                "opcodes_max": max(opcodes.values(), default=0),
+                "fill_timeouts": {str(k): v for k, v in timeouts.items()},
                 "rss_mb": rss_mb,
             },
             indent=1,
@@ -444,8 +563,37 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
         "path": str(path) if fixtures else None,
         "names": list(fixtures),
         "errors": errors,
+        "timeouts": timeouts,
         "seconds": seconds,
         "rss_mb": rss_mb,
+    }
+
+
+def _median(values: List[float]) -> Optional[float]:
+    """Median of `values`, None when empty."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return round(ordered[middle], 2)
+    return round((ordered[middle - 1] + ordered[middle]) / 2, 2)
+
+
+def _timing_summary(case_ms: List[Tuple[int, float]]) -> Dict[str, Any]:
+    """Per-case fill quantiles and the slowest seed in the shard."""
+    if not case_ms:
+        return {}
+    times = [ms for _, ms in case_ms]
+    ordered = sorted(times)
+    slowest_seed, slowest_ms = max(case_ms, key=lambda pair: pair[1])
+    return {
+        "ms_per_case_median": _median(times),
+        "ms_per_case_p90": round(
+            ordered[min(len(ordered) - 1, int(len(ordered) * 0.9))], 2
+        ),
+        "ms_per_case_max": round(slowest_ms, 2),
+        "slowest_seed": slowest_seed,
     }
 
 
@@ -587,6 +735,9 @@ def run_campaign(
             state.counts["fill_error"] = state.counts.get(
                 "fill_error", 0
             ) + len(fill_errors)
+            state.counts["fill_timeout"] = state.counts.get(
+                "fill_timeout", 0
+            ) + len(slice_result.get("timeouts", {}))
             state.counts["fill_ms"] = state.counts.get("fill_ms", 0) + int(
                 slice_result["seconds"] * 1000
             )
@@ -623,6 +774,11 @@ def run_campaign(
                     verdicts = {
                         name: results[name][fixture_name] for name in runners
                     }
+                    verdicts, rejected = partition_rejections(verdicts)
+                    for name in rejected:
+                        state.rejections[name] = (
+                            state.rejections.get(name, 0) + 1
+                        )
                     kind = classify(verdicts)
                     state.counts[kind] = state.counts.get(kind, 0) + 1
                     for name, verdict in verdicts.items():

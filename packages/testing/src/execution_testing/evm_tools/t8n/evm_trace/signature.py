@@ -49,6 +49,9 @@ EVENT_WITNESSES = {
     "refund-clamp": "behavioral",
     "call-depth-limit": "behavioral",
     "call-entry-oog": "behavioral",
+    "child-state-gas-spill": "behavioral",
+    "state-gas-reservoir": "behavioral",
+    "state-gas-from-reservoir": "behavioral",
 }
 """Every L1 tag the tracer can emit, with the witness kind that validates
 its detector -- an event registers here only with one:
@@ -115,6 +118,47 @@ def _gas_left(evm: object) -> Optional[int]:
     source = getattr(evm, "gas_meter", evm)
     value = getattr(source, "gas_left", None)
     return int(value) if value is not None else None
+
+
+def _reservoir_grant(evm: object) -> int:
+    """
+    The *user* transaction's state gas reservoir grant, else 0.
+
+    System transactions are granted a fixed non-empty reservoir on every
+    block (`SYSTEM_MAX_SSTORES_PER_CALL` writes), so a grant read without
+    this guard is a constant -- it reports "the reservoir is exercised"
+    on every case ever generated, including those whose own transactions
+    all sit at or below the execution cap. They are told apart by
+    `index_in_block`, which only a block-ordered transaction carries.
+    """
+    tx_env = getattr(evm, "tx_env", None)
+    if getattr(tx_env, "index_in_block", None) is None:
+        return 0
+    grant = getattr(tx_env, "state_gas_reservoir", None)
+    return int(grant) if grant is not None else 0
+
+
+def _child_state_gas_spilled(evm: object, depth: int) -> bool:
+    """
+    Whether a child frame is carrying state gas it had to spill into
+    execution gas -- the reservoir ran dry and the charge came out of
+    `gas_left`.
+
+    This is the precondition for the halt-chain settlement bug class
+    (EIP-8037): a frame that spilled and then halts must consume the
+    spill, not hand it back. A frame that never spilled cannot witness
+    that rule at all, so the tag is the density metric for the path.
+
+    Read off the live meter rather than the event payload because the
+    charge that causes a spill is traced *before* it is applied, and
+    read on every event because the settlement that clears the spill
+    runs *after* the halt is traced.
+    """
+    if depth <= 0:
+        return False
+    meter = getattr(evm, "gas_meter", None)
+    spilled = getattr(meter, "state_gas_spilled", None)
+    return spilled is not None and int(spilled) > 0
 
 
 def _refund_is_clamped(evm: object) -> bool:
@@ -188,6 +232,8 @@ class SignatureTracer:
         """Fold one trace event into the accumulating signature."""
         depth = int(getattr(evm, "depth", 0))
         self._max_depth = max(self._max_depth, depth)
+        if _child_state_gas_spilled(evm, depth):
+            self._events.add("child-state-gas-spill")
         if isinstance(event, OpStart):
             name = event.op.name
             if self._prev_op is not None:
@@ -232,6 +278,22 @@ class SignatureTracer:
             self._events.add("precompile")
         elif isinstance(event, StateGasAndRefund):
             self._events.add("state-gas")
+            if _reservoir_grant(evm) > 0:
+                self._events.add("state-gas-reservoir")
+            # The charge is traced before it is applied, so the live
+            # reservoir still holds what this charge will draw on: the
+            # branch that serves it whole from the reservoir, rather
+            # than spilling into execution gas, is about to be taken.
+            meter = getattr(evm, "gas_meter", None)
+            left = getattr(meter, "state_gas_left", None)
+            cost = int(event.state_gas_cost)
+            if (
+                left is not None
+                and cost > 0
+                and _reservoir_grant(evm) > 0
+                and int(left) >= cost
+            ):
+                self._events.add("state-gas-from-reservoir")
         elif isinstance(event, TransactionEnd):
             if _refund_is_clamped(evm):
                 self._events.add("refund-clamp")

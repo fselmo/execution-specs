@@ -136,11 +136,12 @@ class ValueDomains:
     """Fork-computed boundary sets with per-domain mixture weights."""
 
     call_gas_boundaries: Tuple[int, ...]
-    starve_gas: Tuple[int, ...]
+    spill_gas: Tuple[int, ...]
     salt_domain: Tuple[int, ...]
     value_boundaries: Tuple[int, ...] = (1, 2)
     storage_keys: Tuple[int, ...] = tuple(range(8))
     storage_values: Tuple[int, ...] = (1, 2, 3)
+    reservoir_tx_gas: Tuple[int, ...] = ()
     walk: WalkWeights = WALK_WEIGHTS
     gas_weights: MixtureWeights = GAS_WEIGHTS
     value_weights: MixtureWeights = VALUE_WEIGHTS
@@ -203,19 +204,23 @@ class ValueDomains:
 
 GENERIC_DOMAINS = ValueDomains(
     call_gas_boundaries=tuple(boundary_values(16)),
-    starve_gas=(0, 1),
+    spill_gas=(22_100, 44_200),
     salt_domain=tuple(range(4)),
 )
 """Fork-free defaults for callers without a fork in hand."""
 
 
-def fork_domains(fork: "Fork") -> ValueDomains:
+def fork_domains(
+    fork: "Fork", block_gas_limit: Optional[int] = None
+) -> ValueDomains:
     """
     Compute the fork's value domains from its own gas schedule.
 
     The call-gas boundary set brackets the stipend, warm and cold access,
     a cold write, and the cost of creating a funded account -- each one a
-    gas amount at which a child frame's capabilities change.
+    gas amount at which a child frame's capabilities change. The spill
+    set brackets a cold write from above, the amount a child needs to
+    charge state gas at all.
     """
     costs = fork.gas_costs()
     stipend = costs.CALL_STIPEND
@@ -236,10 +241,45 @@ def fork_domains(fork: "Fork") -> ValueDomains:
             create_funded,
         }
     )
-    starve = sorted({0, costs.WARM_ACCESS, stipend - 1, stipend})
+    # A child only spills state gas if it can *afford* the charge: an
+    # unaffordable one raises OutOfGasError before any spill is recorded.
+    # So this brackets a cold write from exactly-affordable upward, the
+    # opposite of starving the frame.
+    cold_write = costs.COLD_STORAGE_ACCESS + costs.STORAGE_SET
+    spill = sorted({cold_write * factor for factor in (1, 2, 8, 32)})
+    # A transaction's state gas reservoir is whatever its gas limit
+    # exceeds the *execution* cap by -- validation caps the intrinsic
+    # cost, not `tx.gas`. Only a reservoir that covers a whole cold
+    # write reaches the branch that serves a charge from the reservoir,
+    # so the set brackets that cost rather than the cap itself.
+    # The interesting edge is a reservoir that exactly covers one charge
+    # against one a unit short, so the set brackets a single cold write
+    # rather than scaling by it. Values must also stay inside a block:
+    # an unaffordable draw is silently discarded by the gas budget, which
+    # is how a widened domain can look wider than it is.
+    # Only a fork that splits the reservoir out treats gas above the cap
+    # as valid: before EIP-8037 the same cap is a hard validity check on
+    # `tx.gas`, so drawing above it there produces invalid transactions.
+    cap = fork.transaction_gas_limit_cap()
+    reservoir_tx_gas: Tuple[int, ...] = ()
+    if cap is not None and fork.state_gas_reservoir_enabled():
+        candidates = [
+            cap + 1,
+            cap + cold_write - 1,
+            cap + cold_write,
+            cap + cold_write * 8,
+        ]
+        if block_gas_limit is not None:
+            # A value a block can never fit is not a wider domain, it is
+            # a draw the budget silently discards. The upper bound is the
+            # block's own limit, which is itself the largest legal draw.
+            candidates = [g for g in candidates if g <= block_gas_limit]
+            candidates.append(block_gas_limit)
+        reservoir_tx_gas = tuple(sorted(set(candidates)))
     return ValueDomains(
         call_gas_boundaries=tuple(call_gas),
-        starve_gas=tuple(starve),
+        spill_gas=tuple(spill),
+        reservoir_tx_gas=reservoir_tx_gas,
         salt_domain=tuple(range(4)),
     )
 

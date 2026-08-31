@@ -318,3 +318,152 @@ def test_state_reset_when_signature_scheme_changes(tmp_path: Path) -> None:
     state = CampaignState.load(path, seed_start=0)
     assert state.next_seed == 500 and state.counts["divergence"] == 9
     assert state.signatures == {} and state.signatures_reset
+
+
+def test_a_refused_input_is_not_a_client_failure() -> None:
+    """
+    A tool that refuses the input never ran, so it is excluded from both
+    sides: it is not a failure, and the clients that did run are judged
+    only against each other.
+    """
+    from ..fuzzer_bridge.campaign import classify, partition_rejections
+    from ..fuzzer_bridge.runners import Verdict
+
+    verdicts = {
+        "geth": Verdict(False, "Unable to validate CALLF"),
+        "besu": Verdict(True),
+        "erigon": Verdict(True),
+    }
+    ran, rejected = partition_rejections(verdicts)
+    assert set(rejected) == {"geth"}
+    assert set(ran) == {"besu", "erigon"}
+    # Without the partition this reads as a geth divergence.
+    assert classify(ran) == "agreed"
+
+
+def test_every_tool_refusing_is_its_own_bucket() -> None:
+    """No tool ran, so the case is neither agreement nor divergence."""
+    from ..fuzzer_bridge.campaign import classify, partition_rejections
+    from ..fuzzer_bridge.runners import Verdict
+
+    ran, rejected = partition_rejections(
+        {"geth": Verdict(False, "Unable to validate CALLF")}
+    )
+    assert not ran and set(rejected) == {"geth"}
+    assert classify(ran) == "all-rejected"
+
+
+def test_a_real_failure_is_never_read_as_a_refusal() -> None:
+    """The near-miss: a genuine divergence must survive the partition."""
+    from ..fuzzer_bridge.campaign import classify, partition_rejections
+    from ..fuzzer_bridge.runners import Verdict
+
+    ran, rejected = partition_rejections(
+        {
+            "erigon": Verdict(False, "block access list mismatch"),
+            "geth": Verdict(True),
+        }
+    )
+    assert not rejected
+    assert classify(ran) == "divergence"
+
+
+def test_every_hit_seed_is_recorded_up_to_the_cap(tmp_path: Path) -> None:
+    """
+    Signature dedup must not lose the seeds. The first blind campaign
+    kept only `first_seed`, which made its 46 erigon hits unrecoverable.
+    """
+    from ..fuzzer_bridge.campaign import SEED_SAMPLE_CAP, CampaignState
+
+    state = CampaignState(path=tmp_path / "state.json", next_seed=0)
+    for seed in range(SEED_SAMPLE_CAP + 10):
+        state.record_signature(
+            "erigon", "block access list mismatch", seed=seed, bundle="b"
+        )
+    entry = next(iter(state.signatures.values()))
+    assert entry["count"] == SEED_SAMPLE_CAP + 10
+    assert entry["seeds"] == list(range(SEED_SAMPLE_CAP))
+    assert entry["first_seed"] == 0
+
+
+def test_seeds_and_rejections_survive_a_resume(tmp_path: Path) -> None:
+    """A Ctrl-C mid-campaign must not drop either record."""
+    from ..fuzzer_bridge.campaign import CampaignState
+
+    path = tmp_path / "state.json"
+    state = CampaignState(path=path, next_seed=0)
+    state.rejections["geth"] = 7
+    state.record_signature("erigon", "boom", seed=42, bundle="b")
+    state.record_signature("erigon", "boom", seed=99, bundle="b")
+    state.save()
+
+    resumed = CampaignState.load(path, seed_start=0)
+    assert resumed.rejections == {"geth": 7}
+    assert next(iter(resumed.signatures.values()))["seeds"] == [42, 99]
+
+
+def test_the_case_deadline_interrupts_a_runaway_fill() -> None:
+    """The budget fires, and only inside the block it guards."""
+    import time as _time
+
+    from ..fuzzer_bridge.campaign import FillTimeoutError, _case_deadline
+
+    with pytest.raises(FillTimeoutError):
+        with _case_deadline(0.2):
+            _time.sleep(5)
+    # The timer is cleared on the way out, so later work is not hit.
+    with _case_deadline(5):
+        _time.sleep(0.05)
+
+
+def test_timing_summary_reports_the_tail_and_names_the_seed() -> None:
+    """
+    A mean hides the case that dominates a shard; the quantiles and the
+    slowest seed are what make it readable without a rerun.
+    """
+    from ..fuzzer_bridge.campaign import _timing_summary
+
+    summary = _timing_summary([(1, 10.0), (2, 50.0), (3, 9000.0), (4, 20.0)])
+    assert summary["ms_per_case_median"] == 35.0
+    assert summary["ms_per_case_max"] == 9000.0
+    assert summary["slowest_seed"] == 3
+
+
+def test_a_timed_out_case_is_recorded_and_the_slice_continues(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """One pathological case must not cost the rest of its shard."""
+    import time as _time
+
+    from ..fuzzer_bridge import campaign as mod
+
+    class _Eels:
+        opcode_count_per_block: list = []
+
+        def reset_opcode_count(self) -> None:
+            pass
+
+    monkeypatch.setattr(mod, "FILL_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(mod, "_FILL", {"fork": Osaka, "eels": _Eels()})
+    monkeypatch.setattr(mod, "ExecutionSpecsTransitionTool", _Eels)
+
+    def fake_generate(fork: Any, seed: int) -> int:
+        del fork
+        return seed
+
+    monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
+
+    def fake_fill(case: Any, fork: Any, eels: Any) -> Dict[str, Any]:
+        del fork, eels
+        if case == 2:
+            _time.sleep(5)
+        return {"ok": case}
+
+    monkeypatch.setattr(mod, "fill_case", fake_fill)
+    result = mod._fill_slice(([1, 2, 3], str(tmp_path)))
+
+    assert result["timeouts"] == {2: 0.2}
+    assert result["names"] == ["seed_1", "seed_3"]
+    meta = json.loads(next(tmp_path.glob("*.meta.json")).read_text())
+    assert meta["fill_timeouts"] == {"2": 0.2}
+    assert meta["slowest_seed"] == 2

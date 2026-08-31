@@ -7,6 +7,7 @@ from ..fuzzer_bridge.corpus import minimize
 from ..fuzzer_bridge.generator import (
     DESTRUCTOR_ADDRESS,
     GENERATOR_VERSION,
+    SPILLER_ADDRESS,
     generate_fuzzer_output,
 )
 from ..fuzzer_bridge.models import FuzzerOutput
@@ -37,7 +38,12 @@ def test_generated_shape() -> None:
     contracts = [
         a
         for addr, a in out.accounts.items()
-        if a.code and addr != Address(DESTRUCTOR_ADDRESS)
+        if a.code
+        and addr
+        not in (
+            Address(DESTRUCTOR_ADDRESS),
+            Address(SPILLER_ADDRESS),
+        )
     ]
     assert len(senders) == 2
     assert len(contracts) == 2
