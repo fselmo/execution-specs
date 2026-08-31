@@ -44,12 +44,17 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 9
+GENERATOR_VERSION = 10
 
 DESTRUCTOR_ADDRESS = 0x1FFFF
 """Helper contract whose code is `ORIGIN SELFDESTRUCT`."""
 
 BLOCK_GAS_LIMIT = 30_000_000
+
+PRECOMPILE_FUNDING_RATE = 0.25
+"""Fraction of cases that seed the precompiles into the pre-state. The
+majority leave them absent, so a value-bearing call to one pays the
+account-creation charge -- the historically bug-productive path."""
 
 
 def _derive_key(rng: random.Random) -> Hash:
@@ -114,13 +119,17 @@ def generate_fuzzer_output(
         code=contract_ints,
         senders=[int.from_bytes(bytes(a), "big") for a in sender_addresses],
     )
-    # A funded precompile is an edge every client must handle; the pool's
-    # nonexistent addresses stay out of the pre-state so touching them
-    # exercises cold account creation.
-    for one_wei in pool.one_wei_accounts():
-        accounts[Address(one_wei)] = FuzzerAccountInput(
-            balance=HexNumber(1),
-        )
+    # A funded precompile is an edge every client must handle -- but an
+    # UNFUNDED one is the richer path: sending value to a precompile that
+    # does not exist yet pays the account-creation charge, and that is
+    # where clients have actually diverged. Funding them in every case
+    # silently deleted that precondition, so it is now a minority draw and
+    # most cases keep the precompiles absent from the pre-state.
+    if rng.random() < PRECOMPILE_FUNDING_RATE:
+        for one_wei in pool.one_wei_accounts():
+            accounts[Address(one_wei)] = FuzzerAccountInput(
+                balance=HexNumber(1),
+            )
     accounts[Address(DESTRUCTOR_ADDRESS)] = FuzzerAccountInput(
         balance=HexNumber(0),
         nonce=HexNumber(1),
