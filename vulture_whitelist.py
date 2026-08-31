@@ -189,6 +189,15 @@ DEPTH_BUCKETS
 KNOWN_EVENTS
 KNOWN_HALT_KINDS
 
+# packages/testing/src/execution_testing/evm_tools/t8n/evm_trace/
+# bal_witness.py - the tracer is constructed through a function-local
+# import in ExecutionSpecsTransitionTool._evaluate, and the checker is
+# called from tests_property/, which vulture does not scan
+BalWitnessTracer
+check_bal_against_witness
+bal_slots_from_model
+bracket_width
+
 # packages/testing/src/execution_testing/evm_tools/daemon.py -
 # overrides `BaseHTTPRequestHandler.log_request`
 log_request
