@@ -8,9 +8,13 @@ detect one -- not just that it computes numbers.
 
 from execution_testing.cli.fuzzer_bridge.density import (
     DENSITY_FLOORS,
+    EXPECTED_AXIS_VALUES,
+    axis_collapse_warnings,
+    axis_coverage,
     composition_density,
     density_floor_warnings,
     density_record,
+    rate_regressions,
     render_density,
 )
 from execution_testing.forks import Amsterdam
@@ -58,6 +62,46 @@ def test_floor_warnings_catch_a_collapsed_density() -> None:
             "density": collapsed,
         }
     )
+
+
+def test_every_input_axis_still_shows_both_values() -> None:
+    """
+    The categorical-collapse guard: no input dimension has quietly
+    become a constant. This is the check the v6 regression needed --
+    it trips without knowing anything about any particular bug.
+    """
+    coverage = axis_coverage(Amsterdam, range(120))
+    assert axis_collapse_warnings(coverage) == []
+    assert set(coverage) >= set(EXPECTED_AXIS_VALUES)
+
+
+def test_axis_guard_catches_a_collapsed_dimension() -> None:
+    """
+    A dimension reduced to one value is reported -- including the worst
+    case, a value that vanished entirely rather than merely thinning.
+    """
+    collapsed = {
+        "precompile_prestate": {"present": 1.0},  # v6: 'absent' vanished
+        "call_value": {"zero": 0.97, "nonzero": 0.03},
+    }
+    warnings = axis_collapse_warnings(collapsed)
+    assert any("precompile_prestate=absent 0.00%" in w for w in warnings)
+    assert any("call_value=nonzero" in w for w in warnings)
+
+
+def test_relative_regression_sees_what_an_absolute_floor_misses() -> None:
+    """
+    A rate more than halving between versions is a regression even while
+    it stays far above any absolute floor -- the v9 call-entry-oog case.
+    """
+    previous = {"call-entry-oog": 297.0, "state-gas": 400.0}
+    current = {"call-entry-oog": 133.0, "state-gas": 400.0}
+    regressions = rate_regressions(previous, current)
+    assert any("call-entry-oog" in r and "-55%" in r for r in regressions)
+    assert not any("state-gas" in r for r in regressions)
+    # A rise, or a drop inside tolerance, is not a regression.
+    assert rate_regressions({"a": 100.0}, {"a": 140.0}) == []
+    assert rate_regressions({"a": 100.0}, {"a": 70.0}) == []
 
 
 def test_density_record_is_trendable() -> None:

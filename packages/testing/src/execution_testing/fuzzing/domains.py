@@ -89,6 +89,12 @@ class WalkWeights:
     initcode_ef_prefix: float = 0.01
     stack_bomb: float = 0.005
     bad_jump: float = 0.005
+    # Share of message calls that recurse into the current contract
+    # rather than a pool address. Self-calls are the cheapest route to
+    # deep frames, so this is drawn explicitly instead of falling out of
+    # the pool's length -- where weighting code accounts up for density
+    # silently squeezed recursion down.
+    self_call: float = 0.3
 
     def __post_init__(self) -> None:
         """Reject weights outside [0, 1]."""

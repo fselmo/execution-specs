@@ -469,7 +469,11 @@ def fuzzed_bytecode(
             emitted_precompile_call = True
             continue
         if call_targets and rng.random() < walk.message_call:
-            target = rng.choice([None, *call_targets])
+            target = (
+                None
+                if rng.random() < walk.self_call
+                else rng.choice(call_targets)
+            )
             code += _message_call(
                 rng, domains, target, rng.choice(_CALL_KINDS), call_slot
             )
