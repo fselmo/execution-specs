@@ -29,9 +29,9 @@ import re
 import warnings
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Dict, List, Set, Tuple, Type
+from typing import Any, Dict, List, Optional, Set, Tuple, Type
 
-from execution_testing.forks import Fork
+from execution_testing.forks import Fork, get_forks
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +318,49 @@ def changes_of_kind(
     fork diff supplies the cases, so one test body covers every fork.
     """
     return [c for c in diff_forks(fork_a, fork_b) if c.kind == kind]
+
+
+def _non_transition_forks() -> List[Fork]:
+    return [f for f in get_forks() if not f.is_transition_fork]
+
+
+def fork_introducing_eip(eip: int) -> Optional[Fork]:
+    """
+    The fork whose mixins first include ``EIP<eip>``, or ``None``.
+
+    An EIP mixin (class named ``EIP<n>``) enters the MRO in exactly one
+    fork, so this is where its changes live.
+    """
+    tag = f"EIP{eip}"
+    for fork in _non_transition_forks():
+        if any(cls.__name__ == tag for cls in _eip_mixins(fork)):
+            return fork
+    return None
+
+
+def changes_for_eip(eip: int) -> List[Change]:
+    """
+    Every manifest change attributed to a single EIP, by number.
+
+    The manifest is fork-pair-keyed; this is the by-EIP-number view a skill
+    starts from. It walks the adjacent non-transition fork pairs and keeps
+    the changes attributed to ``EIP<eip>`` -- which, since the mixin is new
+    in one fork, all come from that one transition.
+
+    Attribution is manifest-granular, and coarse for shared methods: a
+    change to ``gas_costs``/``valid_opcodes`` is attributed to *every* EIP
+    in the fork that overrides that method, so for a fork that ships several
+    EIPs at once (e.g. Cancun) this over-returns -- the result is a superset
+    of what ``eip`` strictly owns. That is a property of the override-diff
+    detector, not this query; a consumer should treat the changes as "the
+    changed surface this EIP participated in," not "changes unique to it."
+    """
+    tag = f"EIP{eip}"
+    forks = _non_transition_forks()
+    result: List[Change] = []
+    for parent, child in zip(forks, forks[1:], strict=False):
+        result.extend(c for c in diff_forks(parent, child) if tag in c.eips)
+    return result
 
 
 def interaction_pairs(
