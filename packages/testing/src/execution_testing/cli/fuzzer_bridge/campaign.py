@@ -20,6 +20,7 @@ import signal
 import sys
 import tempfile
 import time
+import warnings
 from collections import deque
 from concurrent.futures import (
     Future,
@@ -44,8 +45,15 @@ from typing import (
 from execution_testing.client_clis.clis.execution_specs import (
     ExecutionSpecsTransitionTool,
 )
+from execution_testing.evm_tools.t8n.evm_trace.bal_witness import (
+    bracket_width,
+)
 from execution_testing.fixtures import BlockchainFixture
 from execution_testing.forks import Fork
+from execution_testing.specs.invariants import (
+    InvariantViolationWarning,
+    enable_invariant_checks,
+)
 
 from .baseline import StaleClientError
 from .converter import blockchain_test_from_fuzzer
@@ -188,6 +196,7 @@ class CampaignState:
             "all-rejected": 0,
             "fill_error": 0,
             "fill_timeout": 0,
+            "invariant_violation": 0,
         }
     )
     client_failures: Dict[str, int] = field(default_factory=dict)
@@ -299,6 +308,8 @@ def render_report(
         f"| all-rejected (no tool ran) | "
         f"{state.counts.get('all-rejected', 0)} |",
         f"| fill timeouts | {state.counts.get('fill_timeout', 0)} |",
+        f"| invariant violations | "
+        f"{state.counts.get('invariant_violation', 0)} |",
         f"| fill errors | {fill_errors} "
         f"({fill_error_rate:.1%} of {generated} candidates) |",
     ]
@@ -368,14 +379,23 @@ def render_report(
 _FILL: Dict[str, Any] = {}
 
 
-def _init_fill_worker(fork_name: str) -> None:
+def _init_fill_worker(fork_name: str, invariants: bool = False) -> None:
     """Build the per-process reference tool once."""
     _FILL["fork"] = _fork_by_name(fork_name)
     _FILL["eels"] = ExecutionSpecsTransitionTool()
+    if invariants:
+        # Checks are a process-global switch, so a worker opts in once
+        # rather than per case. The access witness is traced and must be
+        # asked for before each run, which the tool handles from here.
+        enable_invariant_checks()
+        _FILL["eels"].compute_bal_witness = True
 
 
 def fill_case(
-    case: FuzzerOutput, fork: Fork, eels: ExecutionSpecsTransitionTool
+    case: FuzzerOutput,
+    fork: Fork,
+    eels: ExecutionSpecsTransitionTool,
+    violations: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """
     Fill one case into a blockchain fixture's JSON, with its `_info`.
@@ -386,7 +406,14 @@ def fill_case(
     """
     test = blockchain_test_from_fuzzer(case, fork)
     with contextlib.redirect_stdout(io.StringIO()):
-        result = test.generate(t8n=eels, fixture_format=BlockchainFixture)
+        with warnings.catch_warnings():
+            # A violation is a counted finding here, not a warning printed
+            # into a log nobody keeps -- the failure mode that lost the
+            # per-case timings twice.
+            warnings.simplefilter("ignore", InvariantViolationWarning)
+            result = test.generate(t8n=eels, fixture_format=BlockchainFixture)
+    if violations is not None:
+        violations.extend(test.invariant_violations)
     return result.fixture.json_dict_with_info()
 
 
@@ -404,11 +431,13 @@ def _fill_seed(
         return seed, None, f"{type(exc).__name__}: {exc}"[:200]
 
 
-def _fill_pool(workers: int, fork: Fork) -> ProcessPoolExecutor:
+def _fill_pool(
+    workers: int, fork: Fork, invariants: bool = False
+) -> ProcessPoolExecutor:
     return ProcessPoolExecutor(
         max_workers=workers,
         initializer=_init_fill_worker,
-        initargs=(fork.name(),),
+        initargs=(fork.name(), invariants),
     )
 
 
@@ -520,15 +549,21 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
     fixtures: Dict[str, Dict[str, Any]] = {}
     errors: Dict[int, str] = {}
     timeouts: Dict[int, float] = {}
+    violating: Dict[int, List[str]] = {}
+    widest = 0
     case_ms: List[Tuple[int, float]] = []
     opcodes: Dict[int, int] = {}
     for seed in seeds:
         case_started = time.perf_counter()
         _FILL["eels"].reset_opcode_count()
+        seen: List[Any] = []
         try:
             with _case_deadline(FILL_TIMEOUT_SECONDS):
                 fixtures[f"seed_{seed}"] = fill_case(
-                    generate_fuzzer_output(fork, seed), fork, _FILL["eels"]
+                    generate_fuzzer_output(fork, seed),
+                    fork,
+                    _FILL["eels"],
+                    violations=seen,
                 )
         except FillTimeoutError:
             timeouts[seed] = FILL_TIMEOUT_SECONDS
@@ -540,6 +575,11 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
             errors[seed] = f"{type(exc).__name__}: {exc}"[:200]
         else:
             opcodes[seed] = _case_opcodes(_FILL["eels"])
+            if seen:
+                violating[seed] = [v.invariant for v in seen]
+            witness = getattr(_FILL["eels"], "last_bal_witness", None)
+            if witness is not None:
+                widest = max(widest, bracket_width(witness))
         case_ms.append((seed, (time.perf_counter() - case_started) * 1000))
     seconds = time.perf_counter() - started
     path = shard_path(Path(fixtures_dir), seeds)
@@ -566,6 +606,12 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
                 ),
                 "opcodes_max": max(opcodes.values(), default=0),
                 "fill_timeouts": {str(k): v for k, v in timeouts.items()},
+                # Named for the parent's `*_max` merge rule, which folds it
+                # with no rule of its own.
+                "bracket_width_max": widest,
+                "invariant_violations": {
+                    str(k): v for k, v in violating.items()
+                },
                 "rss_mb": rss_mb,
             },
             indent=1,
@@ -576,6 +622,7 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
         "names": list(fixtures),
         "errors": errors,
         "timeouts": timeouts,
+        "violations": violating,
         # The worker's own value, not the parent's: a pool worker
         # respawned mid-run imports whatever is on disk at that moment.
         "generator_version": GENERATOR_VERSION,
@@ -628,6 +675,7 @@ class CampaignOptions:
     fresh: bool = False
     baseline: bool = True
     keep_fixtures: bool = False
+    invariant_checks: bool = False
     known: Tuple[KnownSignature, ...] = ()
 
 
@@ -715,7 +763,9 @@ def run_campaign(
         write_report()
         return state
 
-    with _fill_pool(options.fill_workers, options.fork) as pool:
+    with _fill_pool(
+        options.fill_workers, options.fork, options.invariant_checks
+    ) as pool:
         in_flight = max(2 * options.fill_workers, 2)
         pending: Deque[Tuple[range, "Future[Dict[str, Any]]"]] = deque()
         submit_cursor = state.next_seed
@@ -761,6 +811,9 @@ def run_campaign(
             state.counts["fill_timeout"] = state.counts.get(
                 "fill_timeout", 0
             ) + len(slice_result.get("timeouts", {}))
+            state.counts["invariant_violation"] = state.counts.get(
+                "invariant_violation", 0
+            ) + len(slice_result.get("violations", {}))
             state.counts["fill_ms"] = state.counts.get("fill_ms", 0) + int(
                 slice_result["seconds"] * 1000
             )
