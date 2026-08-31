@@ -44,7 +44,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 10
+GENERATOR_VERSION = 11
 
 DESTRUCTOR_ADDRESS = 0x1FFFF
 """Helper contract whose code is `ORIGIN SELFDESTRUCT`."""
