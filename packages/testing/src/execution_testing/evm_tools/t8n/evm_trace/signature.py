@@ -290,6 +290,12 @@ class SignatureTracer:
             self._call_pending = False
             if name in CALL_OPS:
                 self._frames.add((_bucket(depth), "call", name))
+                # The frame this op is about to open starts with the
+                # parent's drained reservoir, which can exceed whatever a
+                # previous sibling left at that depth. Without dropping
+                # it, that entry reads as a credit and the tag fires on
+                # an ordinary second call.
+                self._reservoir_at.pop(depth + 1, None)
                 self._call_pending = True
                 if name in ("CREATE", "CREATE2"):
                     self._events.add("create")

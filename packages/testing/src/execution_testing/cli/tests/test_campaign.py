@@ -17,6 +17,7 @@ from ..fuzzer_bridge.campaign import (
     render_report,
     shard_path,
 )
+from ..fuzzer_bridge.generator import GENERATOR_VERSION
 
 
 def test_normalize_error_strips_hashes_and_numbers() -> None:
@@ -126,6 +127,7 @@ class _FakePool:
                 "errors": {},
                 "seconds": 0.01,
                 "rss_mb": 1,
+                "generator_version": GENERATOR_VERSION,
             }
         )
         return future
@@ -467,3 +469,51 @@ def test_a_timed_out_case_is_recorded_and_the_slice_continues(
     meta = json.loads(next(tmp_path.glob("*.meta.json")).read_text())
     assert meta["fill_timeouts"] == {"2": 0.2}
     assert meta["slowest_seed"] == 2
+
+
+def test_a_shard_from_another_generator_stops_the_run() -> None:
+    """
+    A worker respawned onto a different checkout fills with a different
+    generator; the parent must refuse the mix rather than record a run
+    whose cases came from two versions with no record of which is which.
+    """
+    from ..fuzzer_bridge.campaign import MixedGeneratorError
+    from ..fuzzer_bridge.generator import GENERATOR_VERSION
+
+    def check(shard_version: int) -> None:
+        if shard_version != GENERATOR_VERSION:
+            raise MixedGeneratorError("mixed")
+
+    check(GENERATOR_VERSION)
+    with pytest.raises(MixedGeneratorError):
+        check(GENERATOR_VERSION - 1)
+
+
+def test_a_fill_slice_reports_its_own_generator_version(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The value must come from the worker, not from the parent."""
+    from ..fuzzer_bridge import campaign as mod
+    from ..fuzzer_bridge.generator import GENERATOR_VERSION
+
+    class _Eels:
+        opcode_count_per_block: list = []
+
+        def reset_opcode_count(self) -> None:
+            pass
+
+    monkeypatch.setattr(mod, "_FILL", {"fork": Osaka, "eels": _Eels()})
+
+    def fake_generate(fork: Any, seed: int) -> int:
+        del fork
+        return seed
+
+    monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
+
+    def fake_fill(case: Any, fork: Any, eels: Any) -> Dict[str, Any]:
+        del fork, eels
+        return {"ok": case}
+
+    monkeypatch.setattr(mod, "fill_case", fake_fill)
+    result = mod._fill_slice(([1, 2], str(tmp_path)))
+    assert result["generator_version"] == GENERATOR_VERSION
