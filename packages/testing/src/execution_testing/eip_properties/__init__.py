@@ -13,9 +13,11 @@ from .covariant import (
 from .manifest import (
     Change,
     ChangeKind,
+    changes_for_eip,
     changes_of_kind,
     derived_checklist_sections,
     diff_forks,
+    fork_introducing_eip,
     interaction_pairs,
 )
 from .structural import HEADER_FIELD_FEATURES, built_header_at_fork
@@ -32,9 +34,11 @@ __all__ = [
     "added_precompiles",
     "adjacent_fork_pairs",
     "built_header_at_fork",
+    "changes_for_eip",
     "changes_of_kind",
     "derived_checklist_sections",
     "diff_forks",
+    "fork_introducing_eip",
     "fuzz_precompile_targets",
     "interaction_pairs",
     "manifest_cases",

@@ -107,3 +107,40 @@ def test_interaction_pairs_exclude_value_noise() -> None:
 def test_interaction_pairs_empty_for_same_fork() -> None:
     """A fork against itself has no interactions."""
     assert interaction_pairs(Amsterdam, Amsterdam) == {}
+
+
+def test_changes_for_eip_finds_the_introducing_fork_and_changes() -> None:
+    """EIP-1153 (transient storage) shipped in Cancun with TLOAD/TSTORE."""
+    from execution_testing.forks import Cancun
+
+    from ..manifest import changes_for_eip, fork_introducing_eip
+
+    assert fork_introducing_eip(1153) == Cancun
+    changes = changes_for_eip(1153)
+    assert changes
+    names = {c.name for c in changes}
+    assert "gas_costs.OPCODE_TLOAD" in names
+    assert "gas_costs.OPCODE_TSTORE" in names
+
+
+def test_changes_for_eip_attribution_is_manifest_coarse() -> None:
+    """
+    Shared-method changes are attributed to every co-shipping EIP, so the
+    result is a superset of what the EIP strictly owns -- a documented
+    property of the override-diff, pinned here so it is not mistaken for a
+    per-EIP-exact list.
+    """
+    from ..manifest import changes_for_eip
+
+    # EIP-1153 and EIP-4844 both ship in Cancun and both override gas_costs,
+    # so 4844's point-evaluation gas is attributed to 1153 as well.
+    names = {c.name for c in changes_for_eip(1153)}
+    assert "gas_costs.PRECOMPILE_POINT_EVALUATION" in names
+
+
+def test_changes_for_unknown_eip_is_empty() -> None:
+    """An EIP no fork introduces yields no changes and no fork."""
+    from ..manifest import changes_for_eip, fork_introducing_eip
+
+    assert changes_for_eip(999999) == []
+    assert fork_introducing_eip(999999) is None
