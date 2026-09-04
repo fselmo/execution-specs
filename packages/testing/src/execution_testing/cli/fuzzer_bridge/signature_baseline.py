@@ -42,19 +42,25 @@ class NoveltyTracker:
         self._frames: Set[Tuple[int, str, str]] = set()
         self._events: Set[str] = set()
         self._bigrams: Set[Tuple[str, str]] = set()
+        self._tx_types: Set[int] = set()
 
     def observe(self, signature: "Signature") -> bool:
         """Fold a signature in; return whether L0 or L1 grew (set-union)."""
-        before = len(self._frames) + len(self._events)
+        before = len(self._frames) + len(self._events) + len(self._tx_types)
         self._frames |= signature.frames
         self._events |= signature.events
+        self._tx_types |= signature.tx_types
         self._bigrams |= signature.bigrams
-        after = len(self._frames) + len(self._events)
+        after = len(self._frames) + len(self._events) + len(self._tx_types)
         return after > before
 
     def counts(self) -> Tuple[int, int, int]:
         """Return the distinct (frames, events, bigrams) totals seen."""
         return len(self._frames), len(self._events), len(self._bigrams)
+
+    def unreached_tx_types(self, fork: "Fork") -> List[int]:
+        """Transaction types the fork accepts that no case carried."""
+        return sorted(set(fork.tx_types()) - self._tx_types)
 
     def unreached_events(self) -> List[str]:
         """L1 events the run never fired -- the generator's target list."""
@@ -147,6 +153,81 @@ to still leave a workable remainder at depth 1024. A fork whose tx-gas cap
 sits below this cannot reach the call-depth limit."""
 
 
+TX_TYPE_NAMES: Dict[int, str] = {
+    0: "legacy",
+    1: "access-list",
+    2: "fee-market",
+    3: "blob",
+    4: "set-code",
+}
+
+BLIND_BUCKETS: Tuple[str, ...] = (
+    "no-tier",
+    "no-tx-type",
+    "parameter-not-varied",
+)
+"""Why a target is dark. Three different costs, three different collapse
+risks, three different guards; flattening them into one "unreachable"
+is the move that let precompile funding hide in a config line.
+
+- ``no-tier``: needs a generation tier that does not exist (block-level
+  fields such as withdrawals and requests).
+- ``no-tx-type``: needs a transaction type the generator cannot emit.
+  Derived from the fork's types minus `GENERATED_TX_TYPES`, never
+  hand-listed, so widening generation moves the entry by itself.
+- ``parameter-not-varied``: the motif exists but a parameter that
+  selects the case is held fixed.
+"""
+
+GENERATOR_BLIND_TARGETS: Dict[str, Tuple[str, str]] = {
+    "phantom-read feasibility": (
+        "no-tier",
+        "block-level generation: blocks filled to near the gas limit "
+        "carrying withdrawal or consolidation requests",
+    ),
+    "withdrawals in the BAL": (
+        "no-tier",
+        "block-level generation: withdrawals are a block field, not a "
+        "transaction",
+    ),
+    "cold SSTORE at the stipend gate": (
+        "parameter-not-varied",
+        "warm and cold are not paired explicitly at the stipend gate",
+    ),
+    "SELFDESTRUCT log suppression": (
+        "parameter-not-varied",
+        "the destructor motif does not vary beneficiary (self / other) "
+        "or balance (zero / nonzero)",
+    ),
+}
+"""Named targets the map has no cell for. A dimension with no cell is
+not rare, it is absent, and the map cannot rank what it cannot see;
+naming it here is what makes it rankable."""
+
+
+def generator_blind(fork: "Fork") -> Dict[str, List[Tuple[str, str]]]:
+    """
+    Dark targets grouped by bucket, with the reason for each.
+
+    The ``no-tx-type`` bucket is computed from the fork and the
+    generator's own declaration, so it cannot drift from what the
+    generator does.
+    """
+    from execution_testing.cli.fuzzer_bridge.generator import (
+        GENERATED_TX_TYPES,
+    )
+
+    grouped: Dict[str, List[Tuple[str, str]]] = {b: [] for b in BLIND_BUCKETS}
+    for target, (bucket, reason) in GENERATOR_BLIND_TARGETS.items():
+        grouped[bucket].append((target, reason))
+    for tx_type in sorted(set(fork.tx_types()) - GENERATED_TX_TYPES):
+        name = TX_TYPE_NAMES.get(tx_type, f"type {tx_type}")
+        grouped["no-tx-type"].append(
+            (f"tx type {tx_type} ({name})", "the generator does not emit it")
+        )
+    return grouped
+
+
 def unreachable_on_fork(
     fork: "Fork",
 ) -> Tuple[FrozenSet[str], FrozenSet[Tuple[int, str, str]]]:
@@ -195,6 +276,12 @@ def render_unreached(
         if cell not in dead_cells
     ]
     lines = [f"unreached events ({len(events)}): " + ", ".join(events)]
+    if fork is not None:
+        tx_types = tracker.unreached_tx_types(fork)
+        lines.append(
+            f"unreached tx types ({len(tx_types)}): "
+            + ", ".join(f"{t} ({TX_TYPE_NAMES.get(t, '?')})" for t in tx_types)
+        )
     lines.append(f"unreached frame cells ({len(frames)}):")
     for bucket, kind, name in frames:
         lines.append(
@@ -210,6 +297,13 @@ def render_unreached(
         lines.append(
             f"unreachable on this fork ({len(dead)}): " + "; ".join(dead)
         )
+    if fork is not None:
+        for blind_bucket, entries in generator_blind(fork).items():
+            if not entries:
+                continue
+            lines.append(f"generator-blind, {blind_bucket} ({len(entries)}):")
+            for target, reason in entries:
+                lines.append(f"  {target} -- {reason}")
     return "\n".join(lines)
 
 
