@@ -198,6 +198,16 @@ class Signature:
     """`(spilling depth, crediting depth)` pairs -- see
     `state-gas-interleave`. Carried so the reach map can tell an
     interleaving at depth 1 from one running down a chain."""
+    tx_types: FrozenSet[int] = frozenset()
+    """EIP-2718 transaction types the case carried (0 legacy, 1 access
+    list, 2 fee market, 3 blob, 4 set-code).
+
+    An *analytic* witness, not a traced one: the type is a field of the
+    input transaction, so it is folded in from the transition tool's
+    input rather than observed on the stream -- `TransactionStart`
+    carries nothing. It exists so typed transactions are a reach cell
+    at all. Before it they were not rare in the map; they were absent
+    from it, which no rate floor or gate can see."""
 
     def is_empty(self) -> bool:
         """Return whether nothing was observed."""
@@ -215,6 +225,7 @@ def merge_signatures(a: Signature, b: Signature) -> Signature:
         a.bigrams | b.bigrams,
         max(a.max_depth, b.max_depth),
         a.interleavings | b.interleavings,
+        a.tx_types | b.tx_types,
     )
 
 

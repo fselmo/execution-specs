@@ -2,6 +2,7 @@
 Ethereum Specs EVM Transition Tool Interface.
 """
 
+import dataclasses
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional
@@ -195,6 +196,14 @@ class ExecutionSpecsTransitionTool(TransitionTool):
             )
 
             new_signature = signature_tracer.signature()
+            # The type is a field of the input, not of the stream: an
+            # analytic witness folded in beside the traced layers.
+            new_signature = dataclasses.replace(
+                new_signature,
+                tx_types=frozenset(
+                    int(tx.ty) for tx in transition_tool_data.txs
+                ),
+            )
             self.last_signature = (
                 new_signature
                 if self.last_signature is None
