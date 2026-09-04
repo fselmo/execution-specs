@@ -22,12 +22,14 @@ re-baseline with an event-rate record
 the trend a human reads to catch a capability quietly becoming rare.
 """
 
+from math import ceil, log
 from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
     FrozenSet,
     List,
+    Optional,
     Set,
     Tuple,
 )
@@ -44,27 +46,29 @@ BASELINE_GENERATOR_VERSION = 14
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    0,
-    7,
-    11,
-    24,
-    65,
-    87,
-    369,
     492,
-    602,
-    1091,
+    931,
+    2776,
+    4262,
+    5246,
+    5631,
 )
-"""Greedy cover over a 1200-seed baseline: together these fire every
+"""Greedy cover over a 6000-seed baseline: together these fire every
 target below.
 
-The window has to be wider than the rarest cell needs. The
-returndata-overread motif draws at 0.005, and its deep halts are
-present in some 400-seed windows and absent from others -- seeds
-400-800 reach `OutOfBoundsRead` at depths 2 and 3, seeds 800-1200 reach
-neither. A cover taken from one 400-seed window therefore reports
-sampling noise as a regression on the next re-baseline. Re-baseline
-over at least this range."""
+Re-baseline over at least `GATE_BASELINE_SEEDS`, which is measured
+rather than chosen -- see `required_gate_seeds`. A narrower window
+reports its own sampling as a regression: at 400 seeds this map lost
+`OutOfBoundsRead` at depths 2 and 3, and seeds 400-800 reach both while
+800-1200 reach neither."""
+
+GATE_BASELINE_SEEDS = 2000
+"""Baseline window, from the rarest gated cell's measured rate.
+
+`(3, "halt", "OutOfBoundsRead")` occurs 14 times in 6000 cases, a rate
+of 0.0023, which needs 1977 seeds to clear a 1% miss probability. Recheck
+it with `required_gate_seeds` whenever a motif is added: a draw at 0.002
+needs nearly 2800, and the number moving is the signal."""
 
 GATE_EVENTS: FrozenSet[str] = frozenset(
     {
@@ -202,6 +206,63 @@ def check_reach_gate(fork: "Fork") -> List[str]:
     return missing
 
 
+GATE_MISS_PROBABILITY = 0.01
+"""How often a baseline window may miss a gated target by chance.
+
+The gate compares a fresh baseline against the recorded one, so a cell
+the window happened not to sample reads as a regression. That is not
+hypothetical: re-baselining v14 over 400 seeds reported
+`OutOfBoundsRead` lost at depths 2 and 3, and it was sampling --
+seeds 400-800 reach both, seeds 800-1200 reach neither, because the
+motif behind them draws at 0.005.
+"""
+
+
+def required_gate_seeds(
+    occurrences: Dict[Any, int],
+    sample: int,
+    miss_probability: float = GATE_MISS_PROBABILITY,
+) -> int:
+    """
+    The window width the rarest gated target needs.
+
+    Occurrences are Poisson at rate `p` per case, so a window of `n`
+    misses a target with probability `exp(-n * p)`. Solving for the
+    stated bound gives `n = ln(1 / miss) / p_min`, and the rarest
+    observed target sets `p_min`.
+
+    Derived rather than fixed for the same reason the no-tx-type bucket
+    is derived from the fork: a rare motif added later widens the window
+    by itself. A constant would leave the next one -- a draw at 0.002 is
+    2.4 expected in 1200 seeds and a 9% miss rate -- reporting its own
+    sampling as a regression, which is the failure this exists to stop.
+
+    A target observed zero times contributes no rate and is excluded: it
+    is either genuinely dark, which the gate reports, or rarer than the
+    probe can measure, which a wider probe answers.
+
+    The estimate is only as good as its probe, and a thin probe reads
+    low. Measured on 1200 seeds the rarest cell showed 1 occurrence and
+    this returned 5527; measured on 6000 the same cell showed 14, a rate
+    of 0.0023, and the requirement is 1977. Probe wide, then set the
+    window from the result.
+    """
+    seen = [count for count in occurrences.values() if count]
+    if not seen or sample <= 0:
+        return sample
+    rarest_rate = min(seen) / sample
+    return ceil(log(1 / miss_probability) / rarest_rate)
+
+
+def _rarest(occurrences: Dict[Any, int], sample: int) -> Optional[str]:
+    """The scarcest observed target and its rate, for the record."""
+    seen = {k: v for k, v in occurrences.items() if v}
+    if not seen or sample <= 0:
+        return None
+    item, count = min(seen.items(), key=lambda kv: kv[1])
+    return f"{item[0]} {item[1]} at {count}/{sample}"
+
+
 def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
     """
     Measure per-seed signatures and greedy-cover a fresh baseline.
@@ -264,10 +325,17 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
         chosen.append(best)
         uncovered -= gain
 
+    occurrences: Dict[Any, int] = {}
+    for items in per_seed.values():
+        for item in items:
+            occurrences[item] = occurrences.get(item, 0) + 1
+
     return {
         "generator_version": GENERATOR_VERSION,
         "fork": fork.name(),
         "seeds": sorted(chosen),
         "events": sorted(t[1] for t in targets if t[0] == "event"),
         "frames": sorted(t[1] for t in targets if t[0] == "frame"),
+        "required_seeds": required_gate_seeds(occurrences, len(per_seed)),
+        "rarest": _rarest(occurrences, len(per_seed)),
     }
