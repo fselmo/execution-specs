@@ -44,17 +44,27 @@ BASELINE_GENERATOR_VERSION = 14
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    80,
-    139,
-    148,
-    177,
-    229,
-    263,
-    279,
-    284,
+    0,
+    7,
+    11,
+    24,
+    65,
+    87,
+    369,
+    492,
+    602,
+    1091,
 )
-"""Greedy cover over the 400-seed baseline: together these fire every
-target below."""
+"""Greedy cover over a 1200-seed baseline: together these fire every
+target below.
+
+The window has to be wider than the rarest cell needs. The
+returndata-overread motif draws at 0.005, and its deep halts are
+present in some 400-seed windows and absent from others -- seeds
+400-800 reach `OutOfBoundsRead` at depths 2 and 3, seeds 800-1200 reach
+neither. A cover taken from one 400-seed window therefore reports
+sampling noise as a regression on the next re-baseline. Re-baseline
+over at least this range."""
 
 GATE_EVENTS: FrozenSet[str] = frozenset(
     {
