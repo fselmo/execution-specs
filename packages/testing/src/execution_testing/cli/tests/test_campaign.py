@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict
 
 import pytest
@@ -451,9 +452,9 @@ def test_a_timed_out_case_is_recorded_and_the_slice_continues(
     monkeypatch.setattr(mod, "_FILL", {"fork": Osaka, "eels": _Eels()})
     monkeypatch.setattr(mod, "ExecutionSpecsTransitionTool", _Eels)
 
-    def fake_generate(fork: Any, seed: int) -> int:
+    def fake_generate(fork: Any, seed: int) -> Any:
         del fork
-        return seed
+        return SimpleNamespace(transactions=[], _seed=seed)
 
     monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
 
@@ -461,9 +462,9 @@ def test_a_timed_out_case_is_recorded_and_the_slice_continues(
         case: Any, fork: Any, eels: Any, violations: Any = None
     ) -> Dict[str, Any]:
         del fork, eels, violations
-        if case == 2:
+        if case._seed == 2:
             _time.sleep(5)
-        return {"ok": case}
+        return {"ok": case._seed}
 
     monkeypatch.setattr(mod, "fill_case", fake_fill)
     result = mod._fill_slice(([1, 2, 3], str(tmp_path)))
@@ -508,9 +509,9 @@ def test_a_fill_slice_reports_its_own_generator_version(
 
     monkeypatch.setattr(mod, "_FILL", {"fork": Osaka, "eels": _Eels()})
 
-    def fake_generate(fork: Any, seed: int) -> int:
+    def fake_generate(fork: Any, seed: int) -> Any:
         del fork
-        return seed
+        return SimpleNamespace(transactions=[], _seed=seed)
 
     monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
 
@@ -518,7 +519,7 @@ def test_a_fill_slice_reports_its_own_generator_version(
         case: Any, fork: Any, eels: Any, violations: Any = None
     ) -> Dict[str, Any]:
         del fork, eels, violations
-        return {"ok": case}
+        return {"ok": case._seed}
 
     monkeypatch.setattr(mod, "fill_case", fake_fill)
     result = mod._fill_slice(([1, 2], str(tmp_path)))
@@ -535,8 +536,6 @@ def test_invariant_violations_are_counted_not_warned(
     timings twice: they land in a log stream nobody retains and the first
     real one is scrolled past in a 600-minute run.
     """
-    from types import SimpleNamespace
-
     from ..fuzzer_bridge import campaign as mod
 
     class _Eels:
@@ -548,17 +547,17 @@ def test_invariant_violations_are_counted_not_warned(
 
     monkeypatch.setattr(mod, "_FILL", {"fork": Osaka, "eels": _Eels()})
 
-    def fake_generate(fork: Any, seed: int) -> int:
+    def fake_generate(fork: Any, seed: int) -> Any:
         del fork
-        return seed
+        return SimpleNamespace(transactions=[], _seed=seed)
 
     def fake_fill(
         case: Any, fork: Any, eels: Any, violations: Any = None
     ) -> Dict[str, Any]:
         del fork, eels
-        if case == 2 and violations is not None:
+        if case._seed == 2 and violations is not None:
             violations.append(SimpleNamespace(invariant="bal_access_witness"))
-        return {"ok": case}
+        return {"ok": case._seed}
 
     monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
     monkeypatch.setattr(mod, "fill_case", fake_fill)
@@ -581,3 +580,52 @@ def test_the_campaign_leaves_invariant_checks_off_by_default() -> None:
     assert CampaignOptions.__dataclass_fields__[
         "invariant_checks"
     ].default is (False)
+
+
+def test_per_type_tallies_split_failures_and_refusals() -> None:
+    """
+    A client refusing a type the spec accepts is where typed-transaction
+    bugs have surfaced, and a total that mixes the types together cannot
+    show it. A case carrying several types counts under each.
+    """
+    from ..fuzzer_bridge.campaign import CampaignState, render_report
+
+    state = CampaignState(path=Path("/tmp/x.json"), next_seed=0)
+    state.by_tx_type = {
+        "0": {"cases": 40, "failed:besu": 3},
+        "4": {"cases": 12, "refused:geth": 5, "failed:erigon": 1},
+    }
+    report = render_report(
+        state, fork="Amsterdam", versions={"geth": "v1"}, elapsed_seconds=1.0
+    )
+    assert "| 0 (legacy) | 40 | besu=3 | - |" in report
+    assert "| 4 (set-code) | 12 | erigon=1 | geth=5 |" in report
+
+
+def test_case_tx_types_reads_every_type_present() -> None:
+    """Attribution is per type carried, not per transaction."""
+    from ..fuzzer_bridge.campaign import _case_tx_types
+
+    case = SimpleNamespace(
+        transactions=[
+            SimpleNamespace(
+                authorization_list=None,
+                max_fee_per_blob_gas=None,
+                max_fee_per_gas=None,
+                access_list=None,
+            ),
+            SimpleNamespace(
+                authorization_list=[object()],
+                max_fee_per_blob_gas=None,
+                max_fee_per_gas=1,
+                access_list=None,
+            ),
+            SimpleNamespace(
+                authorization_list=None,
+                max_fee_per_blob_gas=None,
+                max_fee_per_gas=1,
+                access_list=None,
+            ),
+        ]
+    )
+    assert _case_tx_types(case) == {0, 2, 4}

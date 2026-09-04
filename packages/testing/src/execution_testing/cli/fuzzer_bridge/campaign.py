@@ -39,6 +39,7 @@ from typing import (
     Mapping,
     Optional,
     Sequence,
+    Set,
     Tuple,
 )
 
@@ -201,6 +202,11 @@ class CampaignState:
     )
     client_failures: Dict[str, int] = field(default_factory=dict)
     rejections: Dict[str, int] = field(default_factory=dict)
+    by_tx_type: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    """Per transaction type: cases seen, and per-client failures and
+    refusals. A client rejecting a typed transaction the spec accepts is
+    where typed-transaction bugs have historically surfaced, and it is
+    invisible in a total that mixes the types together."""
     signatures: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     signatures_reset: bool = field(default=False, compare=False)
 
@@ -220,6 +226,7 @@ class CampaignState:
                 counts=data.get("counts", {}),
                 client_failures=data.get("client_failures", {}),
                 rejections=data.get("rejections", {}),
+                by_tx_type=data.get("by_tx_type", {}),
                 signatures=signatures,
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
@@ -238,6 +245,7 @@ class CampaignState:
                     "counts": self.counts,
                     "client_failures": self.client_failures,
                     "rejections": self.rejections,
+                    "by_tx_type": self.by_tx_type,
                     "signatures": self.signatures,
                 },
                 indent=1,
@@ -277,6 +285,20 @@ class CampaignState:
     def unique_findings(self) -> int:
         """Distinct signatures that are not configured as known."""
         return sum(1 for e in self.signatures.values() if not e.get("known"))
+
+
+TX_TYPE_LABELS: Dict[int, str] = {
+    0: "legacy",
+    1: "access-list",
+    2: "fee-market",
+    3: "blob",
+    4: "set-code",
+}
+
+
+def _per_client(tally: Dict[str, int]) -> str:
+    """Render a per-client count, or a dash when there is nothing."""
+    return ", ".join(f"{n}={c}" for n, c in sorted(tally.items()) if c) or "-"
 
 
 def render_report(
@@ -340,6 +362,35 @@ def render_report(
         f"| {state.rejections.get(name, 0)} |"
         for name in sorted(set(state.client_failures) | set(state.rejections))
     ]
+    if state.by_tx_type:
+        lines += [
+            "",
+            "## Per transaction type",
+            "",
+            "A case carrying several types counts under each. A client "
+            "refusing a type the spec accepts is a finding, not noise.",
+            "",
+            "| type | cases | failures | refusals |",
+            "| --- | --- | --- | --- |",
+        ]
+        for key in sorted(state.by_tx_type, key=int):
+            tally = state.by_tx_type[key]
+            failed = {
+                k.split(":", 1)[1]: v
+                for k, v in tally.items()
+                if k.startswith("failed:")
+            }
+            refused = {
+                k.split(":", 1)[1]: v
+                for k, v in tally.items()
+                if k.startswith("refused:")
+            }
+            name = TX_TYPE_LABELS.get(int(key), key)
+            lines.append(
+                f"| {key} ({name}) | {tally.get('cases', 0)} | "
+                f"{_per_client(failed)} | {_per_client(refused)} |"
+            )
+
     findings = sorted(
         (e for e in state.signatures.values() if not e.get("known")),
         key=lambda e: -e["count"],
@@ -514,6 +565,31 @@ def _case_deadline(seconds: float) -> Iterator[None]:
         signal.signal(signal.SIGALRM, previous)
 
 
+def _case_tx_types(case: Any) -> Set[int]:
+    """
+    The EIP-2718 types a case's transactions carry.
+
+    Read off the input rather than the trace, the same analytic witness
+    the signature uses. A case carrying several types is attributed to
+    each: the question a per-type readout answers is "does any client
+    mishandle this type", and a case containing one is evidence about
+    it whatever else it contains.
+    """
+    types = set()
+    for tx in case.transactions:
+        if tx.authorization_list:
+            types.add(4)
+        elif tx.max_fee_per_blob_gas is not None:
+            types.add(3)
+        elif tx.max_fee_per_gas is not None:
+            types.add(2)
+        elif tx.access_list:
+            types.add(1)
+        else:
+            types.add(0)
+    return types
+
+
 def _case_opcodes(eels: Any) -> int:
     """Opcodes executed by the case just filled, 0 when uncounted."""
     total = 0
@@ -550,6 +626,7 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
     errors: Dict[int, str] = {}
     timeouts: Dict[int, float] = {}
     violating: Dict[int, List[str]] = {}
+    case_types: Dict[str, List[int]] = {}
     widest = 0
     case_ms: List[Tuple[int, float]] = []
     opcodes: Dict[int, int] = {}
@@ -557,13 +634,11 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
         case_started = time.perf_counter()
         _FILL["eels"].reset_opcode_count()
         seen: List[Any] = []
+        case = generate_fuzzer_output(fork, seed)
         try:
             with _case_deadline(FILL_TIMEOUT_SECONDS):
                 fixtures[f"seed_{seed}"] = fill_case(
-                    generate_fuzzer_output(fork, seed),
-                    fork,
-                    _FILL["eels"],
-                    violations=seen,
+                    case, fork, _FILL["eels"], violations=seen
                 )
         except FillTimeoutError:
             timeouts[seed] = FILL_TIMEOUT_SECONDS
@@ -575,6 +650,7 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
             errors[seed] = f"{type(exc).__name__}: {exc}"[:200]
         else:
             opcodes[seed] = _case_opcodes(_FILL["eels"])
+            case_types[f"seed_{seed}"] = sorted(_case_tx_types(case))
             if seen:
                 violating[seed] = [v.invariant for v in seen]
             witness = getattr(_FILL["eels"], "last_bal_witness", None)
@@ -814,6 +890,9 @@ def run_campaign(
             state.counts["invariant_violation"] = state.counts.get(
                 "invariant_violation", 0
             ) + len(slice_result.get("violations", {}))
+            case_types: Dict[str, List[int]] = slice_result.get(
+                "case_types", {}
+            )
             state.counts["fill_ms"] = state.counts.get("fill_ms", 0) + int(
                 slice_result["seconds"] * 1000
             )
@@ -855,6 +934,18 @@ def run_campaign(
                         state.rejections[name] = (
                             state.rejections.get(name, 0) + 1
                         )
+                    for tx_type in case_types.get(fixture_name, []):
+                        tally = state.by_tx_type.setdefault(
+                            str(tx_type), {"cases": 0}
+                        )
+                        tally["cases"] += 1
+                        for name in rejected:
+                            key = f"refused:{name}"
+                            tally[key] = tally.get(key, 0) + 1
+                        for name, verdict in verdicts.items():
+                            if not verdict.passed:
+                                key = f"failed:{name}"
+                                tally[key] = tally.get(key, 0) + 1
                     kind = classify(verdicts)
                     state.counts[kind] = state.counts.get(kind, 0) + 1
                     for name, verdict in verdicts.items():
