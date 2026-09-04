@@ -40,18 +40,18 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 13
+BASELINE_GENERATOR_VERSION = 14
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    12,
-    96,
-    103,
-    141,
-    186,
-    192,
-    199,
-    203,
+    80,
+    139,
+    148,
+    177,
+    229,
+    263,
+    279,
+    284,
 )
 """Greedy cover over the 400-seed baseline: together these fire every
 target below."""
