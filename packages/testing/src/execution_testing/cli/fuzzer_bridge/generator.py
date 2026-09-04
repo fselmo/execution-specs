@@ -274,15 +274,23 @@ def generate_fuzzer_output(
     # Authorities send no transactions of their own: see `_authorizations`
     # for why that separation is load-bearing rather than tidiness.
     authority_addresses: List[Address] = []
+    authority_start: Dict[Address, int] = {}
     for _ in range(AUTHORITY_ACCOUNTS):
         key = _derive_key(rng)
         address = Address(EOA(key=key))
+        # Some authorities start with history. A declared nonce *below*
+        # the authority's is the only case distinguishing the spec's
+        # `!=` from a `<`, and it is unreachable on a fresh account:
+        # there is nothing below zero. Starting every authority at zero
+        # held that case to 2 occurrences in 132 authorizations.
+        start = rng.choice((0, 0, 1, 3))
         accounts[address] = FuzzerAccountInput(
             balance=HexNumber(10**20),
-            nonce=HexNumber(0),
+            nonce=HexNumber(start),
             private_key=key,
         )
         authority_addresses.append(address)
+        authority_start[address] = start
 
     # Manifest-driven: precompiles the fork introduced are up-weighted, so
     # the fuzzer aims at the changed surface (see eip_properties.targeting).
@@ -354,9 +362,7 @@ def generate_fuzzer_output(
         contract_addresses.append(address)
 
     nonces: Dict[Address, int] = dict.fromkeys(sender_addresses, 0)
-    authority_nonces: Dict[Address, int] = dict.fromkeys(
-        authority_addresses, 0
-    )
+    authority_nonces: Dict[Address, int] = dict(authority_start)
     tx_targets = pool.tx_targets()
 
     transactions: List[FuzzerTransactionInput] = []
