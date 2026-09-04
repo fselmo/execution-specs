@@ -57,9 +57,14 @@ class FuzzerAuthorizationInput(BaseModel):
     chain_id: HexNumber = Field(..., alias="chainId")
     address: Address
     nonce: HexNumber
-    v: HexNumber  # yParity
-    r: HexNumber
-    s: HexNumber
+    v: HexNumber = HexNumber(0)  # yParity
+    r: HexNumber = HexNumber(0)
+    s: HexNumber = HexNumber(0)
+    signer_key: Hash | None = Field(None, alias="signerKey")
+    """Private key of the authority. A raw fuzzer output carries `v`, `r`
+    and `s`; a generated one carries the key and is signed by the
+    framework at conversion, the way a sender is signed from its
+    account's `private_key`."""
 
 
 class FuzzerTransactionInput(BaseModel):
