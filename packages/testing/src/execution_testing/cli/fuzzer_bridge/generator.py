@@ -13,7 +13,7 @@ worth running.
 """
 
 import random
-from typing import Dict, List, Optional
+from typing import Dict, FrozenSet, List, Optional
 
 from execution_testing.base_types import (
     Address,
@@ -46,6 +46,13 @@ from .models import (
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
 GENERATOR_VERSION = 13
+
+GENERATED_TX_TYPES: FrozenSet[int] = frozenset({0})
+"""EIP-2718 transaction types this generator can emit. The reach map
+derives its `no-tx-type` bucket as the fork's types minus this set, so
+a type the generator cannot produce is reported as generator-blind with
+that reason, rather than silently absent. Widen it in the same commit
+that widens generation."""
 
 DESTRUCTOR_ADDRESS = 0x1FFFF
 """Helper contract whose code is `ORIGIN SELFDESTRUCT`."""
