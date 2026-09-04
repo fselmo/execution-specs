@@ -13,7 +13,7 @@ worth running.
 """
 
 import random
-from typing import Dict, FrozenSet, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional
 
 from execution_testing.base_types import (
     Address,
@@ -24,6 +24,7 @@ from execution_testing.base_types import (
 from execution_testing.eip_properties import fuzz_precompile_targets
 from execution_testing.forks import Fork
 from execution_testing.fuzzing import (
+    AddressPool,
     ValueDomains,
     fork_domains,
     fuzzed_bytecode,
@@ -37,6 +38,7 @@ from execution_testing.vm import Opcodes as Op
 
 from .models import (
     FuzzerAccountInput,
+    FuzzerAuthorizationInput,
     FuzzerOutput,
     FuzzerTransactionInput,
 )
@@ -45,9 +47,12 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 13
+GENERATOR_VERSION = 14
 
-GENERATED_TX_TYPES: FrozenSet[int] = frozenset({0})
+AUTHORITY_ACCOUNTS = 3
+"""Accounts that exist only to sign EIP-7702 authorizations."""
+
+GENERATED_TX_TYPES: FrozenSet[int] = frozenset({0, 2, 4})
 """EIP-2718 transaction types this generator can emit. The reach map
 derives its `no-tx-type` bucket as the fork's types minus this set, so
 a type the generator cannot produce is reported as generator-blind with
@@ -87,8 +92,6 @@ forfeits the frame's gas: together they are the precondition for the
 halt-chain settlement rule of EIP-8037.
 """
 
-BLOCK_GAS_LIMIT = 30_000_000
-
 RESERVOIR_TX_RATE = 0.35
 """Fraction of transactions drawn above the execution-gas cap, so the
 transaction carries a non-empty state gas reservoir.
@@ -126,6 +129,107 @@ def _derive_key(rng: random.Random) -> Hash:
     # secp256k1 order; any value in [1, n-1] is a valid key.
     n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
     return Hash((rng.randrange(1, n)).to_bytes(32, "big"))
+
+
+def _fee_market_fields(
+    rng: random.Random, domains: ValueDomains
+) -> Dict[str, Any]:
+    """
+    Fee-market fields bracketing the base fee.
+
+    The priority fee includes the exact max-fee boundary on purpose:
+    `max_fee < priority` is the rejection, so priority equal to max fee
+    is the last accepted value and the one a flipped comparison would
+    reject. A priority above the max fee is never drawn -- that
+    transaction is invalid and would be discarded before any comparison
+    could see it.
+    """
+    base = domains.base_fee_per_gas
+    max_fee = rng.choice((base, base + 1, 2 * base, 10 * base))
+    priority = rng.choice(tuple({0, 1, max_fee - 1, max_fee}))
+    return {
+        "max_fee_per_gas": HexNumber(max_fee),
+        "max_priority_fee_per_gas": HexNumber(priority),
+    }
+
+
+def _authorizations(
+    rng: random.Random,
+    domains: ValueDomains,
+    sender: Address,
+    senders: List[Address],
+    accounts: Dict[Address, FuzzerAccountInput],
+    nonces: Dict[Address, int],
+    pool: AddressPool,
+) -> List[FuzzerAuthorizationInput]:
+    """
+    One or two set-code authorizations, signed by a real authority.
+
+    Authorities are drawn from accounts that send no transactions, and
+    that restriction is load-bearing rather than tidiness. An applied
+    authorization increments its authority's nonce, but only if the
+    transaction carrying it succeeds -- a transaction that runs out of
+    gas rolls the increment back. The generator cannot know which
+    transactions will succeed, so any *transaction* nonce that depended
+    on an authorization having applied would be wrong exactly when
+    execution failed, and the case would not fill. Measured before this
+    restriction: 1 case in 40 died that way, with the sender rejected as
+    nonce-too-high two transactions later.
+
+    Confining authorities to non-senders makes the failure benign. The
+    worst a rolled-back increment can now cause is a later authorization
+    being skipped, which is a legitimate outcome the generator produces
+    on purpose anyway.
+
+    A share carries the wrong nonce deliberately, above *and* below the
+    authority's own: such an authorization is skipped, not rejected, so
+    the transaction still fills while the comparison is exercised in
+    both directions. Only the below case distinguishes the spec's `!=`
+    from a mutant weakening it to `<`; a too-high nonce leaves the two
+    agreeing, so a one-directional draw would leave that mutant alive
+    while looking exercised.
+
+    The delegation target is drawn from the same pool as calls, so an
+    authority delegated to a generated contract runs fuzzed code when
+    the pool later calls it; precompiles and never-existing addresses
+    are the boundaries.
+    """
+    del sender
+    out = []
+    for _ in range(rng.choice((1, 1, 2))):
+        authority = rng.choice(senders)
+        key = accounts[authority].private_key
+        assert key is not None, "every authority carries its key"
+        nonce = nonces[authority]
+        wrong = rng.random() < domains.wrong_auth_nonce_share
+        if wrong:
+            # Both directions, deliberately. The spec skips on `!=`, so a
+            # mutant weakening that to `<` is only distinguishable by a
+            # declared nonce *below* the authority's -- a too-high one
+            # alone leaves both comparisons agreeing, and the mutant
+            # would survive while looking exercised.
+            declared = (
+                nonce + 1 if (nonce == 0 or rng.random() < 0.5) else nonce - 1
+            )
+        else:
+            declared = nonce
+        out.append(
+            FuzzerAuthorizationInput(
+                chain_id=HexNumber(rng.choice((1, 1, 1, 0))),
+                address=Address(rng.choice(pool.call_targets())),
+                nonce=HexNumber(declared),
+                signer_key=key,
+            )
+        )
+        if not wrong:
+            # An applied authorization increments its authority's nonce,
+            # so every later transaction from that account moves up. Not
+            # tracking this is not a harmless omission: the next such
+            # transaction is rejected as nonce-too-low and the case never
+            # fills, which would have made set-code transactions look
+            # generated while contributing nothing.
+            nonces[authority] += 1
+    return out
 
 
 def generate_fuzzer_output(
@@ -167,11 +271,24 @@ def generate_fuzzer_output(
         )
         sender_addresses.append(address)
 
+    # Authorities send no transactions of their own: see `_authorizations`
+    # for why that separation is load-bearing rather than tidiness.
+    authority_addresses: List[Address] = []
+    for _ in range(AUTHORITY_ACCOUNTS):
+        key = _derive_key(rng)
+        address = Address(EOA(key=key))
+        accounts[address] = FuzzerAccountInput(
+            balance=HexNumber(10**20),
+            nonce=HexNumber(0),
+            private_key=key,
+        )
+        authority_addresses.append(address)
+
     # Manifest-driven: precompiles the fork introduced are up-weighted, so
     # the fuzzer aims at the changed surface (see eip_properties.targeting).
     precompiles = fuzz_precompile_targets(fork)
     if domains is None:
-        domains = fork_domains(fork, BLOCK_GAS_LIMIT)
+        domains = fork_domains(fork)
 
     # One mixed pool: contracts call every sibling (nested frames and
     # recursion arise naturally) but also senders, the precompile-range
@@ -237,15 +354,19 @@ def generate_fuzzer_output(
         contract_addresses.append(address)
 
     nonces: Dict[Address, int] = dict.fromkeys(sender_addresses, 0)
+    authority_nonces: Dict[Address, int] = dict.fromkeys(
+        authority_addresses, 0
+    )
     tx_targets = pool.tx_targets()
 
     transactions: List[FuzzerTransactionInput] = []
     # Transactions must fit the block, or the block itself is invalid.
-    gas_budget = BLOCK_GAS_LIMIT
-    tx_gas_cap = fork.transaction_gas_limit_cap() or BLOCK_GAS_LIMIT
+    gas_budget = domains.block_gas_limit
+    tx_gas_cap = fork.transaction_gas_limit_cap() or domains.block_gas_limit
     tx_gas_choices = tuple(
         tx_gas_cap // divisor for divisor in (128, 32, 8, 1)
     )
+    types, shares = zip(*domains.tx_type_shares, strict=False)
     for _ in range(num_transactions):
         sender = rng.choice(sender_addresses)
         to = Address(rng.choice(tx_targets))
@@ -262,26 +383,46 @@ def generate_fuzzer_output(
             break
         gas = rng.choice(affordable)
         gas_budget -= gas
+        tx_type = rng.choices(types, weights=shares)[0]
+        # Read before building authorizations: an authorization whose
+        # authority is this sender advances `nonces[sender]`, and the
+        # transaction's own nonce is the value from before that.
+        tx_nonce = nonces[sender]
+        fields: Dict[str, Any] = {}
+        if tx_type == 0:
+            fields["gas_price"] = HexNumber(2 * domains.base_fee_per_gas)
+        else:
+            fields.update(_fee_market_fields(rng, domains))
+        if tx_type == 4:
+            fields["authorization_list"] = _authorizations(
+                rng,
+                domains,
+                sender,
+                authority_addresses,
+                accounts,
+                authority_nonces,
+                pool,
+            )
         transactions.append(
             FuzzerTransactionInput(
                 **{"from": sender},
                 to=to,
                 gas=HexNumber(gas),
-                gas_price=HexNumber(10),
-                nonce=HexNumber(nonces[sender]),
+                nonce=HexNumber(tx_nonce),
                 value=HexNumber(rng.randrange(0, 10**16)),
                 data=Bytes(fuzzed_calldata(rng, domains=domains)),
+                **fields,
             )
         )
-        nonces[sender] += 1
+        nonces[sender] = max(nonces[sender], tx_nonce) + 1
 
     env = Environment(
         fee_recipient=Address(0xC0FFEE),
-        gas_limit=BLOCK_GAS_LIMIT,
+        gas_limit=domains.block_gas_limit,
         number=1,
         timestamp=1000,
         prev_randao=Hash(seed),
-        base_fee_per_gas=7,
+        base_fee_per_gas=domains.base_fee_per_gas,
     )
 
     return FuzzerOutput(

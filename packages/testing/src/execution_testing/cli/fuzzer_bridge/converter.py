@@ -68,6 +68,13 @@ def fuzzer_authorization_to_eest(
         EEST AuthorizationTuple for EIP-7702 transactions
 
     """
+    if fuzzer_auth.signer_key is not None:
+        return AuthorizationTuple(
+            chain_id=fuzzer_auth.chain_id,
+            address=fuzzer_auth.address,
+            nonce=fuzzer_auth.nonce,
+            signer=EOA(key=fuzzer_auth.signer_key),
+        )
     return AuthorizationTuple(
         chain_id=fuzzer_auth.chain_id,
         address=fuzzer_auth.address,

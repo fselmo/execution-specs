@@ -92,14 +92,22 @@ def test_merge_unions_transaction_types() -> None:
     assert merge_signatures(a, b).tx_types == {0, 2}
 
 
-def test_a_generated_case_reports_the_types_it_carries() -> None:
-    """The witness reflects the input: today's generator emits legacy only."""
-    eels = ExecutionSpecsTransitionTool()
-    eels.compute_signature = True
-    eels.last_signature = None
-    fill_case(generate_fuzzer_output(Amsterdam, 9001), Amsterdam, eels)
-    assert eels.last_signature is not None
-    assert eels.last_signature.tx_types == GENERATED_TX_TYPES
+def test_generated_cases_report_the_types_they_carry() -> None:
+    """
+    Every case reports a subset of what the generator declares, and the
+    declaration is reached: a declared type no case carries would make
+    the reach map's no-tx-type bucket claim coverage that is not there.
+    """
+    union: set = set()
+    for seed in range(9000, 9012):
+        eels = ExecutionSpecsTransitionTool()
+        eels.compute_signature = True
+        eels.last_signature = None
+        fill_case(generate_fuzzer_output(Amsterdam, seed), Amsterdam, eels)
+        assert eels.last_signature is not None
+        assert eels.last_signature.tx_types <= GENERATED_TX_TYPES
+        union |= eels.last_signature.tx_types
+    assert union == GENERATED_TX_TYPES
 
 
 def test_a_typed_transaction_lights_its_cell() -> None:
@@ -143,12 +151,12 @@ def test_the_no_tx_type_bucket_is_derived_not_listed(monkeypatch: Any) -> None:
 
     blind = base.generator_blind(Amsterdam)["no-tx-type"]
     assert [t for t, _ in blind] == [
-        f"tx type {t} ({base.TX_TYPE_NAMES[t]})" for t in (1, 2, 3, 4)
-    ]
-    monkeypatch.setattr(generator, "GENERATED_TX_TYPES", frozenset({0, 2, 4}))
-    widened = base.generator_blind(Amsterdam)["no-tx-type"]
-    assert [t for t, _ in widened] == [
         f"tx type {t} ({base.TX_TYPE_NAMES[t]})" for t in (1, 3)
+    ]
+    monkeypatch.setattr(generator, "GENERATED_TX_TYPES", frozenset({0}))
+    narrowed = base.generator_blind(Amsterdam)["no-tx-type"]
+    assert [t for t, _ in narrowed] == [
+        f"tx type {t} ({base.TX_TYPE_NAMES[t]})" for t in (1, 2, 3, 4)
     ]
 
 
@@ -161,3 +169,17 @@ def test_every_bucket_renders_with_its_reason() -> None:
         assert f"generator-blind, {bucket}" in text
     assert "the generator does not emit it" in text
     assert "block-level generation" in text
+
+
+def test_the_declared_types_and_the_draw_cannot_disagree() -> None:
+    """
+    `GENERATED_TX_TYPES` feeds the reach map's blind bucket and
+    `tx_type_shares` feeds the draw. If they drifted, the map would
+    report a type as blind that the generator emits, or claim one it
+    never produces.
+    """
+    from execution_testing.fuzzing.domains import fork_domains
+
+    shares = fork_domains(Amsterdam).tx_type_shares
+    assert {t for t, _ in shares} == GENERATED_TX_TYPES
+    assert abs(sum(w for _, w in shares) - 1.0) < 1e-9
