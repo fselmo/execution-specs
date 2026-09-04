@@ -143,6 +143,26 @@ class ValueDomains:
     storage_keys: Tuple[int, ...] = tuple(range(8))
     storage_values: Tuple[int, ...] = (1, 2, 3)
     reservoir_tx_gas: Tuple[int, ...] = ()
+    block_gas_limit: int = 30_000_000
+    """The block's gas limit. Fork-floored in `fork_domains` so two
+    capped transactions always fit; declared here rather than as a
+    literal in the environment so an arm can move it and the reach map
+    can see where it sits."""
+    base_fee_per_gas: int = 7
+    """The block's base fee. The fee-market draws bracket it."""
+    tx_type_shares: Tuple[Tuple[int, float], ...] = (
+        (0, 0.5),
+        (2, 0.3),
+        (4, 0.2),
+    )
+    """Transaction types the generator draws, with their share. The keys
+    are `GENERATED_TX_TYPES`; a test pins that they agree, so the reach
+    map's no-tx-type bucket and the draw cannot disagree."""
+    wrong_auth_nonce_share: float = 0.15
+    """Share of set-code authorizations carrying the wrong nonce. Such an
+    authorization is skipped, not rejected, so the transaction stays
+    fillable -- and the nonce comparison is then live in both directions
+    for a mutant that flips it."""
     walk: WalkWeights = WALK_WEIGHTS
     gas_weights: MixtureWeights = GAS_WEIGHTS
     value_weights: MixtureWeights = VALUE_WEIGHTS
@@ -277,10 +297,21 @@ def fork_domains(
             candidates = [g for g in candidates if g <= block_gas_limit]
             candidates.append(block_gas_limit)
         reservoir_tx_gas = tuple(sorted(set(candidates)))
+    # Two capped transactions must fit, or the widest legal draw is
+    # discarded by the budget on every case. Floored on the fork's own
+    # minimum so a fork that raises it cannot leave this below it.
+    minimum = fork.minimum_block_gas_limit()
+    floor = max(minimum, 2 * (cap or minimum))
+    limit = block_gas_limit if block_gas_limit is not None else floor
+    if limit < floor:
+        raise ValueError(
+            f"block gas limit {limit} is below the fork floor {floor}"
+        )
     return ValueDomains(
         call_gas_boundaries=tuple(call_gas),
         spill_gas=tuple(spill),
         reservoir_tx_gas=reservoir_tx_gas,
+        block_gas_limit=limit,
         salt_domain=tuple(range(4)),
     )
 

@@ -5,6 +5,7 @@ from execution_testing.forks import Osaka
 
 from ..fuzzer_bridge.corpus import minimize
 from ..fuzzer_bridge.generator import (
+    AUTHORITY_ACCOUNTS,
     DESTRUCTOR_ADDRESS,
     GENERATOR_VERSION,
     INTERLEAVER_ADDRESS,
@@ -35,7 +36,16 @@ def test_generated_shape() -> None:
     )
     assert out.version == "2.0"
     assert len(out.transactions) == 4
-    senders = [a for a in out.accounts.values() if a.private_key is not None]
+    # Authorities carry keys too but send nothing; the senders are the
+    # key-holders a transaction is actually from.
+    senders = [
+        a
+        for addr, a in out.accounts.items()
+        if a.private_key is not None
+        and any(tx.from_ == addr for tx in out.transactions)
+    ]
+    keyed = [a for a in out.accounts.values() if a.private_key is not None]
+    assert len(keyed) == 2 + AUTHORITY_ACCOUNTS
     contracts = [
         a
         for addr, a in out.accounts.items()
@@ -47,7 +57,7 @@ def test_generated_shape() -> None:
             Address(INTERLEAVER_ADDRESS),
         )
     ]
-    assert len(senders) == 2
+    assert len(senders) <= 2
     assert len(contracts) == 2
     # Every transaction is sent by a known sender with a private key.
     sender_addrs = {
@@ -157,9 +167,9 @@ def test_generated_cases_reach_creation_and_the_gas_cap() -> None:
 
 def test_transactions_fit_the_block_gas_limit() -> None:
     """The sum of transaction gas limits never exceeds the block's."""
-    from ..fuzzer_bridge.generator import BLOCK_GAS_LIMIT
-
     for seed in range(60):
         out = generate_fuzzer_output(Osaka, seed)
-        assert sum(int(tx.gas) for tx in out.transactions) <= BLOCK_GAS_LIMIT
+        assert sum(int(tx.gas) for tx in out.transactions) <= int(
+            out.env.gas_limit
+        )
         assert out.transactions
