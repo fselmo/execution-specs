@@ -10,6 +10,8 @@ import pytest
 from execution_testing import (
     Account,
     Alloc,
+    BalAccountExpectation,
+    BlockAccessListExpectation,
     Fork,
     Initcode,
     Op,
@@ -146,12 +148,22 @@ def test_max_initcode_size_via_create(
             storage={0: create_address if created else FACTORY_SENTINEL}
         ),
     }
+    bal = None
     if created:
         post[create_address] = Account(code=Op.STOP)
     else:
+        # The child address is never computed, so it must be missing from
+        # the block access list, and the aborted factory frame leaves no
+        # changes of its own.
         post[create_address] = Account.NONEXISTENT
+        bal = BlockAccessListExpectation(
+            account_expectations={
+                factory: BalAccountExpectation.empty(),
+                create_address: None,
+            }
+        )
 
-    state_test(pre=pre, tx=tx, post=post)
+    state_test(pre=pre, tx=tx, post=post, expected_block_access_list=bal)
 
 
 @pytest.mark.inclusion_test
