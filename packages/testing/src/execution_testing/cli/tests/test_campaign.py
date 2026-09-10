@@ -125,6 +125,15 @@ class _FakePool:
             {
                 "path": str(path),
                 "names": list(fixtures),
+                "case_types": {
+                    f"seed_{s}": [0, 4] if s % 2 else [0] for s in seeds
+                },
+                "case_events": {
+                    f"seed_{s}": ["precompile", "state-gas"]
+                    if s % 3 == 1
+                    else ["state-gas"]
+                    for s in seeds
+                },
                 "errors": {},
                 "seconds": 0.01,
                 "rss_mb": 1,
@@ -206,6 +215,77 @@ def test_campaign_records_divergences_and_resumes(
     assert (tmp_path / "out" / "report.md").is_file()
     again = _campaign(tmp_path, monkeypatch, failing, count=9, batch=3)
     assert again.next_seed == 9 and again.counts["divergence"] == 3
+
+
+def test_per_type_and_per_event_tallies_reach_the_report(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    The worker's per-case attributions must cross into the parent: the
+    first per-type readout shipped with the worker collecting the types
+    and never returning them, so every type showed zero cases.
+    """
+    failing = {"geth": lambda _s: False, "erigon": lambda s: s % 3 == 1}
+    state = _campaign(tmp_path, monkeypatch, failing, count=6, batch=3)
+    assert state.by_tx_type["0"]["cases"] == 6
+    assert state.by_tx_type["4"] == {"cases": 3, "failed:erigon": 1}
+    assert state.by_event["precompile"] == {"cases": 2, "failed:erigon": 2}
+    report = (tmp_path / "out" / "report.md").read_text()
+    assert "| 0 (legacy) | 6 | erigon=2 | - |" in report
+    assert "| precompile | 2 | erigon=2/2 (100.0% -> 0.0%) |" in report
+    assert "| state-gas | 6 | erigon=2/6 (33.3% -> 0.0%) |" in report
+    entry = next(iter(state.signatures.values()))
+    assert entry["events_necessary"] == ["precompile", "state-gas"]
+    assert "| precompile state-gas |" in report
+    mechanism = json.loads((Path(entry["bundle"]) / "events.json").read_text())
+    assert mechanism == {
+        "case": ["precompile", "state-gas"],
+        "minimized": None,
+    }
+
+
+def test_necessary_events_are_the_intersection_of_the_hits() -> None:
+    """
+    An event in every hit is necessary to the mechanism. A signature
+    whose hits share nothing but the events every case carries is the
+    two-mechanisms-in-one-error-text fold the readout has to expose.
+    """
+    state = CampaignState(path=Path("/tmp/x.json"), next_seed=0)
+    state.record_signature(
+        "besu",
+        "header mismatch",
+        seed=1,
+        bundle="b",
+        events=["call-entry-oog", "precompile", "state-gas"],
+    )
+    state.record_signature(
+        "besu",
+        "header mismatch",
+        seed=2,
+        bundle="b",
+        events=["child-revert", "precompile", "state-gas"],
+    )
+    entry = next(iter(state.signatures.values()))
+    assert entry["events_necessary"] == ["precompile", "state-gas"]
+    # An entry written before events were recorded is left as it was.
+    state.signatures[next(iter(state.signatures))].pop("events_necessary")
+    state.record_signature(
+        "besu", "header mismatch", seed=3, bundle="b", events=["precompile"]
+    )
+    assert "events_necessary" not in entry
+
+
+def test_event_contrast_reads_the_rate_without_from_the_totals() -> None:
+    """The rate without the event is the remainder, not a second tally."""
+    from ..fuzzer_bridge.campaign import _event_contrast
+
+    text = _event_contrast(
+        {"cases": 320, "failed:besu": 312, "refused:geth": 4},
+        total_cases=1000,
+        client_failures={"besu": 315},
+    )
+    assert text == "besu=312/320 (97.5% -> 0.4%)"
+    assert _event_contrast({"cases": 5}, 10, {}) == "-"
 
 
 def test_campaign_stops_on_a_stale_client(
@@ -444,6 +524,8 @@ def test_a_timed_out_case_is_recorded_and_the_slice_continues(
 
     class _Eels:
         opcode_count_per_block: list = []
+        compute_signature = False
+        last_signature = None
 
         def reset_opcode_count(self) -> None:
             pass
@@ -471,6 +553,10 @@ def test_a_timed_out_case_is_recorded_and_the_slice_continues(
 
     assert result["timeouts"] == {2: 0.2}
     assert result["names"] == ["seed_1", "seed_3"]
+    assert result["case_types"] == {"seed_1": [], "seed_3": []}
+    assert result["case_events"] == {"seed_1": [], "seed_3": []}
+    # The replacement tool is configured like the first, not bare.
+    assert mod._FILL["eels"].compute_signature is True
     meta = json.loads(next(tmp_path.glob("*.meta.json")).read_text())
     assert meta["fill_timeouts"] == {"2": 0.2}
     assert meta["slowest_seed"] == 2
