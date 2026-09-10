@@ -1,6 +1,12 @@
 """Tests for whole-file runner output parsing."""
 
+from pathlib import Path
+from typing import Any, List
+
+import pytest
+
 from ..fuzzer_bridge.runners import (
+    FixtureRunner,
     Verdict,
     parse_besu_summary,
     parse_gtest_report,
@@ -81,3 +87,52 @@ def test_gtest_failure_summary_names_the_mismatched_fields() -> None:
     summary = summarize_gtest_failure(text)
     assert summary.startswith("mismatch: state root, gas used\n")
     assert summarize_gtest_failure("plain error") == "plain error"
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "GethFixtureConsumer",
+        "ErigonFixtureConsumer",
+        "EvmOneBlockchainFixtureConsumer",
+        "BesuFixtureConsumer",
+        "NethtestFixtureConsumer",
+    ],
+)
+def test_runner_flags_precede_the_fixture_path(
+    kind: str, monkeypatch: Any, tmp_path: Path
+) -> None:
+    """
+    Every runner takes its flags before the positional file: geth's CLI
+    stops parsing flags at the first positional, and the others accept
+    either order.
+    """
+    runner = FixtureRunner(
+        "c", Path("/bin/runner"), kind, flags=("--parallelExecution", "true")
+    )
+    seen: List[List[str]] = []
+
+    def fake_run(args: Any) -> Any:
+        seen.append(list(args))
+        return type("P", (), {"stdout": "[]", "stderr": "", "returncode": 0})
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    fixture = tmp_path / "batch.json"
+    fixture.write_text("{}")
+    runner.run_file(fixture, [])
+    (args,) = seen
+    flag_at = args.index("--parallelExecution")
+    assert args[flag_at + 1] == "true"
+    assert flag_at < args.index(str(fixture))
+
+
+def test_with_flags_keeps_the_binary_and_kind() -> None:
+    """A contrast runner is the same detected tool under other flags."""
+    runner = FixtureRunner("c", Path("/bin/runner"), "GethFixtureConsumer")
+    other = runner.with_flags(["--x"])
+    assert (other.name, other.binary, other.kind) == (
+        runner.name,
+        runner.binary,
+        runner.kind,
+    )
+    assert other.flags == ("--x",) and runner.flags == ()

@@ -165,6 +165,25 @@ def classify(verdicts: Mapping[str, Verdict]) -> str:
     return "divergence"
 
 
+def contrast_mismatch(primary: Verdict, contrast: Verdict) -> Optional[str]:
+    """
+    Why one run of a client failed where its other run passed.
+
+    The primary run (the client's `runner_flags`) is the client's vote in
+    the panel; the contrast run is the same binary under
+    `contrast_flags`. When they disagree the client has diverged from
+    itself, and no spec or other client is needed to call it a finding.
+    None when they agree, or when either refused the input.
+    """
+    if is_tool_rejection(primary.error) or is_tool_rejection(contrast.error):
+        return None
+    if primary.passed == contrast.passed:
+        return None
+    if primary.passed:
+        return f"contrast run failed: {normalize_error(contrast.error)}"
+    return f"primary run failed: {normalize_error(primary.error)}"
+
+
 def signature_id(signature: Signature) -> str:
     """
     A short, stable directory name for a signature.
@@ -198,6 +217,7 @@ class CampaignState:
             "fill_error": 0,
             "fill_timeout": 0,
             "invariant_violation": 0,
+            "contrast-mismatch": 0,
         }
     )
     client_failures: Dict[str, int] = field(default_factory=dict)
@@ -213,6 +233,9 @@ class CampaignState:
     client's error text, and one error text can carry two mechanisms;
     the event whose presence moves a client's failure rate is what
     tells them apart."""
+    contrast: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    """Per client run under a second flag set: fixtures both runs judged,
+    and how many they judged differently."""
     signatures: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     signatures_reset: bool = field(default=False, compare=False)
 
@@ -234,6 +257,7 @@ class CampaignState:
                 rejections=data.get("rejections", {}),
                 by_tx_type=data.get("by_tx_type", {}),
                 by_event=data.get("by_event", {}),
+                contrast=data.get("contrast", {}),
                 signatures=signatures,
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
@@ -254,6 +278,7 @@ class CampaignState:
                     "rejections": self.rejections,
                     "by_tx_type": self.by_tx_type,
                     "by_event": self.by_event,
+                    "contrast": self.contrast,
                     "signatures": self.signatures,
                 },
                 indent=1,
@@ -383,6 +408,8 @@ def render_report(
         f"| fill timeouts | {state.counts.get('fill_timeout', 0)} |",
         f"| invariant violations | "
         f"{state.counts.get('invariant_violation', 0)} |",
+        f"| contrast mismatches (client vs itself) | "
+        f"{state.counts.get('contrast-mismatch', 0)} |",
         f"| fill errors | {fill_errors} "
         f"({fill_error_rate:.1%} of {generated} candidates) |",
     ]
@@ -413,6 +440,25 @@ def render_report(
         f"| {state.rejections.get(name, 0)} |"
         for name in sorted(set(state.client_failures) | set(state.rejections))
     ]
+    if state.contrast:
+        lines += [
+            "",
+            "## Same client, two flag sets",
+            "",
+            "The primary run is the client's vote above; the contrast run "
+            "is the same binary under `contrast_flags`. A fixture the two "
+            "judge differently is the client disagreeing with itself, a "
+            "finding that needs no other witness. Compared counts only "
+            "fixtures neither run refused.",
+            "",
+            "| client | compared | mismatches |",
+            "| --- | --- | --- |",
+        ]
+        lines += [
+            f"| {name} | {tally.get('compared', 0)} | "
+            f"{tally.get('mismatches', 0)} |"
+            for name, tally in sorted(state.contrast.items())
+        ]
     if state.by_tx_type:
         lines += [
             "",
@@ -856,6 +902,10 @@ class CampaignOptions:
     keep_fixtures: bool = False
     invariant_checks: bool = False
     known: Tuple[KnownSignature, ...] = ()
+    runner_flags: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    contrast_flags: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    """Per client, a second flag set the same binary is also run with;
+    see `contrast_mismatch`."""
 
 
 def _seed_of(fixture_name: str) -> int:
@@ -891,8 +941,15 @@ def run_campaign(
     fresh_start = sum(state.counts.values()) == 0
 
     runners = {
-        name: FixtureRunner.detect(name, path)
+        name: FixtureRunner.detect(
+            name, path, options.runner_flags.get(name, ())
+        )
         for name, path in options.clients.items()
+    }
+    contrast_runners = {
+        name: runners[name].with_flags(flags)
+        for name, flags in options.contrast_flags.items()
+        if name in runners
     }
     versions = {"eels": _eels_commit()}
     versions.update(
@@ -1015,13 +1072,21 @@ def run_campaign(
             if names:
                 batch_file = Path(slice_result["path"])
                 with ThreadPoolExecutor(
-                    max_workers=max(1, len(runners))
+                    max_workers=max(1, len(runners) + len(contrast_runners))
                 ) as tp:
                     futures = {
                         name: tp.submit(_timed_run, runner, batch_file, names)
                         for name, runner in runners.items()
                     }
+                    contrast_futures = {
+                        name: tp.submit(_timed_run, runner, batch_file, names)
+                        for name, runner in contrast_runners.items()
+                    }
                     timed = {name: f.result() for name, f in futures.items()}
+                    contrast_results = {
+                        name: f.result()[0]
+                        for name, f in contrast_futures.items()
+                    }
                 results = {
                     name: verdicts for name, (verdicts, _) in timed.items()
                 }
@@ -1056,6 +1121,57 @@ def run_campaign(
                             if not verdict.passed:
                                 key = f"failed:{name}"
                                 tally[key] = tally.get(key, 0) + 1
+                    seed = _seed_of(fixture_name)
+                    events = case_events.get(fixture_name, [])
+                    for name, other in contrast_results.items():
+                        primary = results[name][fixture_name]
+                        if is_tool_rejection(primary.error) or (
+                            is_tool_rejection(other[fixture_name].error)
+                        ):
+                            continue
+                        tally = state.contrast.setdefault(
+                            name, {"compared": 0, "mismatches": 0}
+                        )
+                        tally["compared"] += 1
+                        reason = contrast_mismatch(
+                            primary, other[fixture_name]
+                        )
+                        if reason is None:
+                            continue
+                        tally["mismatches"] += 1
+                        state.counts["contrast-mismatch"] = (
+                            state.counts.get("contrast-mismatch", 0) + 1
+                        )
+                        signature = (f"{name}:contrast", reason)
+                        known = is_known(signature, options.known)
+                        bundle = corpus_dir / signature_id(signature)
+                        new = state.record_signature(
+                            signature[0],
+                            reason,
+                            seed=seed,
+                            bundle=None if known else str(bundle),
+                            known=known,
+                            events=events,
+                        )
+                        if new and not known:
+                            keep_file = True
+                            if shard_fixtures is None:
+                                shard_fixtures = json.loads(
+                                    batch_file.read_text()
+                                )
+                            _write_bundle(
+                                bundle,
+                                options,
+                                fixture_name,
+                                shard_fixtures[fixture_name],
+                                {
+                                    name: primary,
+                                    f"{name} (contrast)": other[fixture_name],
+                                },
+                                runners,
+                                focus_client=None,
+                                events=events,
+                            )
                     kind = classify(verdicts)
                     state.counts[kind] = state.counts.get(kind, 0) + 1
                     for name, verdict in verdicts.items():
@@ -1066,8 +1182,6 @@ def run_campaign(
                             batch_failures[name] += 1
                     if kind != "divergence":
                         continue
-                    seed = _seed_of(fixture_name)
-                    events = case_events.get(fixture_name, [])
                     for signature in per_client_signatures(verdicts):
                         known = is_known(signature, options.known)
                         bundle = corpus_dir / signature_id(signature)
@@ -1154,7 +1268,7 @@ def _write_bundle(
     verdicts: Mapping[str, Verdict],
     runners: Mapping[str, FixtureRunner],
     *,
-    focus_client: str,
+    focus_client: Optional[str],
     events: Sequence[str] = (),
 ) -> None:
     """
@@ -1163,6 +1277,9 @@ def _write_bundle(
     ``events.json`` holds the case's execution events and, after
     minimization, the minimized case's: the events that survive
     minimization are the mechanism, with the incidental ones gone.
+    Minimization needs a ``focus_client`` whose failure is the predicate;
+    a contrast mismatch has none (its predicate is two runs disagreeing,
+    which the corpus predicate does not express yet) and is saved as is.
     """
     bundle.mkdir(parents=True, exist_ok=True)
     seed = _seed_of(fixture_name)
@@ -1182,7 +1299,7 @@ def _write_bundle(
             indent=1,
         )
     )
-    if not options.minimize:
+    if not options.minimize or focus_client is None:
         return
     eels = ExecutionSpecsTransitionTool()
 

@@ -19,6 +19,8 @@ clients:
       ref: master
       command: "echo build > {out}"
       binary: nethtest
+    runner_flags: [--parallelExecution, "true"]
+    contrast_flags: [--parallelExecution, "false"]
 campaigns:
   amsterdam:
     fork: Amsterdam
@@ -38,6 +40,11 @@ def test_loads_clients_and_campaigns(tmp_path: Path) -> None:
     build = cfg.client("nethermind").build
     assert build is not None
     assert build.binary == "nethtest"
+    nethermind = cfg.client("nethermind")
+    assert nethermind.runner_flags == ["--parallelExecution", "true"]
+    assert nethermind.contrast_flags == ["--parallelExecution", "false"]
+    assert cfg.client("geth").runner_flags == []
+    assert cfg.client("geth").contrast_flags is None
     campaign = cfg.campaigns["amsterdam"]
     assert campaign.fork == "Amsterdam"
     assert campaign.count == 50

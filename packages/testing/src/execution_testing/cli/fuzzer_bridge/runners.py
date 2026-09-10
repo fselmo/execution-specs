@@ -14,9 +14,9 @@ import json
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, Iterable, Sequence
+from typing import Any, Dict, Iterable, Sequence, Tuple
 
 from execution_testing.client_clis import FixtureConsumerTool
 
@@ -110,14 +110,26 @@ class FixtureRunner:
     name: str
     binary: Path
     kind: str
+    flags: Tuple[str, ...] = ()
     timeout: float = 1800.0
     _last_error: str = ""
 
     @classmethod
-    def detect(cls, name: str, binary: Path) -> "FixtureRunner":
+    def detect(
+        cls, name: str, binary: Path, flags: Sequence[str] = ()
+    ) -> "FixtureRunner":
         """Identify the runner behind ``binary`` via EEST detection."""
         consumer = FixtureConsumerTool.from_binary_path(binary_path=binary)
-        return cls(name=name, binary=binary, kind=type(consumer).__name__)
+        return cls(
+            name=name,
+            binary=binary,
+            kind=type(consumer).__name__,
+            flags=tuple(flags),
+        )
+
+    def with_flags(self, flags: Sequence[str]) -> "FixtureRunner":
+        """The same binary driven with a different flag set."""
+        return replace(self, flags=tuple(flags), _last_error="")
 
     def version(self) -> str:
         """The runner's `--version` line."""
@@ -170,7 +182,7 @@ class FixtureRunner:
         args = ["blocktest"]
         if self.kind == "ErigonFixtureConsumer":
             args.append("--jsonout")
-        proc = self._run([*args, str(path)])
+        proc = self._run([*args, *self.flags, str(path)])
         verdicts = parse_json_array(proc.stdout)
         if not verdicts and proc.returncode != 0:
             return self._all_failed(
@@ -180,7 +192,9 @@ class FixtureRunner:
 
     def _run_gtest(self, path: Path) -> Dict[str, Verdict]:
         with tempfile.NamedTemporaryFile(suffix=".json") as report:
-            proc = self._run([f"--gtest_output=json:{report.name}", str(path)])
+            proc = self._run(
+                [f"--gtest_output=json:{report.name}", *self.flags, str(path)]
+            )
             try:
                 data = json.loads(Path(report.name).read_text() or "{}")
             except json.JSONDecodeError:
@@ -193,7 +207,7 @@ class FixtureRunner:
         return verdicts
 
     def _run_besu(self, path: Path) -> Dict[str, Verdict]:
-        proc = self._run(["block-test", str(path)])
+        proc = self._run(["block-test", *self.flags, str(path)])
         verdicts = parse_besu_summary(proc.stdout)
         if not verdicts and proc.returncode != 0:
             return self._all_failed(
@@ -202,7 +216,7 @@ class FixtureRunner:
         return verdicts
 
     def _run_nethermind(self, path: Path) -> Dict[str, Verdict]:
-        proc = self._run(["--blockTest", "--input", str(path)])
+        proc = self._run(["--blockTest", *self.flags, "--input", str(path)])
         parsed = parse_json_array(proc.stdout)
         verdicts = {strip_nethermind_suffix(n): v for n, v in parsed.items()}
         if not verdicts and proc.returncode != 0:
