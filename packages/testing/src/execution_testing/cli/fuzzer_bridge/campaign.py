@@ -207,6 +207,12 @@ class CampaignState:
     refusals. A client rejecting a typed transaction the spec accepts is
     where typed-transaction bugs have historically surfaced, and it is
     invisible in a total that mixes the types together."""
+    by_event: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    """Per execution event (the signature's L1 layer): cases carrying it,
+    and per-client failures and refusals. A signature keys on the
+    client's error text, and one error text can carry two mechanisms;
+    the event whose presence moves a client's failure rate is what
+    tells them apart."""
     signatures: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     signatures_reset: bool = field(default=False, compare=False)
 
@@ -227,6 +233,7 @@ class CampaignState:
                 client_failures=data.get("client_failures", {}),
                 rejections=data.get("rejections", {}),
                 by_tx_type=data.get("by_tx_type", {}),
+                by_event=data.get("by_event", {}),
                 signatures=signatures,
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
@@ -246,6 +253,7 @@ class CampaignState:
                     "client_failures": self.client_failures,
                     "rejections": self.rejections,
                     "by_tx_type": self.by_tx_type,
+                    "by_event": self.by_event,
                     "signatures": self.signatures,
                 },
                 indent=1,
@@ -261,8 +269,16 @@ class CampaignState:
         seed: int,
         bundle: Optional[str],
         known: bool = False,
+        events: Sequence[str] = (),
     ) -> bool:
-        """Count a per-client signature; return True when it is new."""
+        """
+        Count a per-client signature; return True when it is new.
+
+        ``events`` are the hit's execution events. The entry keeps their
+        intersection over every hit: an event in every hit is necessary
+        to the mechanism, and a signature whose intersection holds none
+        of the rarer events is suspected of folding two mechanisms.
+        """
         key = signature_id((client, reason))
         entry = self.signatures.get(key)
         if entry is None:
@@ -274,12 +290,17 @@ class CampaignState:
                 "seeds": [seed],
                 "bundle": bundle,
                 "known": known,
+                "events_necessary": sorted(events),
             }
             return True
         entry["count"] += 1
         seeds = entry.setdefault("seeds", [entry["first_seed"]])
         if len(seeds) < SEED_SAMPLE_CAP:
             seeds.append(seed)
+        if "events_necessary" in entry:
+            entry["events_necessary"] = sorted(
+                set(entry["events_necessary"]) & set(events)
+            )
         return False
 
     def unique_findings(self) -> int:
@@ -299,6 +320,36 @@ TX_TYPE_LABELS: Dict[int, str] = {
 def _per_client(tally: Dict[str, int]) -> str:
     """Render a per-client count, or a dash when there is nothing."""
     return ", ".join(f"{n}={c}" for n, c in sorted(tally.items()) if c) or "-"
+
+
+def _event_contrast(
+    tally: Mapping[str, int],
+    total_cases: int,
+    client_failures: Mapping[str, int],
+) -> str:
+    """
+    Per client, the failure rate with the event against the rate without.
+
+    ``besu=312/320 (97.5% -> 0.4%)`` reads: of the 320 cases carrying the
+    event besu failed 312, and it failed 0.4% of the cases without it.
+    """
+    with_cases = tally.get("cases", 0)
+    without_cases = total_cases - with_cases
+    parts = []
+    for key, failed_with in sorted(tally.items()):
+        if not key.startswith("failed:") or not failed_with:
+            continue
+        client = key.split(":", 1)[1]
+        failed_without = client_failures.get(client, 0) - failed_with
+        rate_with = failed_with / with_cases if with_cases else 0.0
+        rate_without = (
+            failed_without / without_cases if without_cases > 0 else 0.0
+        )
+        parts.append(
+            f"{client}={failed_with}/{with_cases} "
+            f"({rate_with:.1%} -> {rate_without:.1%})"
+        )
+    return ", ".join(parts) or "-"
 
 
 def render_report(
@@ -391,6 +442,26 @@ def render_report(
                 f"{_per_client(failed)} | {_per_client(refused)} |"
             )
 
+    if state.by_event:
+        lines += [
+            "",
+            "## Per execution event",
+            "",
+            "Failure rate among cases carrying the event, against the rate "
+            "among cases without it. A client whose rate moves with an "
+            "event fails through that event; two events that move it "
+            "independently are two mechanisms, whatever the error text "
+            "says.",
+            "",
+            "| event | cases | failed: with -> without |",
+            "| --- | --- | --- |",
+        ]
+        for event, tally in sorted(state.by_event.items()):
+            lines.append(
+                f"| {event} | {tally.get('cases', 0)} | "
+                f"{_event_contrast(tally, cases, state.client_failures)} |"
+            )
+
     findings = sorted(
         (e for e in state.signatures.values() if not e.get("known")),
         key=lambda e: -e["count"],
@@ -399,13 +470,19 @@ def render_report(
         "",
         "## Unique signatures",
         "",
-        "| client | count | first seed | reason | bundle |",
-        "| --- | --- | --- | --- | --- |",
+        "The necessary events are those present in every hit; a row "
+        "whose necessary events are only the ones nearly every case "
+        "carries is suspected of folding more than one mechanism.",
+        "",
+        "| client | count | first seed | reason | necessary events | bundle |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for entry in findings:
+        necessary = entry.get("events_necessary")
         lines.append(
             f"| {entry['client']} | {entry['count']} | "
             f"{entry['first_seed']} | {entry['reason']} | "
+            f"{' '.join(necessary) if necessary else '-'} | "
             f"{entry.get('bundle') or '-'} |"
         )
     known = sorted(
@@ -433,13 +510,28 @@ _FILL: Dict[str, Any] = {}
 def _init_fill_worker(fork_name: str, invariants: bool = False) -> None:
     """Build the per-process reference tool once."""
     _FILL["fork"] = _fork_by_name(fork_name)
-    _FILL["eels"] = ExecutionSpecsTransitionTool()
+    _FILL["invariants"] = invariants
+    _FILL["eels"] = _reference_tool()
     if invariants:
         # Checks are a process-global switch, so a worker opts in once
-        # rather than per case. The access witness is traced and must be
-        # asked for before each run, which the tool handles from here.
+        # rather than per case.
         enable_invariant_checks()
-        _FILL["eels"].compute_bal_witness = True
+
+
+def _reference_tool() -> ExecutionSpecsTransitionTool:
+    """
+    A reference tool configured the way this worker's campaign needs.
+
+    Every case is traced for its execution signature: the events are
+    what lets one error text be read as two mechanisms, and they cost
+    about a quarter of a fill (70 -> 86 ms/case measured on 600 seeds).
+    The access witness is asked for only under invariant checks.
+    """
+    eels = ExecutionSpecsTransitionTool()
+    eels.compute_signature = True
+    if _FILL.get("invariants"):
+        eels.compute_bal_witness = True
+    return eels
 
 
 def fill_case(
@@ -590,6 +682,12 @@ def _case_tx_types(case: Any) -> Set[int]:
     return types
 
 
+def _case_events(eels: Any) -> List[str]:
+    """Execution events of the case just filled, empty when untraced."""
+    signature = getattr(eels, "last_signature", None)
+    return sorted(signature.events) if signature is not None else []
+
+
 def _case_opcodes(eels: Any) -> int:
     """Opcodes executed by the case just filled, 0 when uncounted."""
     total = 0
@@ -627,12 +725,14 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
     timeouts: Dict[int, float] = {}
     violating: Dict[int, List[str]] = {}
     case_types: Dict[str, List[int]] = {}
+    case_events: Dict[str, List[str]] = {}
     widest = 0
     case_ms: List[Tuple[int, float]] = []
     opcodes: Dict[int, int] = {}
     for seed in seeds:
         case_started = time.perf_counter()
         _FILL["eels"].reset_opcode_count()
+        _FILL["eels"].last_signature = None
         seen: List[Any] = []
         case = generate_fuzzer_output(fork, seed)
         try:
@@ -645,12 +745,13 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
             # The interrupted fill may have left the tool mid-transition,
             # so the worker takes a fresh one rather than carrying that
             # into the next case.
-            _FILL["eels"] = ExecutionSpecsTransitionTool()
+            _FILL["eels"] = _reference_tool()
         except Exception as exc:  # noqa: BLE001 - a fill failure is data
             errors[seed] = f"{type(exc).__name__}: {exc}"[:200]
         else:
             opcodes[seed] = _case_opcodes(_FILL["eels"])
             case_types[f"seed_{seed}"] = sorted(_case_tx_types(case))
+            case_events[f"seed_{seed}"] = _case_events(_FILL["eels"])
             if seen:
                 violating[seed] = [v.invariant for v in seen]
             witness = getattr(_FILL["eels"], "last_bal_witness", None)
@@ -696,6 +797,8 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
     return {
         "path": str(path) if fixtures else None,
         "names": list(fixtures),
+        "case_types": case_types,
+        "case_events": case_events,
         "errors": errors,
         "timeouts": timeouts,
         "violations": violating,
@@ -893,6 +996,9 @@ def run_campaign(
             case_types: Dict[str, List[int]] = slice_result.get(
                 "case_types", {}
             )
+            case_events: Dict[str, List[str]] = slice_result.get(
+                "case_events", {}
+            )
             state.counts["fill_ms"] = state.counts.get("fill_ms", 0) + int(
                 slice_result["seconds"] * 1000
             )
@@ -934,10 +1040,14 @@ def run_campaign(
                         state.rejections[name] = (
                             state.rejections.get(name, 0) + 1
                         )
-                    for tx_type in case_types.get(fixture_name, []):
-                        tally = state.by_tx_type.setdefault(
-                            str(tx_type), {"cases": 0}
-                        )
+                    tallies = [
+                        state.by_tx_type.setdefault(str(t), {"cases": 0})
+                        for t in case_types.get(fixture_name, [])
+                    ] + [
+                        state.by_event.setdefault(e, {"cases": 0})
+                        for e in case_events.get(fixture_name, [])
+                    ]
+                    for tally in tallies:
                         tally["cases"] += 1
                         for name in rejected:
                             key = f"refused:{name}"
@@ -957,6 +1067,7 @@ def run_campaign(
                     if kind != "divergence":
                         continue
                     seed = _seed_of(fixture_name)
+                    events = case_events.get(fixture_name, [])
                     for signature in per_client_signatures(verdicts):
                         known = is_known(signature, options.known)
                         bundle = corpus_dir / signature_id(signature)
@@ -967,6 +1078,7 @@ def run_campaign(
                             seed=seed,
                             bundle=None if known else str(bundle),
                             known=known,
+                            events=events,
                         )
                         if new and not known:
                             keep_file = True
@@ -982,6 +1094,7 @@ def run_campaign(
                                 verdicts,
                                 runners,
                                 focus_client=client,
+                                events=events,
                             )
 
                 if fresh_start and fill_batches == 0 and options.baseline:
@@ -1042,12 +1155,21 @@ def _write_bundle(
     runners: Mapping[str, FixtureRunner],
     *,
     focus_client: str,
+    events: Sequence[str] = (),
 ) -> None:
-    """Save what a reviewer needs to reproduce a new signature."""
+    """
+    Save what a reviewer needs to reproduce a new signature.
+
+    ``events.json`` holds the case's execution events and, after
+    minimization, the minimized case's: the events that survive
+    minimization are the mechanism, with the incidental ones gone.
+    """
     bundle.mkdir(parents=True, exist_ok=True)
     seed = _seed_of(fixture_name)
     case = generate_fuzzer_output(options.fork, seed)
     save_case(case, bundle / "case.json")
+    mechanism: Dict[str, Any] = {"case": list(events), "minimized": None}
+    (bundle / "events.json").write_text(json.dumps(mechanism, indent=1))
     (bundle / "fixture.json").write_text(
         json.dumps({fixture_name: fixture}, indent=1)
     )
@@ -1080,3 +1202,8 @@ def _write_bundle(
 
     minimized = minimize(case, still_fails)
     save_case(minimized, bundle / "minimized.json")
+    eels.compute_signature = True
+    eels.last_signature = None
+    fill_case(minimized, options.fork, eels)
+    mechanism["minimized"] = _case_events(eels)
+    (bundle / "events.json").write_text(json.dumps(mechanism, indent=1))
