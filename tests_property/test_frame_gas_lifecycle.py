@@ -47,16 +47,24 @@ Normative grounding, quoted:
     > call frame (e.g., due to insufficient balance or due to the stack
     > depth) ... the charged state-gas is refilled in LIFO order.
 
-Spec ambiguity (recorded, tested at docstring tier only): EIP-8037's
-Specification never states how much of the `state_gas_reservoir` a
-child frame receives. Only the rationale ("up to 63/64 of the parent's
-*regular* gas is forwarded") and the security section ("all user
-operations in a bundle share the transaction's reservoir") imply a
-transaction-shared reservoir with no 63/64 withholding, and the
-success rule quoted above returns `gas_left` and the spill but never
-mentions the reservoir. The claim "A child frame receives the parent's
-entire reservoir; there is no all-but-one-64th rule for state gas" is
-EELS's `drain_state_gas_reservoir` docstring, not EIP prose.
+Spec ambiguity (recorded 2026-08, resolved by ethereum/EIPs#12265 on
+2026-09-04): EIP-8037's Specification once never stated how much of
+the `state_gas_reservoir` a child frame receives; only the rationale
+and the security section implied a transaction-shared reservoir with
+no 63/64 withholding, and the claim "A child frame receives the
+parent's entire reservoir; there is no all-but-one-64th rule for
+state gas" was EELS's `drain_state_gas_reservoir` docstring. The EIP
+now says it in the Specification, and adds the merge-time repayment:
+
+    EIP-8037: > `state_gas_reservoir` is passed to a child frame in
+    > full: the 63/64 rule applies to `gas_left` only. The parent
+    > keeps none of it while the child runs. On the child's exit it
+    > becomes the parent's again.
+
+    EIP-8037: > Then, with the child's `state_gas_reservoir` merged
+    > in, the frame returns state-gas to `gas_left`, up to the amount
+    > it has outstanding: d = min(state_gas_reservoir,
+    > state_gas_from_gas_left)
 
 Sequences follow the real caller contracts
 (`vm/instructions/system.py`, `vm/interpreter.py`,
@@ -296,14 +304,13 @@ def test_drain_grants_the_entire_reservoir_and_empties_the_parent(
     and touches nothing else (in particular not `gas_left` and not
     the baseline).
 
-    Grounding (EELS docstring, self-descriptive): "A child frame
-    receives the parent's entire reservoir; there is no
-    all-but-one-64th rule for state gas." EIP-8037's Specification
-    does not determine this; only its rationale ("up to 63/64 of the
-    parent's *regular* gas is forwarded") and security section
-    ("share the transaction's reservoir") point the same way -- see
-    the module docstring's spec-ambiguity record. This property pins
-    EELS's choice. Shape: invariant/conservation. Circularity: none;
+    Grounding (EIP-8037, normative since ethereum/EIPs#12265):
+    "`state_gas_reservoir` is passed to a child frame in full: the
+    63/64 rule applies to `gas_left` only. The parent keeps none of it
+    while the child runs." Before that PR this was only EELS's
+    `drain_state_gas_reservoir` docstring -- see the module
+    docstring's spec-ambiguity record. Shape: invariant/conservation.
+    Circularity: none;
     asserts a whole-pool transfer and the absence of any 63/64
     arithmetic on the state dimension.
     """
@@ -652,13 +659,19 @@ def test_child_round_trips_conserve_both_gas_dimensions(
     `net_state` the ledgered regular / net state consumption and
     `spill_out` the child's outstanding spill:
 
-    - success: parent regular == before - paid + grant - c_reg -
-      spill_out; parent reservoir == before - net_state + spill_out;
-      parent spill grows by spill_out; the refund counter merges.
-      (EIP-8037, normative: "its remaining `gas_left` is returned to
-      the parent and its `state_gas_from_gas_left` is added to the
-      parent's"; the reservoir clause is EELS's transaction-shared-
-      reservoir choice, docstring tier -- see the ambiguity record.)
+    - success: the pools merge -- parent regular == before - paid +
+      grant - c_reg - spill_out, parent reservoir == before - net_state
+      + spill_out, parent spill grows by spill_out -- and then the
+      reservoir repays the outstanding spill into regular gas, capped at
+      the spill; the refund counter merges. (EIP-8037, normative: "its
+      remaining `gas_left` is returned to the parent and its
+      `state_gas_from_gas_left` is added to the parent's ... Then, with
+      the child's `state_gas_reservoir` merged in, the frame returns
+      state-gas to `gas_left`, up to the amount it has outstanding:
+      d = min(state_gas_reservoir, state_gas_from_gas_left)"; and "On
+      the child's exit it becomes the parent's again" for the reservoir,
+      both since ethereum/EIPs#12265 -- the reservoir clause was an
+      EELS choice at docstring tier before that.)
     - revert: only the child's regular charges are lost; every state
       charge refills and the full reservoir returns. (EIP-8037,
       normative: "The child's resulting `gas_left` (including the
@@ -720,9 +733,23 @@ def test_child_round_trips_conserve_both_gas_dimensions(
         vm.incorporate_child(parent, child)
 
         if outcome == "success":
-            assert int(meter.gas_left) == pg - paid + grant - c_reg - spill_out
-            assert int(meter.state_gas_left) == pr - net_state + spill_out
-            assert int(meter.state_gas_spilled) == ps + spill_out
+            # The merge first pools the child's spill and reservoir with
+            # the parent's, then the reservoir repays the outstanding
+            # spill, capped at the spill; the claim and the credit cannot
+            # both survive the repayment.
+            reservoir_pooled = pr - net_state + spill_out
+            spill_pooled = ps + spill_out
+            repaid = min(reservoir_pooled, spill_pooled)
+            assert (
+                int(meter.gas_left)
+                == pg - paid + grant - c_reg - spill_out + repaid
+            )
+            assert int(meter.state_gas_left) == reservoir_pooled - repaid
+            assert int(meter.state_gas_spilled) == spill_pooled - repaid
+            assert (
+                int(meter.state_gas_left) == 0
+                or int(meter.state_gas_spilled) == 0
+            )
             assert int(meter.refund_counter) == pref + counter
         elif outcome == "revert":
             assert int(meter.gas_left) == pg - paid + grant - c_reg
