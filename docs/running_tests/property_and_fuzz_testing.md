@@ -298,6 +298,28 @@ tmux new -s fuzz
 uv run fuzz campaign devnet --hours 8 --fill-workers 24
 ```
 
+A client entry can carry `runner_flags`, passed to its fixture runner on
+every run, and `contrast_flags`, a second flag set the same binary is also
+run with on every shard. The primary run is the client's vote in the panel;
+a fixture the two runs judge differently is a `contrast-mismatch` — the
+client disagreeing with itself, a finding that needs neither the spec nor
+another client. The lane this exists for is a client's BAL parallel
+execution against its own sequential path:
+
+```yaml
+clients:
+  - name: nethermind
+    build: {recipe: nethermind, ref: glamsterdam-devnet-8}
+    runner_flags: [--parallelExecution, "true"]     # the vote: the node's default path
+    contrast_flags: [--parallelExecution, "false"]  # the witness: the same client, serial
+```
+
+The report counts mismatches per client and records each distinct one as a
+signature under `<client>:contrast`, bundled like any divergence but not
+minimized (its predicate is two runs disagreeing, which the corpus
+predicate does not express yet). Doubling a client's runner load is the
+cost; runners are cheap next to the fill.
+
 Each batch produces one verdict per client per fixture:
 
 - every client passes — *agreed*;

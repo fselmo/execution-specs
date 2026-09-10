@@ -99,6 +99,14 @@ class ClientConfig(BaseModel):
     name: str
     path: Optional[Path] = None
     build: Optional[BuildSource] = None
+    runner_flags: List[str] = Field(default_factory=list)
+    """Extra arguments for the client's fixture runner on every run."""
+    contrast_flags: Optional[List[str]] = None
+    """A second flag set for the same binary. A campaign runs each shard
+    under both; a fixture the two runs judge differently is a
+    `contrast-mismatch`, the client disagreeing with itself, which needs
+    no other witness. Today's use is nethermind's BAL parallel execution
+    against its sequential path (`--parallelExecution true` / `false`)."""
 
     @model_validator(mode="after")
     def _one_source(self) -> "ClientConfig":

@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import pytest
 
@@ -144,11 +144,21 @@ class _FakePool:
 
 
 class _FakeRunner:
-    """Scripted runner: `failing` decides which seeds this client rejects."""
+    """
+    Scripted runner: `failing` decides which seeds this client rejects;
+    `contrast` does the same for the run under `contrast_flags`.
+    """
 
-    def __init__(self, name: str, failing: Any) -> None:
+    def __init__(
+        self, name: str, failing: Any, contrast: Any = None, flags: Any = ()
+    ) -> None:
         self.name = name
         self.failing = failing
+        self.contrast = contrast
+        self.flags = tuple(flags)
+
+    def with_flags(self, flags: Any) -> "_FakeRunner":
+        return _FakeRunner(self.name, self.contrast, None, flags)
 
     def version(self) -> str:
         return f"{self.name} version 1"
@@ -171,18 +181,24 @@ def _campaign(
     monkeypatch: Any,
     failing: Dict[str, Any],
     echo: Any = None,
+    contrast: Optional[Dict[str, Any]] = None,
     **kw: Any,
 ) -> Any:
     from ..fuzzer_bridge import campaign as campaign_module
     from ..fuzzer_bridge.campaign import CampaignOptions, run_campaign
 
+    contrast = contrast or {}
     monkeypatch.setattr(
         campaign_module.FixtureRunner,
         "detect",
         classmethod(
-            lambda _cls, name, _binary: _FakeRunner(name, failing[name])
+            lambda _cls, name, _binary, flags=(): _FakeRunner(
+                name, failing[name], contrast.get(name), flags
+            )
         ),
     )
+    if contrast:
+        kw["contrast_flags"] = {n: ["--contrast"] for n in contrast}
     monkeypatch.setattr(campaign_module, "_eels_commit", lambda: "abc123")
     monkeypatch.setattr(
         campaign_module,
@@ -286,6 +302,65 @@ def test_event_contrast_reads_the_rate_without_from_the_totals() -> None:
     )
     assert text == "besu=312/320 (97.5% -> 0.4%)"
     assert _event_contrast({"cases": 5}, 10, {}) == "-"
+
+
+def test_a_client_disagreeing_with_itself_is_a_contrast_mismatch(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    The contrast run is the same client under other flags. Where the two
+    runs judge a fixture differently the client has diverged from itself,
+    counted and bundled without touching the panel's own classification.
+    """
+    failing = {"geth": lambda _s: False, "nethermind": lambda s: s % 3 == 1}
+    contrast = {"nethermind": lambda s: s % 2 == 0}
+    state = _campaign(
+        tmp_path, monkeypatch, failing, contrast=contrast, count=6, batch=3
+    )
+    # Primary fails {1, 4}, contrast fails {0, 2, 4}: they differ on 0, 1, 2.
+    assert state.counts["contrast-mismatch"] == 3
+    assert state.contrast == {"nethermind": {"compared": 6, "mismatches": 3}}
+    # The panel still sees only the primary run's two failures.
+    assert state.counts["divergence"] == 2 and state.counts["agreed"] == 4
+    reasons = sorted(
+        e["reason"]
+        for e in state.signatures.values()
+        if e["client"] == "nethermind:contrast"
+    )
+    assert reasons == [
+        "contrast run failed: nethermind mismatch at <n>",
+        "primary run failed: nethermind mismatch at <n>",
+    ]
+    bundle = next(
+        Path(e["bundle"])
+        for e in state.signatures.values()
+        if e["client"] == "nethermind:contrast"
+    )
+    verdicts = json.loads((bundle / "verdicts.json").read_text())
+    assert set(verdicts) == {"nethermind", "nethermind (contrast)"}
+    report = (tmp_path / "out" / "report.md").read_text()
+    assert "| nethermind | 6 | 3 |" in report
+    assert "| contrast mismatches (client vs itself) | 3 |" in report
+
+
+def test_contrast_mismatch_ignores_refusals_and_agreement() -> None:
+    """Only a pass on one side and a real failure on the other counts."""
+    from ..fuzzer_bridge.campaign import contrast_mismatch
+
+    ok, bad = Verdict(True), Verdict(False, "state root mismatch 0xab")
+    refused = Verdict(False, "unable to validate fork Amsterdam")
+    assert contrast_mismatch(ok, ok) is None
+    assert contrast_mismatch(bad, bad) is None
+    assert contrast_mismatch(ok, refused) is None
+    assert contrast_mismatch(refused, ok) is None
+    assert (
+        contrast_mismatch(ok, bad)
+        == "contrast run failed: state root mismatch <hex>"
+    )
+    assert (
+        contrast_mismatch(bad, ok)
+        == "primary run failed: state root mismatch <hex>"
+    )
 
 
 def test_campaign_stops_on_a_stale_client(

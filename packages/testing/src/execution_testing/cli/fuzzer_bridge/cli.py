@@ -168,12 +168,25 @@ def campaign(
         keep_fixtures=keep_fixtures,
         invariant_checks=invariant_checks,
         known=tuple((k.client, k.reason) for k in campaign_config.known),
+        runner_flags={
+            n: config.client(n).runner_flags for n in campaign_config.clients
+        },
+        contrast_flags={
+            n: flags
+            for n in campaign_config.clients
+            if (flags := config.client(n).contrast_flags) is not None
+        },
     )
     click.echo(
         f"campaign {name}: {campaign_config.fork} vs {', '.join(clients)} "
         f"-> {options.output} "
         f"(batch {batch}, {options.fill_workers} fill workers)"
     )
+    for n, contrast in options.contrast_flags.items():
+        click.echo(
+            f"  {n} also runs under {' '.join(contrast)}; a fixture it "
+            "judges differently there is a contrast-mismatch"
+        )
     try:
         state = run_campaign(options, echo=click.echo)
     except StaleClientError as exc:
