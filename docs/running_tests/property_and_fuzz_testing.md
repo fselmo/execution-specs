@@ -320,6 +320,19 @@ minimized (its predicate is two runs disagreeing, which the corpus
 predicate does not express yet). Doubling a client's runner load is the
 cost; runners are cheap next to the fill.
 
+Three of the four clients run Amsterdam fixtures through their BAL-parallel
+processors by default, so a divergence from a blocktest runner may be a bug
+in that client's parallel path. Localizing one with a trace can hide it:
+geth's `supportsParallelExecution` (`core/state_processor_parallel.go:51`
+at the devnet-8 pin `aa1f2fcf5`) returns false whenever a tracer is
+attached, so `evm blocktest --trace` runs the sequential path that did not
+diverge. Before trusting a trace diff, re-run the seed *without* tracing
+and confirm it still reproduces; a divergence that reproduces untraced and
+vanishes traced is in the parallel path, and that is the finding. Forcing
+geth sequential without a tracer needs a one-line fork flag
+(`DisableParallelExecution`); `--bal.executionmode` is not wired to `evm`
+at that pin.
+
 Each batch produces one verdict per client per fixture:
 
 - every client passes — *agreed*;
