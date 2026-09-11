@@ -9,10 +9,12 @@ from execution_testing.forks import Amsterdam
 from ..fuzzer_bridge.converter import state_test_from_fuzzer
 from ..fuzzer_bridge.generator import generate_fuzzer_output
 from ..fuzzer_bridge.reproducer import (
+    CODE_TAG,
     NarrowingRow,
     fill_state_test,
     narrowing_table,
     render_table,
+    role_tagged,
     variants,
     write_reproducer,
 )
@@ -163,3 +165,37 @@ def test_render_table_aligns_results() -> None:
     ]
     lines = render_table(rows).splitlines()[1:]
     assert lines == ["  as found    diverges", "  gas halved  agrees"]
+
+
+def test_role_tagging_moves_every_reference_and_no_byte_of_layout() -> None:
+    """
+    Contracts become `0x...c0de0000000N`, senders come from tiny keys,
+    and only `PUSH20` immediates change inside code, so lengths (and
+    every jump target) stay put. The retagged case still fills.
+    """
+    from execution_testing.base_types import Address
+    from execution_testing.client_clis.clis.execution_specs import (
+        ExecutionSpecsTransitionTool,
+    )
+
+    case = _single_tx_case()
+    tagged = role_tagged(case)
+    old_contracts = sorted(
+        a for a, acc in case.accounts.items() if acc.private_key is None
+    )
+    new_contracts = [Address(CODE_TAG + n) for n in range(len(old_contracts))]
+    assert all(a in tagged.accounts for a in new_contracts)
+    assert not any(a in tagged.accounts for a in old_contracts)
+    for old, new in zip(old_contracts, new_contracts, strict=False):
+        assert len(tagged.accounts[new].code) == len(case.accounts[old].code)
+    codes = b"".join(bytes(acc.code) for acc in tagged.accounts.values())
+    for old in old_contracts:
+        assert b"\x73" + bytes(old) not in codes
+    tx, tagged_tx = case.transactions[0], tagged.transactions[0]
+    assert tx.to in case.accounts and tagged_tx.to in tagged.accounts
+    assert tagged_tx.to != tx.to
+    keyed = [a for a in tagged.accounts.values() if a.private_key is not None]
+    keys = {int.from_bytes(bytes(a.private_key or b""), "big") for a in keyed}
+    assert keys == set(range(1, len(keyed) + 1))
+    assert tagged_tx.from_ != tx.from_
+    fill_state_test(tagged, Amsterdam, ExecutionSpecsTransitionTool())
