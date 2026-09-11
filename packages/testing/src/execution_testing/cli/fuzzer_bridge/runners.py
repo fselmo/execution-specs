@@ -98,6 +98,30 @@ def parse_gtest_report(report: Dict[str, Any]) -> Dict[str, Verdict]:
     return verdicts
 
 
+def parse_besu_ndjson(stdout: str) -> Dict[str, Verdict]:
+    """Verdicts from `evmtool state-test`: one JSON object per line."""
+    verdicts: Dict[str, Verdict] = {}
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        name = entry.get("name", entry.get("test"))
+        if name is not None:
+            verdicts[str(name)] = Verdict(
+                passed=bool(entry.get("pass")),
+                error=str(entry.get("error") or ""),
+            )
+    return verdicts
+
+
+class StateTestsUnsupportedError(Exception):
+    """The runner behind this binary judges blockchain fixtures only."""
+
+
 def strip_nethermind_suffix(name: str) -> str:
     """Drop the `_d0g0v0_` decoration nethtest appends to test names."""
     return _NETHERMIND_SUFFIX.sub("", name)
@@ -175,6 +199,47 @@ class FixtureRunner:
         for name in missing:
             verdicts[name] = Verdict(
                 False, f"runner-error: no result from {self.name}"
+            )
+        return verdicts
+
+    def run_state_file(
+        self, path: Path, fixture_names: Iterable[str]
+    ) -> Dict[str, Verdict]:
+        """
+        Judge every state test in ``path``, as `run_file` does for blocks.
+
+        evmone splits the two formats across binaries, so the campaign's
+        `evmone-blockchaintest` cannot judge a state test and says so.
+        """
+        names = list(fixture_names)
+        self._last_error = ""
+        if self.kind in ("GethFixtureConsumer", "ErigonFixtureConsumer"):
+            args = ["statetest"]
+            if self.kind == "ErigonFixtureConsumer":
+                args.append("--jsonout")
+            proc = self._run([*args, *self.flags, str(path)])
+            verdicts = parse_json_array(proc.stdout)
+        elif self.kind == "BesuFixtureConsumer":
+            proc = self._run(["state-test", *self.flags, str(path)])
+            verdicts = parse_besu_ndjson(proc.stdout)
+        elif self.kind == "NethtestFixtureConsumer":
+            proc = self._run([*self.flags, "--input", str(path)])
+            verdicts = {
+                strip_nethermind_suffix(n): v
+                for n, v in parse_json_array(proc.stdout).items()
+            }
+        else:
+            raise StateTestsUnsupportedError(
+                f"{self.name}: {self.kind} judges blockchain fixtures only"
+            )
+        if not verdicts and proc.returncode != 0:
+            verdicts = self._all_failed(
+                f"runner-error: {proc.stderr.strip()[:200]}"
+            )
+        for name in names:
+            verdicts.setdefault(
+                name,
+                Verdict(False, f"runner-error: no result from {self.name}"),
             )
         return verdicts
 

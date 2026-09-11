@@ -347,10 +347,25 @@ two bugs co-occur — two clients both failing one case (common when both
 touch the block access list) become two rows, each with its own text, not
 one joint row wearing one client's error. The first case of each new
 signature is bundled under `corpus/<client>--<slug>-<digest>/`: `case.json`
-(replay or distill it as usual), `fixture.json`, every client's verdict, and
+(replay or distill it as usual), `fixture.json`, every client's verdict,
+`events.json` (the case's execution events, and the minimized case's), and
 `minimized.json` with `--minimize` (reduced while *that* client still
 fails). The first batch doubles as the baseline: a client failing more than
 half of it is stale and the run stops naming it (`--no-baseline`).
+
+When the (minimized) case has one transaction the bundle also gets the
+reproducer a client team runs with zero setup: `reproducer_state_test.json`,
+a state test filled by EELS and checked to still fail on the client through
+its state-test entry point (`evm statetest`, `evmtool state-test`, `nethtest
+--input`; evmone's blockchain-test binary cannot judge one). Its
+`_info.comment` is a narrowing table — the case as found, then one-axis
+variations (the previous non-BPO fork, value 0, gas halved and doubled, no
+calldata, legacy pricing, no authorizations), each judged by the client —
+so the reader sees which ingredients the divergence needs before opening
+the bytecode. A divergence the client shows on the block but not on the
+state test depends on something only the block carries (the access list
+hash, block-level gas accounting); `reproducer.md` says so and the
+blockchain fixture stays the reproducer.
 
 A signature already understood — a bug that is filed, or a client known to
 lag the spec — is listed under `known:` in the campaign so it is counted but

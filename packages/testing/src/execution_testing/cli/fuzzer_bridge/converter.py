@@ -17,7 +17,7 @@ from typing import Dict
 
 from execution_testing.base_types import Account, Address, Hash, HexNumber
 from execution_testing.forks import Fork
-from execution_testing.specs import Block, BlockchainTest
+from execution_testing.specs import Block, BlockchainTest, StateTest
 from execution_testing.test_types import (
     Alloc,
     AuthorizationTuple,
@@ -263,6 +263,57 @@ def blockchain_test_from_fuzzer(
         blocks=blocks,
         post={},  # Post-state verification can be added later
         genesis_environment=genesis_env,
+        chain_id=fuzzer_output.chain_id,
+    )
+
+
+def state_test_from_fuzzer(
+    fuzzer_output: FuzzerOutput, fork: Fork
+) -> StateTest:
+    """
+    Convert a single-transaction case to a `StateTest`.
+
+    A state test is what a client team runs with zero setup, so it is the
+    reproducer format for a minimized case with exactly one transaction.
+    The environment is the one the case's block would have had.
+    """
+    if len(fuzzer_output.transactions) != 1:
+        raise ValueError(
+            "a state test carries one transaction; this case has "
+            f"{len(fuzzer_output.transactions)}"
+        )
+    (fuzzer_tx,) = fuzzer_output.transactions
+    pre = Alloc(
+        {
+            addr: fuzzer_account_to_eest_account(account)
+            for addr, account in fuzzer_output.accounts.items()
+        }
+    )
+    sender_eoa_map = create_sender_eoa_map(fuzzer_output.accounts)
+    tx = fuzzer_transaction_to_eest_transaction(
+        fuzzer_tx, sender_eoa=sender_eoa_map[fuzzer_tx.from_]
+    )
+    env = fuzzer_output.env
+    block_env = Environment(
+        fee_recipient=env.fee_recipient,
+        difficulty=0,
+        gas_limit=int(env.gas_limit),
+        number=1,
+        timestamp=env.timestamp,
+        prev_randao=env.prev_randao or Hash(0),
+        base_fee_per_gas=env.base_fee_per_gas
+        if env.base_fee_per_gas
+        else None,
+        excess_blob_gas=env.excess_blob_gas if env.excess_blob_gas else None,
+        blob_gas_used=env.blob_gas_used if env.blob_gas_used else None,
+        parent_beacon_block_root=fuzzer_output.parent_beacon_block_root,
+    ).set_fork_requirements(fork)
+    return StateTest(
+        pre=pre,
+        post={},
+        tx=tx,
+        env=block_env,
+        fork=fork,
         chain_id=fuzzer_output.chain_id,
     )
 
