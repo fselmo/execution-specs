@@ -606,8 +606,10 @@ def test_a_timed_out_case_is_recorded_and_the_slice_continues(
             pass
 
     monkeypatch.setattr(mod, "FILL_TIMEOUT_SECONDS", 0.2)
-    monkeypatch.setattr(mod, "_FILL", {"fork": Osaka, "eels": _Eels()})
     monkeypatch.setattr(mod, "ExecutionSpecsTransitionTool", _Eels)
+    monkeypatch.setattr(mod, "_FILL", {"fork": Osaka})
+    mod._FILL["eels"] = mod._reference_tool()
+    mod._FILL["capabilities"] = mod._capabilities(mod._FILL["eels"])
 
     def fake_generate(fork: Any, seed: int) -> Any:
         del fork
@@ -635,6 +637,47 @@ def test_a_timed_out_case_is_recorded_and_the_slice_continues(
     meta = json.loads(next(tmp_path.glob("*.meta.json")).read_text())
     assert meta["fill_timeouts"] == {"2": 0.2}
     assert meta["slowest_seed"] == 2
+
+
+def test_a_degraded_rebuild_after_a_timeout_stops_the_worker(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Recovery is rarely taken, so a rebuilt tool that silently lost the
+    tracer or the witness fills every later case blind. The rebuild must
+    observe exactly what the original did, or the worker stops.
+    """
+    import time as _time
+
+    from ..fuzzer_bridge import campaign as mod
+
+    class _Eels:
+        opcode_count_per_block: list = []
+        compute_signature = False
+        compute_bal_witness = False
+        last_signature = None
+
+        def reset_opcode_count(self) -> None:
+            pass
+
+    monkeypatch.setattr(mod, "FILL_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(mod, "ExecutionSpecsTransitionTool", _Eels)
+    monkeypatch.setattr(mod, "_FILL", {"fork": Osaka})
+    original = mod._reference_tool()
+    original.compute_bal_witness = True
+    mod._FILL["eels"] = original
+    mod._FILL["capabilities"] = mod._capabilities(original)
+    monkeypatch.setattr(
+        mod, "generate_fuzzer_output", lambda _f, s: SimpleNamespace(_seed=s)
+    )
+
+    def fake_fill(*_: Any, **__: Any) -> Dict[str, Any]:
+        _time.sleep(5)
+        return {}
+
+    monkeypatch.setattr(mod, "fill_case", fake_fill)
+    with pytest.raises(mod.RecoveryMismatchError, match="compute_bal_witness"):
+        mod._fill_slice(([1], str(tmp_path)))
 
 
 def test_a_shard_from_another_generator_stops_the_run() -> None:

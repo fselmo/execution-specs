@@ -54,6 +54,7 @@ from execution_testing.forks import Fork
 from execution_testing.specs.invariants import (
     InvariantViolationWarning,
     enable_invariant_checks,
+    invariant_checks_enabled,
 )
 
 from .baseline import StaleClientError
@@ -557,11 +558,48 @@ def _init_fill_worker(fork_name: str, invariants: bool = False) -> None:
     """Build the per-process reference tool once."""
     _FILL["fork"] = _fork_by_name(fork_name)
     _FILL["invariants"] = invariants
-    _FILL["eels"] = _reference_tool()
     if invariants:
         # Checks are a process-global switch, so a worker opts in once
         # rather than per case.
         enable_invariant_checks()
+    _FILL["eels"] = _reference_tool()
+    _FILL["capabilities"] = _capabilities(_FILL["eels"])
+
+
+def _capabilities(eels: Any) -> Dict[str, Any]:
+    """What a worker's reference tool is configured to observe."""
+    return {
+        "tool": type(eels).__name__,
+        "compute_signature": bool(getattr(eels, "compute_signature", False)),
+        "compute_bal_witness": bool(
+            getattr(eels, "compute_bal_witness", False)
+        ),
+        "invariants": invariant_checks_enabled(),
+    }
+
+
+class RecoveryMismatchError(RuntimeError):
+    """
+    A tool rebuilt on a recovery path lacks a capability the original had.
+
+    Recovery is rarely taken, so a degraded rebuild goes unnoticed: the
+    tool a worker took after its first fill timeout came back without the
+    signature tracer or the access witness, and every later case in that
+    worker was filled blind. The rebuilt tool has to prove it observes
+    exactly what the original did.
+    """
+
+
+def _recover_tool() -> ExecutionSpecsTransitionTool:
+    """Rebuild the reference tool after a timeout, proving it lost nothing."""
+    tool = _reference_tool()
+    expected, actual = _FILL["capabilities"], _capabilities(tool)
+    if actual != expected:
+        raise RecoveryMismatchError(
+            f"rebuilt reference tool observes {actual}, "
+            f"the original observed {expected}"
+        )
+    return tool
 
 
 def _reference_tool() -> ExecutionSpecsTransitionTool:
@@ -791,7 +829,7 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
             # The interrupted fill may have left the tool mid-transition,
             # so the worker takes a fresh one rather than carrying that
             # into the next case.
-            _FILL["eels"] = _reference_tool()
+            _FILL["eels"] = _recover_tool()
         except Exception as exc:  # noqa: BLE001 - a fill failure is data
             errors[seed] = f"{type(exc).__name__}: {exc}"[:200]
         else:
