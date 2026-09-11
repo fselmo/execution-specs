@@ -20,10 +20,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-from execution_testing.base_types import Bytes, HexNumber
+from execution_testing.base_types import Address, Bytes, Hash, HexNumber
 from execution_testing.fixtures import StateFixture
 from execution_testing.forks import Fork
 from execution_testing.specs.invariants import InvariantViolationWarning
+from execution_testing.test_types import EOA
+from execution_testing.vm import Opcodes as Op
 
 from .converter import state_test_from_fuzzer
 from .models import FuzzerOutput
@@ -121,6 +123,87 @@ def variants(
         )
 
 
+CODE_TAG = 0xC0DE00000000
+"""Contracts are retagged to `0x...c0de0000000N`, N in address order."""
+
+_PUSH20 = 0x73
+_DATA_PORTION = {}
+for _op in Op:
+    try:
+        _DATA_PORTION[bytes(_op)[0]] = _op.data_portion_length
+    except (TypeError, ValueError, IndexError):
+        pass
+
+
+def _rewrite_push20(code: bytes, mapping: Dict[bytes, bytes]) -> bytes:
+    """Replace `PUSH20` immediates found in ``mapping``; touch nothing else."""
+    out = bytearray()
+    i = 0
+    while i < len(code):
+        width = _DATA_PORTION.get(code[i], 0)
+        chunk = code[i : i + 1 + width]
+        if code[i] == _PUSH20 and len(chunk) == 21:
+            chunk = bytes([_PUSH20]) + mapping.get(chunk[1:], chunk[1:])
+        out += chunk
+        i += 1 + width
+    return bytes(out)
+
+
+def role_tagged(case: FuzzerOutput) -> FuzzerOutput:
+    """
+    The same case with addresses a reader can tell apart at a glance.
+
+    Contracts become `0x...c0de0000000N` in address order and keyed
+    accounts (senders, authorities) take the keys 1, 2, ...; every
+    reference follows: account keys, `to`, senders, authorities, and the
+    `PUSH20` immediates inside code. Only `PUSH20` immediates are
+    rewritten, so code lengths and jump targets do not move. Code that
+    reaches an address some other way (a shorter push, a computed value)
+    keeps the old one, which is why a retagged case must be judged again
+    before it replaces the original.
+    """
+    contracts = sorted(
+        addr for addr, acc in case.accounts.items() if acc.private_key is None
+    )
+    keyed = sorted(
+        addr
+        for addr, acc in case.accounts.items()
+        if acc.private_key is not None
+    )
+    addresses: Dict[Address, Address] = {
+        addr: Address(CODE_TAG + n) for n, addr in enumerate(contracts)
+    }
+    keys: Dict[Hash, Hash] = {}
+    for n, addr in enumerate(keyed, start=1):
+        key = Hash(n)
+        old_key = case.accounts[addr].private_key
+        assert old_key is not None
+        keys[old_key] = key
+        addresses[addr] = Address(EOA(key=key))
+    raw = {bytes(old): bytes(new) for old, new in addresses.items()}
+
+    def moved(addr: Optional[Address]) -> Optional[Address]:
+        return addresses.get(addr, addr) if addr is not None else None
+
+    copy = case.model_copy(deep=True)
+    accounts = {}
+    for addr, acc in copy.accounts.items():
+        if acc.private_key is not None:
+            acc.private_key = keys[acc.private_key]
+        if len(acc.code):
+            acc.code = Bytes(_rewrite_push20(bytes(acc.code), raw))
+        accounts[addresses[addr]] = acc
+    copy.accounts = accounts
+    for tx in copy.transactions:
+        tx.from_ = addresses[tx.from_]
+        tx.to = moved(tx.to)
+        for auth in tx.authorization_list or []:
+            auth.address = moved(auth.address) or auth.address
+            if auth.signer_key is not None:
+                auth.signer_key = keys.get(auth.signer_key, auth.signer_key)
+    return copy
+
+
 @dataclass(frozen=True)
 class NarrowingRow:
     """One line of the narrowing table."""
@@ -194,6 +277,18 @@ def write_reproducer(
         )
         return None
     survives = judge(fixture)
+    retagged = False
+    if survives:
+        # Readers tell `0x...c0de00000001` from a sender at a glance; the
+        # retagged case replaces the original only if the client still
+        # fails it, since a retag can miss an address reached indirectly.
+        try:
+            tagged_case = role_tagged(case)
+            tagged = fill_state_test(tagged_case, fork, eels)
+            if judge(tagged):
+                case, fixture, retagged = tagged_case, tagged, True
+        except Exception:  # noqa: BLE001 - the untagged case stands
+            pass
     if survives is False:
         note.write_text(
             "The client accepts the case as a state test and rejects it as "
@@ -214,12 +309,19 @@ def write_reproducer(
     note.write_text(
         f"State test: `{path.name}` (one transaction; "
         + (
-            "the client still fails it).\n\n"
+            "the client still fails it"
             if survives
-            else "not judged: the client's state-test runner is not "
-            "wired).\n\n"
+            else "not judged: the client's state-test runner is not wired"
         )
-        + "```\n"
+        + (
+            "; addresses role-tagged, contracts `0x...c0de0000000N`, "
+            "senders from keys 1, 2, ...)"
+            if retagged
+            else "; addresses as generated, a retag did not survive)"
+            if survives
+            else ")"
+        )
+        + ".\n\n```\n"
         + table
         + "\n```\n"
     )

@@ -223,7 +223,17 @@ class FixtureRunner:
             proc = self._run(["state-test", *self.flags, str(path)])
             verdicts = parse_besu_ndjson(proc.stdout)
         elif self.kind == "NethtestFixtureConsumer":
-            proc = self._run([*self.flags, "--input", str(path)])
+            # nethtest traces failing state tests to stdout by default,
+            # which would bury the result list; the trace is not wanted.
+            proc = self._run(
+                [
+                    "--stateTest",
+                    "--neverTrace",
+                    *self.flags,
+                    "--input",
+                    str(path),
+                ]
+            )
             verdicts = {
                 strip_nethermind_suffix(n): v
                 for n, v in parse_json_array(proc.stdout).items()
