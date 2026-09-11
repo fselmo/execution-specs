@@ -7,7 +7,9 @@ import pytest
 
 from ..fuzzer_bridge.runners import (
     FixtureRunner,
+    StateTestsUnsupportedError,
     Verdict,
+    parse_besu_ndjson,
     parse_besu_summary,
     parse_gtest_report,
     parse_json_array,
@@ -136,3 +138,57 @@ def test_with_flags_keeps_the_binary_and_kind() -> None:
         runner.kind,
     )
     assert other.flags == ("--x",) and runner.flags == ()
+
+
+@pytest.mark.parametrize(
+    "kind, subcommand",
+    [
+        ("GethFixtureConsumer", "statetest"),
+        ("ErigonFixtureConsumer", "statetest"),
+        ("BesuFixtureConsumer", "state-test"),
+        ("NethtestFixtureConsumer", "--input"),
+    ],
+)
+def test_state_tests_use_each_runner_s_state_subcommand(
+    kind: str, subcommand: str, monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The same binary judges state tests through its other entry point."""
+    runner = FixtureRunner("c", Path("/bin/runner"), kind, flags=("--f",))
+    seen: List[List[str]] = []
+
+    def fake_run(args: Any) -> Any:
+        seen.append(list(args))
+        return type("P", (), {"stdout": "[]", "stderr": "", "returncode": 0})
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    fixture = tmp_path / "s.json"
+    fixture.write_text("{}")
+    verdicts = runner.run_state_file(fixture, ["x"])
+    (args,) = seen
+    assert subcommand in args and "--f" in args
+    assert args.index("--f") < args.index(str(fixture))
+    assert "--blockTest" not in args and "blocktest" not in args
+    assert not verdicts["x"].passed and "no result" in verdicts["x"].error
+
+
+def test_evmone_blockchaintest_cannot_judge_state_tests(
+    tmp_path: Path,
+) -> None:
+    """Evmone splits the formats across binaries; the campaign has one."""
+    runner = FixtureRunner(
+        "evmone", Path("/bin/x"), "EvmOneBlockchainFixtureConsumer"
+    )
+    with pytest.raises(StateTestsUnsupportedError):
+        runner.run_state_file(tmp_path / "s.json", ["x"])
+
+
+def test_parse_besu_ndjson_reads_test_or_name() -> None:
+    """One object per line, `test` or `name`, log lines ignored."""
+    out = (
+        "INFO starting\n"
+        '{"test": "a", "pass": true}\n'
+        '{"name": "b", "pass": false, "error": "state root mismatch"}\n'
+    )
+    verdicts = parse_besu_ndjson(out)
+    assert verdicts["a"].passed
+    assert not verdicts["b"].passed and "state root" in verdicts["b"].error

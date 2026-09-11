@@ -63,6 +63,7 @@ from .corpus import minimize, save_case
 from .differential import _fork_by_name, is_tool_rejection
 from .generator import GENERATOR_VERSION, generate_fuzzer_output
 from .models import FuzzerOutput
+from .reproducer import client_judge, write_reproducer
 from .run_manifest import RunManifest, _eels_commit
 from .runners import FixtureRunner, Verdict
 
@@ -1337,9 +1338,12 @@ def _write_bundle(
             indent=1,
         )
     )
-    if not options.minimize or focus_client is None:
+    if focus_client is None:
         return
     eels = ExecutionSpecsTransitionTool()
+    if not options.minimize:
+        _reproducer(bundle, case, options, eels, runners[focus_client])
+        return
 
     def still_fails(candidate: FuzzerOutput) -> bool:
         try:
@@ -1362,3 +1366,32 @@ def _write_bundle(
     fill_case(minimized, options.fork, eels)
     mechanism["minimized"] = _case_events(eels)
     (bundle / "events.json").write_text(json.dumps(mechanism, indent=1))
+    _reproducer(bundle, minimized, options, eels, runners[focus_client])
+
+
+def _reproducer(
+    bundle: Path,
+    case: FuzzerOutput,
+    options: CampaignOptions,
+    eels: Any,
+    runner: FixtureRunner,
+) -> None:
+    """
+    The state-test reproducer for a one-transaction case, if it survives.
+
+    Whatever goes wrong here is recorded in the bundle rather than
+    raised: the bundle already holds the blockchain fixture, and a
+    campaign must not stop because a reproducer could not be written.
+    """
+    try:
+        write_reproducer(
+            bundle,
+            case,
+            options.fork,
+            eels,
+            client_judge(runner, "reproducer"),
+        )
+    except Exception as exc:  # noqa: BLE001 - recorded in the bundle
+        (bundle / "reproducer.md").write_text(
+            f"Writing the reproducer failed: {type(exc).__name__}: {exc}\n"
+        )
