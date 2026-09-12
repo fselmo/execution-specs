@@ -203,7 +203,7 @@ def _campaign(
     monkeypatch.setattr(
         campaign_module,
         "_fill_pool",
-        lambda _workers, _fork, _invariants=False: _FakePool(),
+        lambda *_args, **_kwargs: _FakePool(),
     )
     options = CampaignOptions(
         fork=Osaka,
@@ -833,3 +833,116 @@ def test_case_tx_types_reads_every_type_present() -> None:
         ]
     )
     assert _case_tx_types(case) == {0, 2, 4}
+
+
+class _SpecAwareRunner:
+    """Passes a fixture iff its header says it came from the spec."""
+
+    def __init__(self, name: str, fail_producer_seeds: Any) -> None:
+        self.name = name
+        self.fail_producer_seeds = fail_producer_seeds
+
+    def run_file(self, path: Path, names: Any) -> Dict[str, Verdict]:
+        fixtures = json.loads(Path(path).read_text())
+        out = {}
+        for n in names:
+            root = fixtures[n]["blocks"][0]["blockHeader"]["stateRoot"]
+            seed = int(n.split("_")[1])
+            failing = root == "producer" and seed in self.fail_producer_seeds
+            out[n] = Verdict(
+                not failing, f"{self.name} root mismatch" if failing else ""
+            )
+        return out
+
+
+def test_escalation_rejudges_clients_only_where_the_producer_was_wrong(
+    tmp_path: Path,
+) -> None:
+    """
+    Seed 2: the client dissents and EELS agrees with the producer -- a
+    client finding, verdicts stand. Seed 3: the client dissents and EELS
+    disagrees with the producer -- the producer was wrong; the client is
+    judged again on the spec's fixture and passes. Seed 1 agreed and is
+    never escalated.
+    """
+    from ..fuzzer_bridge.campaign import escalate
+
+    names = ["seed_1", "seed_2", "seed_3"]
+    produced = {
+        n: {
+            "blocks": [
+                {"blockHeader": {"stateRoot": "producer", "gasUsed": 1}}
+            ]
+        }
+        for n in names
+    }
+    batch = tmp_path / "batch_1_3.json"
+    batch.write_text(json.dumps(produced))
+    erigon = _SpecAwareRunner("erigon", {2, 3})
+    geth = _SpecAwareRunner("geth", set())
+    runners: Any = {"geth": geth, "erigon": erigon}
+    results = {c: r.run_file(batch, names) for c, r in runners.items()}
+    assert not results["erigon"]["seed_2"].passed
+    assert not results["erigon"]["seed_3"].passed
+
+    def fill_spec(name: str) -> Any:
+        root = "producer" if name == "seed_2" else "spec"
+        return (
+            {"blocks": [{"blockHeader": {"stateRoot": root, "gasUsed": 1}}]},
+            ["state-gas"],
+        )
+
+    found = escalate(
+        names,
+        results,
+        produced,
+        fill_spec=fill_spec,
+        runners=runners,
+        spec_file=tmp_path / "batch_1_3_eels.json",
+    )
+    assert found.escalated == ["seed_2", "seed_3"]
+    assert found.disagreements == {"seed_3": ["stateRoot"]}
+    assert found.events == {"seed_2": ["state-gas"], "seed_3": ["state-gas"]}
+    # Seed 2 stands as a client finding; seed 3 was the producer.
+    assert not results["erigon"]["seed_2"].passed
+    assert (
+        results["erigon"]["seed_3"].passed and results["geth"]["seed_3"].passed
+    )
+    assert set(json.loads((tmp_path / "batch_1_3_eels.json").read_text())) == {
+        "seed_3"
+    }
+
+
+def test_a_producer_fill_carries_no_events(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The producer has no tracer; its shards say so instead of guessing."""
+    from ..fuzzer_bridge import campaign as mod
+
+    class _Producer:
+        opcode_count_per_block: list = []
+
+        def reset_opcode_count(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        mod.TransitionTool,
+        "from_binary_path",
+        classmethod(lambda _cls, **_: _Producer()),
+    )
+    monkeypatch.setattr(mod, "_FILL", {})
+    monkeypatch.setattr(mod, "_fork_by_name", lambda _n: Osaka)
+    mod._init_fill_worker("Osaka", False, "/opt/evmone/evmone")
+    assert mod._FILL["capabilities"]["tool"] == "_Producer"
+    assert mod._FILL["capabilities"]["compute_signature"] is False
+    monkeypatch.setattr(
+        mod,
+        "generate_fuzzer_output",
+        lambda _f, s: SimpleNamespace(transactions=[], _seed=s),
+    )
+    monkeypatch.setattr(
+        mod, "fill_case", lambda case, *_, **__: {"ok": case._seed}
+    )
+    result = mod._fill_slice(([7], str(tmp_path)))
+    assert result["names"] == ["seed_7"]
+    assert result["case_events"] == {"seed_7": []}

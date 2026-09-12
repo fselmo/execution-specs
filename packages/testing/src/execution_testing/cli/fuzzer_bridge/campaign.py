@@ -43,6 +43,7 @@ from typing import (
     Tuple,
 )
 
+from execution_testing.client_clis import TransitionTool
 from execution_testing.client_clis.clis.execution_specs import (
     ExecutionSpecsTransitionTool,
 )
@@ -220,6 +221,9 @@ class CampaignState:
             "fill_timeout": 0,
             "invariant_violation": 0,
             "contrast-mismatch": 0,
+            "escalated": 0,
+            "producer-disagreement": 0,
+            "escalation-error": 0,
         }
     )
     client_failures: Dict[str, int] = field(default_factory=dict)
@@ -415,6 +419,14 @@ def render_report(
         f"| fill errors | {fill_errors} "
         f"({fill_error_rate:.1%} of {generated} candidates) |",
     ]
+    if state.counts.get("escalated"):
+        lines += [
+            f"| escalated to EELS | {state.counts['escalated']} "
+            f"(producer disagreed on "
+            f"{state.counts.get('producer-disagreement', 0)}, "
+            f"EELS could not fill "
+            f"{state.counts.get('escalation-error', 0)}) |",
+        ]
     fill_ms = state.counts.get("fill_ms", 0)
     fill_filled = state.counts.get("fill_filled", 0)
     if fill_filled:
@@ -555,10 +567,13 @@ def render_report(
 _FILL: Dict[str, Any] = {}
 
 
-def _init_fill_worker(fork_name: str, invariants: bool = False) -> None:
-    """Build the per-process reference tool once."""
+def _init_fill_worker(
+    fork_name: str, invariants: bool = False, producer: Optional[str] = None
+) -> None:
+    """Build the per-process fill tool once."""
     _FILL["fork"] = _fork_by_name(fork_name)
     _FILL["invariants"] = invariants
+    _FILL["producer"] = producer
     if invariants:
         # Checks are a process-global switch, so a worker opts in once
         # rather than per case.
@@ -591,7 +606,7 @@ class RecoveryMismatchError(RuntimeError):
     """
 
 
-def _recover_tool() -> ExecutionSpecsTransitionTool:
+def _recover_tool() -> Any:
     """Rebuild the reference tool after a timeout, proving it lost nothing."""
     tool = _reference_tool()
     expected, actual = _FILL["capabilities"], _capabilities(tool)
@@ -603,15 +618,20 @@ def _recover_tool() -> ExecutionSpecsTransitionTool:
     return tool
 
 
-def _reference_tool() -> ExecutionSpecsTransitionTool:
+def _reference_tool() -> Any:
     """
-    A reference tool configured the way this worker's campaign needs.
+    The tool this worker fills through: the producer if configured, else
+    EELS traced for its execution signature.
 
-    Every case is traced for its execution signature: the events are
-    what lets one error text be read as two mechanisms, and they cost
-    about a quarter of a fill (70 -> 86 ms/case measured on 600 seeds).
-    The access witness is asked for only under invariant checks.
+    The events are what lets one error text be read as two mechanisms,
+    and they cost about a quarter of an EELS fill (70 -> 86 ms/case on
+    600 seeds). A producer has no tracer; its cases carry no events, and
+    EELS traces the ones escalated to it. The access witness is asked
+    for only under invariant checks.
     """
+    producer = _FILL.get("producer")
+    if producer is not None:
+        return TransitionTool.from_binary_path(binary_path=Path(producer))
     eels = ExecutionSpecsTransitionTool()
     eels.compute_signature = True
     if _FILL.get("invariants"):
@@ -660,12 +680,19 @@ def _fill_seed(
 
 
 def _fill_pool(
-    workers: int, fork: Fork, invariants: bool = False
+    workers: int,
+    fork: Fork,
+    invariants: bool = False,
+    producer: Optional[Path] = None,
 ) -> ProcessPoolExecutor:
     return ProcessPoolExecutor(
         max_workers=workers,
         initializer=_init_fill_worker,
-        initargs=(fork.name(), invariants),
+        initargs=(
+            fork.name(),
+            invariants,
+            str(producer) if producer is not None else None,
+        ),
     )
 
 
@@ -817,7 +844,8 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
     for seed in seeds:
         case_started = time.perf_counter()
         _FILL["eels"].reset_opcode_count()
-        _FILL["eels"].last_signature = None
+        if hasattr(_FILL["eels"], "last_signature"):
+            _FILL["eels"].last_signature = None
         seen: List[Any] = []
         case = generate_fuzzer_output(fork, seed)
         try:
@@ -945,10 +973,87 @@ class CampaignOptions:
     contrast_flags: Mapping[str, Sequence[str]] = field(default_factory=dict)
     """Per client, a second flag set the same binary is also run with;
     see `contrast_mismatch`."""
+    producer: Optional[Path] = None
+    """A transition tool that fills instead of EELS; see `escalate`."""
+    producer_name: str = "producer"
 
 
 def _seed_of(fixture_name: str) -> int:
     return int(fixture_name.rsplit("_", 1)[1])
+
+
+def _header(fixture: Mapping[str, Any]) -> Dict[str, Any]:
+    return dict(fixture["blocks"][0]["blockHeader"])
+
+
+def header_differences(
+    produced: Mapping[str, Any], spec: Mapping[str, Any]
+) -> List[str]:
+    """The block-header fields on which two fixtures of one case differ."""
+    a, b = _header(produced), _header(spec)
+    return sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+
+
+@dataclass
+class Escalation:
+    """What escalating a batch's non-agreed cases to EELS found."""
+
+    escalated: List[str] = field(default_factory=list)
+    disagreements: Dict[str, List[str]] = field(default_factory=dict)
+    """Cases whose producer fixture differs from EELS's, by header field."""
+    spec_fixtures: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    events: Dict[str, List[str]] = field(default_factory=dict)
+    errors: Dict[str, str] = field(default_factory=dict)
+
+
+def escalate(
+    names: Sequence[str],
+    results: Dict[str, Dict[str, Verdict]],
+    fixtures: Mapping[str, Dict[str, Any]],
+    *,
+    fill_spec: Callable[[str], Tuple[Dict[str, Any], List[str]]],
+    runners: Mapping[str, FixtureRunner],
+    spec_file: Path,
+) -> Escalation:
+    """
+    Run EELS on the cases the panel did not agree on, and re-judge the
+    clients wherever the producer was the one that disagreed.
+
+    The producer's fixture is the panel's oracle until someone dissents;
+    then EELS fills the same case. A producer that matches EELS leaves
+    the verdicts standing (the dissent is a client's). A producer that
+    differs is recorded as a `producer-disagreement`, and the clients are
+    judged again on the spec's fixture -- all such cases of the batch in
+    one file, one runner invocation each -- so a producer bug never
+    reads as a client bug. ``results`` is corrected in place.
+    """
+    found = Escalation()
+    for name in names:
+        ran, _ = partition_rejections({c: results[c][name] for c in results})
+        if classify(ran) == "agreed":
+            continue
+        found.escalated.append(name)
+        try:
+            spec_fixture, events = fill_spec(name)
+        except Exception as exc:  # noqa: BLE001 - recorded, verdicts stand
+            found.errors[name] = f"{type(exc).__name__}: {exc}"[:200]
+            continue
+        found.events[name] = events
+        differing = header_differences(fixtures[name], spec_fixture)
+        if differing:
+            found.disagreements[name] = differing
+            found.spec_fixtures[name] = spec_fixture
+    if found.spec_fixtures:
+        spec_file.write_text(json.dumps(found.spec_fixtures))
+        rejudged = list(found.spec_fixtures)
+        with ThreadPoolExecutor(max_workers=max(1, len(runners))) as tp:
+            futures = {
+                client: tp.submit(runner.run_file, spec_file, rejudged)
+                for client, runner in runners.items()
+            }
+            for client, future in futures.items():
+                results[client].update(future.result())
+    return found
 
 
 def run_campaign(
@@ -994,15 +1099,38 @@ def run_campaign(
     versions.update(
         {name: runner.version() for name, runner in runners.items()}
     )
+    producer_version = ""
+    spec_tool: Optional[ExecutionSpecsTransitionTool] = None
+    if options.producer is not None:
+        producer_tool = TransitionTool.from_binary_path(
+            binary_path=options.producer
+        )
+        producer_version = producer_tool.version()
+        versions[f"producer ({options.producer_name})"] = producer_version
+        spec_tool = ExecutionSpecsTransitionTool()
+        spec_tool.compute_signature = True
     RunManifest(
         fork=options.fork.name(),
         generator_version=GENERATOR_VERSION,
         eels_commit=versions["eels"],
-        clients={n: v for n, v in versions.items() if n != "eels"},
+        clients={
+            n: v
+            for n, v in versions.items()
+            if n != "eels" and not n.startswith("producer")
+        },
         seed_start=options.seed_start,
         count=options.count or 0,
         created=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        producer=producer_version
+        and f"{options.producer_name}: {producer_version}",
     ).write(output / "manifest.json")
+
+    def fill_spec(fixture_name: str) -> Tuple[Dict[str, Any], List[str]]:
+        assert spec_tool is not None
+        spec_tool.last_signature = None
+        case = generate_fuzzer_output(options.fork, _seed_of(fixture_name))
+        fixture = fill_case(case, options.fork, spec_tool)
+        return fixture, _case_events(spec_tool)
 
     if state.signatures_reset:
         echo(
@@ -1039,7 +1167,10 @@ def run_campaign(
         return state
 
     with _fill_pool(
-        options.fill_workers, options.fork, options.invariant_checks
+        options.fill_workers,
+        options.fork,
+        options.invariant_checks,
+        options.producer,
     ) as pool:
         in_flight = max(2 * options.fill_workers, 2)
         pending: Deque[Tuple[range, "Future[Dict[str, Any]]"]] = deque()
@@ -1134,6 +1265,68 @@ def run_campaign(
                 }
 
                 shard_fixtures: Optional[Dict[str, Any]] = None
+                if spec_tool is not None:
+                    shard_fixtures = json.loads(batch_file.read_text())
+                    found = escalate(
+                        names,
+                        results,
+                        shard_fixtures,
+                        fill_spec=fill_spec,
+                        runners=runners,
+                        spec_file=batch_file.with_name(
+                            batch_file.stem + "_eels.json"
+                        ),
+                    )
+                    state.counts["escalated"] = state.counts.get(
+                        "escalated", 0
+                    ) + len(found.escalated)
+                    state.counts["escalation-error"] = state.counts.get(
+                        "escalation-error", 0
+                    ) + len(found.errors)
+                    state.counts["producer-disagreement"] = state.counts.get(
+                        "producer-disagreement", 0
+                    ) + len(found.disagreements)
+                    case_events.update(found.events)
+                    for fixture_name, differing in found.disagreements.items():
+                        keep_file = True
+                        signature = (
+                            f"producer:{options.producer_name}",
+                            "header: " + ", ".join(differing),
+                        )
+                        bundle = corpus_dir / signature_id(signature)
+                        new = state.record_signature(
+                            signature[0],
+                            signature[1],
+                            seed=_seed_of(fixture_name),
+                            bundle=str(bundle),
+                            events=found.events.get(fixture_name, []),
+                        )
+                        if new:
+                            bundle.mkdir(parents=True, exist_ok=True)
+                            (bundle / "producer_fixture.json").write_text(
+                                json.dumps(
+                                    {
+                                        fixture_name: shard_fixtures[
+                                            fixture_name
+                                        ]
+                                    },
+                                    indent=1,
+                                )
+                            )
+                            _write_bundle(
+                                bundle,
+                                options,
+                                fixture_name,
+                                found.spec_fixtures[fixture_name],
+                                {c: results[c][fixture_name] for c in runners},
+                                runners,
+                                focus_client=None,
+                                events=found.events.get(fixture_name, []),
+                            )
+                        # From here on the spec's fixture is the case's.
+                        shard_fixtures[fixture_name] = found.spec_fixtures[
+                            fixture_name
+                        ]
                 batch_failures = dict.fromkeys(runners, 0)
                 for fixture_name in names:
                     verdicts = {
@@ -1147,10 +1340,14 @@ def run_campaign(
                     tallies = [
                         state.by_tx_type.setdefault(str(t), {"cases": 0})
                         for t in case_types.get(fixture_name, [])
-                    ] + [
-                        state.by_event.setdefault(e, {"cases": 0})
-                        for e in case_events.get(fixture_name, [])
                     ]
+                    if spec_tool is None:
+                        # Under a producer only escalated cases carry
+                        # events, and a rate over those alone would lie.
+                        tallies += [
+                            state.by_event.setdefault(e, {"cases": 0})
+                            for e in case_events.get(fixture_name, [])
+                        ]
                     for tally in tallies:
                         tally["cases"] += 1
                         for name in rejected:

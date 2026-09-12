@@ -136,6 +136,39 @@ def test_unknown_client_name_lists_known() -> None:
         cfg.client("besu")
 
 
+def test_producer_must_be_a_declared_client() -> None:
+    """The producer is a client entry; an unknown one is a config error."""
+    cfg = FuzzConfig.model_validate(
+        {
+            "clients": [
+                {"name": "geth", "path": "/opt/geth/evm"},
+                {"name": "evmone-t8n", "path": "/opt/evmone/evmone"},
+            ],
+            "campaigns": {
+                "fast": {
+                    "fork": "Amsterdam",
+                    "clients": ["geth"],
+                    "producer": "evmone-t8n",
+                }
+            },
+        }
+    )
+    assert cfg.campaigns["fast"].producer == "evmone-t8n"
+    with pytest.raises(ValidationError, match="undeclared producer"):
+        FuzzConfig.model_validate(
+            {
+                "clients": [{"name": "geth", "path": "/opt/geth/evm"}],
+                "campaigns": {
+                    "fast": {
+                        "fork": "Amsterdam",
+                        "clients": ["geth"],
+                        "producer": "evmone-t8n",
+                    }
+                },
+            }
+        )
+
+
 def test_campaign_must_reference_declared_clients() -> None:
     """A campaign naming an undeclared client fails validation."""
     with pytest.raises(ValidationError, match="besu"):

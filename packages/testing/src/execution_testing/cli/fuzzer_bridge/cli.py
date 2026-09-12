@@ -121,6 +121,13 @@ def clients(
 )
 @click.option("--keep-fixtures", is_flag=True, help="Keep every batch file.")
 @click.option(
+    "--producer",
+    "producer_name",
+    default=None,
+    help="Declared client whose transition tool fills instead of EELS "
+    "(overrides the campaign's `producer`).",
+)
+@click.option(
     "--config",
     "config_path",
     type=click.Path(path_type=Path, dir_okay=False),
@@ -139,6 +146,7 @@ def campaign(
     no_baseline: bool,
     invariant_checks: bool,
     keep_fixtures: bool,
+    producer_name: Optional[str],
     config_path: Optional[Path],
 ) -> None:
     """
@@ -153,6 +161,12 @@ def campaign(
     assert campaign_config is not None
     clients = resolve_campaign_clients(config, campaign_config.clients)
     fork = next(f for f in get_forks() if f.name() == campaign_config.fork)
+    producer_name = producer_name or campaign_config.producer
+    producer = (
+        resolve_campaign_clients(config, [producer_name])[producer_name]
+        if producer_name
+        else None
+    )
     options = CampaignOptions(
         fork=fork,
         clients=clients,
@@ -176,7 +190,14 @@ def campaign(
             for n in campaign_config.clients
             if (flags := config.client(n).contrast_flags) is not None
         },
+        producer=producer,
+        producer_name=producer_name or "producer",
     )
+    if producer is not None:
+        click.echo(
+            f"  {producer_name} fills the cases; EELS judges only where "
+            "the panel disagrees"
+        )
     click.echo(
         f"campaign {name}: {campaign_config.fork} vs {', '.join(clients)} "
         f"-> {options.output} "
