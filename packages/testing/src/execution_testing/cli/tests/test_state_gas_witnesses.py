@@ -336,3 +336,98 @@ def test_dropping_the_depth_pairing_turns_the_near_miss_red(
         "the unpaired detector must fire on the near-miss, or the "
         "depth pairing is not what makes it discriminate"
     )
+
+
+NEW_RECIPIENT = 0x40000
+"""An address no account occupies: a transfer to it creates an account,
+which is charged NEW_ACCOUNT state gas before any frame exists."""
+
+
+def _fill_transfer(
+    recipient: int, tx_gas: int
+) -> Tuple[Dict[str, Any], Signature]:
+    """Fill a plain value transfer; return fixture + signature."""
+    sender = Address(EOA(key=SENDER_KEY))
+    case = FuzzerOutput(
+        version="2.0",
+        fork=Amsterdam,
+        accounts={
+            sender: FuzzerAccountInput(
+                balance=HexNumber(10**18), private_key=SENDER_KEY
+            ),
+            Address(PARENT): FuzzerAccountInput(balance=HexNumber(1)),
+        },
+        transactions=[
+            FuzzerTransactionInput(
+                **{"from": sender},
+                to=Address(recipient),
+                gas=HexNumber(tx_gas),
+                gas_price=HexNumber(10),
+                nonce=HexNumber(0),
+                value=HexNumber(1),
+            )
+        ],
+        env=Environment(
+            fee_recipient=Address(0xC0FFEE),
+            gas_limit=60_000_000,
+            number=1,
+            timestamp=1000,
+            prev_randao=Hash(0),
+            base_fee_per_gas=7,
+        ),
+    )
+    eels = ExecutionSpecsTransitionTool()
+    eels.compute_signature = True
+    eels.last_signature = None
+    fixture = fill_case(case, Amsterdam, eels)
+    assert eels.last_signature is not None
+    return fixture, eels.last_signature
+
+
+def _gas_used(fixture: Dict[str, Any]) -> int:
+    return int(fixture["blocks"][0]["blockHeader"]["gasUsed"], 16)
+
+
+def test_a_new_recipient_is_charged_state_gas_before_any_frame() -> None:
+    """
+    Positive: a transfer to an unoccupied address pays NEW_ACCOUNT state
+    gas at transaction level -- from the reservoir when it has one, out
+    of execution gas when it does not. Near-miss: the same transfer to an
+    existing account pays no state gas at all.
+
+    The behavioral witness is the charge itself: block gas is the larger
+    of the two dimensions, so the new recipient shows as gasUsed far
+    above the existing one. Which pool paid leaves no footprint here (a
+    bare transfer's outcome cannot depend on it: spills live below the
+    cap, reservoirs above it); that split is witnessed by evmone's
+    independent StateGasProbe, which agrees with this fold on 493 of 494
+    generated transactions (design/2026-09-12-state-gas-probe-calibration).
+    """
+    funded, funded_sig = _fill_transfer(NEW_RECIPIENT, CAP + 1_000_000)
+    assert {"tx-state-gas", "state-gas-from-reservoir"} <= funded_sig.events
+    assert "tx-state-gas-spill" not in funded_sig.events
+
+    spilled, spilled_sig = _fill_transfer(NEW_RECIPIENT, CAP)
+    assert {"tx-state-gas", "tx-state-gas-spill"} <= spilled_sig.events
+    assert "state-gas-from-reservoir" not in spilled_sig.events
+    assert _gas_used(spilled) == _gas_used(funded)
+
+    existing, existing_sig = _fill_transfer(PARENT, CAP)
+    assert "tx-state-gas" not in existing_sig.events
+    assert _gas_used(existing) < _gas_used(funded)
+
+
+def test_dropping_the_transaction_level_fold_turns_the_positive_red(
+    monkeypatch: Any,
+) -> None:
+    """The events come from the fold, not from any traced charge."""
+    from execution_testing.evm_tools.t8n.evm_trace import signature as mod
+
+    monkeypatch.setattr(
+        mod.SignatureTracer,
+        "_fold_transaction_level_state_gas",
+        lambda *_: None,
+    )
+    _, sig = _fill_transfer(NEW_RECIPIENT, CAP + 1_000_000)
+    assert "tx-state-gas" not in sig.events
+    assert "state-gas-from-reservoir" not in sig.events
