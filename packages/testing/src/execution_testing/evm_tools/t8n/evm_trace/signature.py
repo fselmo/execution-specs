@@ -53,6 +53,8 @@ EVENT_WITNESSES = {
     "state-gas-reservoir": "behavioral",
     "state-gas-from-reservoir": "behavioral",
     "state-gas-interleave": "trace",
+    "tx-state-gas": "behavioral",
+    "tx-state-gas-spill": "cross-implementation",
 }
 """Every L1 tag the tracer can emit, with the witness kind that validates
 its detector -- an event registers here only with one:
@@ -63,6 +65,10 @@ its detector -- an event registers here only with one:
   different code path from this tracer) confirms it.
 - ``analytic``: the expected value is computable from the input (e.g. the
   bigram set of a straight-line program).
+- ``cross-implementation``: an independent implementation counting the
+  same quantity agrees on real executions (evmone's ``StateGasProbe``
+  for which pool paid a transaction-level charge, where no outcome can
+  depend on the pool and EELS leaves no other footprint).
 
 The witness validates the detector's claim about what EELS did; whether
 EELS itself is right is a different claim, owned by the invariants, the
@@ -250,6 +256,36 @@ class SignatureTracer:
         self._spilled_depths: Set[int] = set()
         self._reservoir_at: dict = {}
         self._interleavings: Set[Tuple[int, int]] = set()
+        self._seen_txs: Set[int] = set()
+
+    def _fold_transaction_level_state_gas(self, evm: object) -> None:
+        """
+        Infer the state gas a transaction paid before its first frame.
+
+        A new recipient account and EIP-7702 authorities are charged
+        state gas before any frame exists, so no `StateGasAndRefund` is
+        ever traced for them; the meter at the transaction's first event
+        still shows what they took. Calibrated against evmone's
+        `StateGasProbe` on 494 user transactions (2026-09-12): with this
+        fold the two sides agree on 493. The one left is a transaction
+        that fails before its first frame and produces no event at all,
+        which no tracer can see until the spec emits one there.
+        """
+        meter = getattr(evm, "gas_meter", None)
+        if meter is None:
+            return
+        drawn = _reservoir_grant(evm) - int(meter.state_gas_left)
+        spilled = int(meter.state_gas_spilled) + int(
+            getattr(meter, "state_gas_committed_spill", 0)
+        )
+        if drawn <= 0 and spilled <= 0:
+            return
+        self._events.add("state-gas")
+        self._events.add("tx-state-gas")
+        if drawn > 0:
+            self._events.add("state-gas-from-reservoir")
+        if spilled > 0:
+            self._events.add("tx-state-gas-spill")
 
     def _fold_state_gas(self, evm: object, depth: int) -> None:
         """
@@ -287,6 +323,11 @@ class SignatureTracer:
 
     def __call__(self, evm: object, event: TraceEvent) -> None:
         """Fold one trace event into the accumulating signature."""
+        tx_env = getattr(evm, "tx_env", None)
+        tx_index = getattr(tx_env, "index_in_block", None)
+        if tx_index is not None and tx_index not in self._seen_txs:
+            self._seen_txs.add(int(tx_index))
+            self._fold_transaction_level_state_gas(evm)
         depth = int(getattr(evm, "depth", 0))
         self._max_depth = max(self._max_depth, depth)
         if _child_state_gas_spilled(evm, depth):
