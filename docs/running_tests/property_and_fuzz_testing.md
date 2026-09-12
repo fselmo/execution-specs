@@ -320,6 +320,37 @@ minimized (its predicate is two runs disagreeing, which the corpus
 predicate does not express yet). Doubling a client's runner load is the
 cost; runners are cheap next to the fill.
 
+#### A fast producer
+
+EELS fills about eleven cases a second per worker; `evmone t8n` fills the
+same case in a sixth of the time (16 ms against 91 ms measured, of which
+the spawn is 2.4 ms and the genesis state root in the pure-Python trie 6.4
+ms). A campaign can name a declared client as `producer`: its transition
+tool fills every case, the clients judge the producer's fixtures, and EELS
+runs only on the cases the panel does not agree on. There it fills the same
+case and the two fixtures are compared header by header: equal, and the
+verdicts stand (the dissent is a client's); different, and the case is a
+`producer-disagreement` — bundled with both fixtures, and the clients are
+judged again on the spec's fixture, all such cases of a batch in one file —
+so a producer bug never reads as a client bug. Fast mode has no execution
+signature (the tracer is EELS's), so the per-event table is not kept and
+only escalated cases carry events.
+
+```yaml
+clients:
+  - name: evmone-t8n
+    # a4664725 is upstream `amsterdam/main`; master has no Amsterdam. A
+    # four-month-old build disagreed with EELS on 9 of 40 cases, every one
+    # of which would have read as a client divergence: pin the SHA, and
+    # the producer's version travels in manifest.json and each fixture.
+    build: {recipe: evmone-t8n, ref: a4664725}
+campaigns:
+  devnet:
+    fork: Amsterdam
+    clients: [geth, erigon, besu, nethermind]
+    producer: evmone-t8n
+```
+
 Three of the four clients run Amsterdam fixtures through their BAL-parallel
 processors by default, so a divergence from a blocktest runner may be a bug
 in that client's parallel path. Localizing one with a trace can hide it:

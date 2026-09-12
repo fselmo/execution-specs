@@ -81,6 +81,16 @@ KNOWN_BUILDS: Dict[str, BuildSource] = {
         ),
         binary="evmone-blockchaintest",
     ),
+    # The `evmone` CLI hosts `evmone t8n`, the campaign's fast producer.
+    "evmone-t8n": BuildSource(
+        repo="ethereum/evmone",
+        command=(
+            "cmake -S . -B build -DEVMONE_TESTING=ON "
+            "&& cmake --build build --parallel --target evmone-cli "
+            "&& cp build/bin/evmone {out}"
+        ),
+        binary="evmone",
+    ),
 }
 """
 Build recipes for clients the framework knows how to produce: each yields
@@ -155,6 +165,12 @@ class CampaignConfig(BaseModel):
     baseline_seeds: int = 20
     known: List[KnownSignature] = Field(default_factory=list)
     """Signatures to suppress from findings (e.g. a bug already filed)."""
+    producer: Optional[str] = None
+    """A declared client whose binary is a transition tool (`evmone t8n`)
+    that fills the cases instead of EELS. EELS then runs only on cases
+    the panel does not agree on: a producer that disagrees with EELS
+    there is a `producer-disagreement`, and the clients are judged again
+    on the spec's fixture. Fast mode has no execution signature."""
 
 
 class FuzzConfig(BaseModel):
@@ -172,6 +188,11 @@ class FuzzConfig(BaseModel):
                 raise ValueError(
                     f"campaign {name!r} names undeclared clients: "
                     f"{', '.join(unknown)}"
+                )
+            if campaign.producer and campaign.producer not in declared:
+                raise ValueError(
+                    f"campaign {name!r} names an undeclared producer: "
+                    f"{campaign.producer}"
                 )
         return self
 

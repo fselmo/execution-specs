@@ -32,6 +32,10 @@ class RunManifest:
     seed_start: int
     count: int
     created: str
+    producer: str = ""
+    """The transition tool that filled the cases when it was not EELS,
+    with its version: a four-month-old evmone would have produced 22%
+    "divergences" that were the producer, not the clients."""
 
     def write(self, path: Path) -> Path:
         """Write the manifest as JSON to ``path``."""
