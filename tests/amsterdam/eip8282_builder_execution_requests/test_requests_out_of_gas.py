@@ -25,6 +25,7 @@ from execution_testing import (
     Requests,
     SystemContractInteractionMeasuredOutOfGasContract,
     Transaction,
+    TransactionException,
     While,
 )
 from execution_testing import Macros as Om
@@ -147,11 +148,21 @@ def test_request_gas_boundary(
     )
 
 
+@pytest.mark.parametrize(
+    "extra_transaction",
+    [
+        pytest.param(False, id="full_block"),
+        pytest.param(
+            True, id="one_more_transaction", marks=pytest.mark.exception_test
+        ),
+    ],
+)
 @EIPChecklist.SystemContract.Test.ExcessiveGas.BlockGas()
 @pytest.mark.execute(
     pytest.mark.skip(reason="Needs more ETH than a live network provides")
 )
 def test_requests_exhaust_block_gas(
+    extra_transaction: bool,
     blockchain_test: BlockchainTestFiller,
     pre: Alloc,
     fork: Fork,
@@ -293,6 +304,18 @@ def test_requests_exhaust_block_gas(
         + total_enqueued * template.value
     )
     system_call_index = len(txs) + 1
+    error = None
+    if extra_transaction:
+        # Even a minimum-cost transaction cannot fit after the burners.
+        error = TransactionException.GAS_ALLOWANCE_EXCEEDED
+        txs.append(
+            Transaction(
+                sender=sender,
+                to=pre.fund_eoa(),
+                gas_limit=fork.transaction_intrinsic_cost_calculator()(),
+                error=error,
+            )
+        )
 
     blockchain_test(
         genesis_environment=env,
@@ -303,10 +326,15 @@ def test_requests_exhaust_block_gas(
                 # Each enqueue logs, and nothing here asserts a receipt; the
                 # receipts root in the header still commits to them.
                 include_receipts_in_output=False,
-                header_verify=Header(requests_hash=Requests(*dequeued)),
+                header_verify=None
+                if error
+                else Header(requests_hash=Requests(*dequeued)),
+                exception=error,
                 # The sweep resets the count and advances the head past the
                 # dequeued records.
-                expected_block_access_list=BlockAccessListExpectation(
+                expected_block_access_list=None
+                if error
+                else BlockAccessListExpectation(
                     account_expectations={
                         predeploy: BalAccountExpectation(
                             storage_changes=[
@@ -334,7 +362,9 @@ def test_requests_exhaust_block_gas(
                 ),
             )
         ],
-        post={
+        post={}
+        if error
+        else {
             relay: Account(
                 balance=relay_balance - paid,
                 storage={
