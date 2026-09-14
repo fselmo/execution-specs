@@ -8,7 +8,11 @@ from typing import List
 import pytest
 from execution_testing import (
     Alloc,
+    BalAccountExpectation,
+    BalStorageChange,
+    BalStorageSlot,
     Block,
+    BlockAccessListExpectation,
     BlockchainTestFiller,
     BuilderExitRequest,
     Op,
@@ -368,3 +372,68 @@ def test_builder_exit_requests(
     `source_address` set to the caller.
     """
     blockchain_test(pre=pre, post={}, blocks=blocks)
+
+
+@pytest.mark.parametrize(
+    "system_contract_interactions_per_block",
+    [
+        [
+            [
+                SystemContractInteractionContract(
+                    requests=[
+                        BuilderExitRequest.from_index(i + 1)
+                        for i in range(BuilderExitRequest.max_per_block + 3)
+                    ]
+                )
+            ],
+            [
+                SystemContractInteractionContract(
+                    requests=[
+                        BuilderExitRequest.from_index(
+                            BuilderExitRequest.max_per_block + 4 + i
+                        )
+                        for i in range(BuilderExitRequest.max_per_block)
+                    ]
+                )
+            ],
+            [],
+            # Reuse the drained queue with zero-valued fields over old records.
+            [
+                SystemContractInteractionContract(
+                    requests=[BuilderExitRequest.from_index(0).copy(pubkey=0)]
+                )
+            ],
+            [],
+        ]
+    ],
+)
+@EIPChecklist.SystemContract.Test.Inputs.Valid()
+def test_builder_exit_backlog_with_new_requests(
+    blockchain_test: BlockchainTestFiller,
+    pre: Alloc,
+    blocks: List[Block],
+) -> None:
+    """Drain old requests first and reuse the emptied queue."""
+    # The third block drains the remaining backlog without new transactions.
+    blocks[2].expected_block_access_list = BlockAccessListExpectation(
+        account_expectations={
+            BuilderExitRequest.system_contract_address: BalAccountExpectation(
+                storage_changes=[
+                    BalStorageSlot(
+                        slot=slot,
+                        slot_changes=[
+                            BalStorageChange(
+                                block_access_index=1,
+                                post_value=0,
+                            )
+                        ],
+                    )
+                    for slot in (
+                        BuilderExitRequest.queue_head_slot,
+                        BuilderExitRequest.queue_tail_slot,
+                    )
+                ],
+            ),
+        },
+    )
+    blockchain_test(pre=pre, blocks=blocks, post={})

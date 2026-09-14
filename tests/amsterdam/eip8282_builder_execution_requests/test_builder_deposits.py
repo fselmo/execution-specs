@@ -8,7 +8,11 @@ from typing import List
 import pytest
 from execution_testing import (
     Alloc,
+    BalAccountExpectation,
+    BalStorageChange,
+    BalStorageSlot,
     Block,
+    BlockAccessListExpectation,
     BlockchainTestFiller,
     BuilderDepositRequest,
     Op,
@@ -514,3 +518,74 @@ def test_builder_deposit_requests(
     predeploy and verifying they are dequeued into the block's requests.
     """
     blockchain_test(pre=pre, post={}, blocks=blocks)
+
+
+@pytest.mark.parametrize(
+    "system_contract_interactions_per_block",
+    [
+        [
+            [
+                SystemContractInteractionContract(
+                    requests=[
+                        BuilderDepositRequest.from_index(i + 1)
+                        for i in range(BuilderDepositRequest.max_per_block + 3)
+                    ]
+                )
+            ],
+            [
+                SystemContractInteractionContract(
+                    requests=[
+                        BuilderDepositRequest.from_index(
+                            BuilderDepositRequest.max_per_block + 4 + i
+                        )
+                        for i in range(BuilderDepositRequest.max_per_block)
+                    ]
+                )
+            ],
+            [],
+            # Reuse the drained queue with zero-valued fields over old records.
+            [
+                SystemContractInteractionContract(
+                    requests=[
+                        BuilderDepositRequest.from_index(0).copy(
+                            pubkey=0, withdrawal_credentials=0, signature=0
+                        )
+                    ]
+                )
+            ],
+            [],
+        ]
+    ],
+)
+@pytest.mark.execute(pytest.mark.skip(reason="Stakes over one hundred ETH"))
+@EIPChecklist.SystemContract.Test.Inputs.Valid()
+def test_builder_deposit_backlog_with_new_requests(
+    blockchain_test: BlockchainTestFiller,
+    pre: Alloc,
+    blocks: List[Block],
+) -> None:
+    """Drain old requests first and reuse the emptied queue."""
+    predeploy = BuilderDepositRequest.system_contract_address
+    # The third block drains the remaining backlog without new transactions.
+    blocks[2].expected_block_access_list = BlockAccessListExpectation(
+        account_expectations={
+            predeploy: BalAccountExpectation(
+                storage_changes=[
+                    BalStorageSlot(
+                        slot=slot,
+                        slot_changes=[
+                            BalStorageChange(
+                                block_access_index=1,
+                                post_value=0,
+                            )
+                        ],
+                    )
+                    for slot in (
+                        BuilderDepositRequest.queue_head_slot,
+                        BuilderDepositRequest.queue_tail_slot,
+                    )
+                ],
+            ),
+        },
+    )
+    blockchain_test(pre=pre, blocks=blocks, post={})
