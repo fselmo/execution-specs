@@ -14,6 +14,7 @@ from execution_testing import (
     BuilderDepositRequest,
     BuilderExitRequest,
     Bytecode,
+    Bytes,
     Header,
     Op,
     Requests,
@@ -275,3 +276,41 @@ def test_system_contract_errors() -> None:
     `generate_system_contract_error_test` decorator definition.
     """
     pass
+
+
+@pytest.mark.parametrize(
+    "request_class",
+    [BuilderDepositRequest, BuilderExitRequest],
+    ids=["deposit", "exit"],
+)
+@pytest.mark.parametrize(
+    "length_delta",
+    [None, -1, 1],
+    ids=["one_byte", "record_minus_one", "record_plus_one"],
+)
+@EIPChecklist.SystemContract.Test.ContractSubstitution.ReturnLengths()
+def test_partial_request_records(
+    blockchain_test: BlockchainTestFiller,
+    pre: Alloc,
+    request_class: type[BuilderDepositRequest] | type[BuilderExitRequest],
+    length_delta: int | None,
+) -> None:
+    """Commit raw system-call output without parsing or truncating records."""
+    size = (
+        1
+        if length_delta is None
+        else len(bytes(request_class.from_index(0))) + length_delta
+    )
+    returned = bytes((i % 255) + 1 for i in range(size))
+    pre[request_class.system_contract_address] = Account(
+        code=Om.MSTORE(returned, 0) + Op.RETURN(0, size),
+        nonce=1,
+    )
+    expected = Requests(
+        requests_lists=[Bytes(bytes([request_class.type]) + returned)]
+    )
+    blockchain_test(
+        pre=pre,
+        blocks=[Block(header_verify=Header(requests_hash=expected))],
+        post={},
+    )
