@@ -377,34 +377,41 @@ def test_builder_exit_requests(
 @pytest.mark.parametrize(
     "system_contract_interactions_per_block",
     [
-        [
+        pytest.param(
             [
-                SystemContractInteractionContract(
-                    requests=[
-                        BuilderExitRequest.from_index(i + 1)
-                        for i in range(BuilderExitRequest.max_per_block + 3)
-                    ]
-                )
+                [
+                    SystemContractInteractionContract(
+                        requests=[
+                            BuilderExitRequest.from_index(i + 1)
+                            for i in range(
+                                BuilderExitRequest.max_per_block + 3
+                            )
+                        ]
+                    )
+                ],
+                [
+                    SystemContractInteractionContract(
+                        requests=[
+                            BuilderExitRequest.from_index(
+                                BuilderExitRequest.max_per_block + 4 + i
+                            )
+                            for i in range(BuilderExitRequest.max_per_block)
+                        ]
+                    )
+                ],
+                [],
+                # Reuse the drained queue, overwriting old fields with zeros.
+                [
+                    SystemContractInteractionContract(
+                        requests=[
+                            BuilderExitRequest.from_index(0).copy(pubkey=0)
+                        ]
+                    )
+                ],
+                [],
             ],
-            [
-                SystemContractInteractionContract(
-                    requests=[
-                        BuilderExitRequest.from_index(
-                            BuilderExitRequest.max_per_block + 4 + i
-                        )
-                        for i in range(BuilderExitRequest.max_per_block)
-                    ]
-                )
-            ],
-            [],
-            # Reuse the drained queue with zero-valued fields over old records.
-            [
-                SystemContractInteractionContract(
-                    requests=[BuilderExitRequest.from_index(0).copy(pubkey=0)]
-                )
-            ],
-            [],
-        ]
+            id="backlog_then_reuse",
+        ),
     ],
 )
 @EIPChecklist.SystemContract.Test.Inputs.Valid()

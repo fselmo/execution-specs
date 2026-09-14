@@ -523,38 +523,43 @@ def test_builder_deposit_requests(
 @pytest.mark.parametrize(
     "system_contract_interactions_per_block",
     [
-        [
+        pytest.param(
             [
-                SystemContractInteractionContract(
-                    requests=[
-                        BuilderDepositRequest.from_index(i + 1)
-                        for i in range(BuilderDepositRequest.max_per_block + 3)
-                    ]
-                )
+                [
+                    SystemContractInteractionContract(
+                        requests=[
+                            BuilderDepositRequest.from_index(i + 1)
+                            for i in range(
+                                BuilderDepositRequest.max_per_block + 3
+                            )
+                        ]
+                    )
+                ],
+                [
+                    SystemContractInteractionContract(
+                        requests=[
+                            BuilderDepositRequest.from_index(
+                                BuilderDepositRequest.max_per_block + 4 + i
+                            )
+                            for i in range(BuilderDepositRequest.max_per_block)
+                        ]
+                    )
+                ],
+                [],
+                # Reuse the drained queue, overwriting old fields with zeros.
+                [
+                    SystemContractInteractionContract(
+                        requests=[
+                            BuilderDepositRequest.from_index(0).copy(
+                                pubkey=0, withdrawal_credentials=0, signature=0
+                            )
+                        ]
+                    )
+                ],
+                [],
             ],
-            [
-                SystemContractInteractionContract(
-                    requests=[
-                        BuilderDepositRequest.from_index(
-                            BuilderDepositRequest.max_per_block + 4 + i
-                        )
-                        for i in range(BuilderDepositRequest.max_per_block)
-                    ]
-                )
-            ],
-            [],
-            # Reuse the drained queue with zero-valued fields over old records.
-            [
-                SystemContractInteractionContract(
-                    requests=[
-                        BuilderDepositRequest.from_index(0).copy(
-                            pubkey=0, withdrawal_credentials=0, signature=0
-                        )
-                    ]
-                )
-            ],
-            [],
-        ]
+            id="backlog_then_reuse",
+        ),
     ],
 )
 @pytest.mark.execute(pytest.mark.skip(reason="Stakes over one hundred ETH"))
