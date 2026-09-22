@@ -359,21 +359,33 @@ test block. The branch `contrast-flags-devnet-8` (two commits on the pin,
 in `el-clients/go-ethereum-contrast`) decodes the fixture's
 `blockAccessList`, normalizes the zero-padded hex quantities the fixtures
 write and geth's strict decoders reject, attaches it to the block, and adds
-`--bal.sequential`. On that build the parallel path runs by default (probed:
-every decision `parallel=true`), a corrupted delivered list is rejected
-(`access list hash mismatch`, which the unpatched blocktest let through),
-and the flag is the contrast:
+`--bal.sequential`. On that build the parallel path runs unless the flag is
+given (probed: every decision `parallel=true`), and a corrupted delivered
+list is rejected (`access list hash mismatch`, which the unpatched
+blocktest let through). The import path's real behaviour is sequential, so
+the flag is the *primary* run and the unflagged run is the interim
+contrast; geth's parallel processor is tested for real only on an engine
+lane, once a runner for it exists:
 
 ```yaml
   - name: geth
     build:
       recipe: geth
-      repo: <fork carrying the branch>
-      ref: contrast-flags-devnet-8
+      repo: fselmo/go-ethereum
+      ref: e29ad9d5830b3a7182652fe5a53f535f9e41c9ea  # contrast-flags-devnet-8
       # The pin's dependencies do not build on Go 1.27; pin the toolchain.
       command: "GOTOOLCHAIN=go1.25.5 go build -o {out} ./cmd/evm"
-    contrast_flags: [--bal.sequential]
+    runner_flags: [--bal.sequential]
+    contrast_flags: []
 ```
+
+The same holds, by construction rather than by probe, for erigon and besu
+at their pins: erigon's `IGNORE_BAL` gates staged sync, which its
+`blockrunner.go` never imports, and besu's reference-test schedule passes
+`isParallelTxProcessingEnabled=false` so `BalConfiguration.DEFAULT` is
+never consulted. No campaign has exercised the parallel path on three of
+the four clients; nethermind's `--parallelExecution` is the one lane that
+runs it today.
 
 The fixtures write every quantity zero-padded to whole bytes (`"0x00"`,
 `"0x03e8"`), headers included, and geth's blocktest accepts that in headers
