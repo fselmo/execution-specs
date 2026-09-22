@@ -406,13 +406,19 @@ ask -- the diff we run daily against the devnet branch.
     contrast_flags: []
 ```
 
-The same holds, by construction rather than by probe, for erigon and besu
+The same holds, by construction rather than by probe, for the other three
 at their pins: erigon's `IGNORE_BAL` gates staged sync, which its
-`blockrunner.go` never imports, and besu's reference-test schedule passes
-`isParallelTxProcessingEnabled=false` so `BalConfiguration.DEFAULT` is
-never consulted. No campaign has exercised the parallel path on three of
-the four clients; nethermind's `--parallelExecution` is the one lane that
-runs it today.
+`blockrunner.go` never imports; nethermind honours `--parallelExecution`
+but `BlockAccessListManager.PrepareForProcessing` needs a list that
+`Ethereum.Test.Base` never assigns on the blocktest lane, so the flag is
+inert; besu's reference-test schedule passes
+`isParallelTxProcessingEnabled=false`, so its parallel processor is never
+built. **No campaign to date has exercised the parallel path on any
+client**: every BAL-consumption verdict so far is a sequential-path
+verdict. Each client's contrast therefore needs its own series -- attach
+the list (geth, erigon, nethermind) or unlock the processor (besu) -- and
+until a client's series exists its `contrast_flags` compare the sequential
+path with itself.
 
 The fixtures write every quantity zero-padded to whole bytes (`"0x00"`,
 `"0x03e8"`), headers included, and geth's blocktest accepts that in headers
