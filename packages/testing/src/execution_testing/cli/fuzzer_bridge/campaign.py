@@ -465,11 +465,14 @@ def render_report(
             "finding that needs no other witness. Compared counts only "
             "fixtures neither run refused.",
             "",
-            "| client | compared | mismatches |",
-            "| --- | --- | --- |",
+            "| client | compared | primary failed | contrast failed | "
+            "mismatches |",
+            "| --- | --- | --- | --- | --- |",
         ]
         lines += [
             f"| {name} | {tally.get('compared', 0)} | "
+            f"{tally.get('primary_failed', 0)} | "
+            f"{tally.get('contrast_failed', 0)} | "
             f"{tally.get('mismatches', 0)} |"
             for name, tally in sorted(state.contrast.items())
         ]
@@ -1369,6 +1372,17 @@ def run_campaign(
                             name, {"compared": 0, "mismatches": 0}
                         )
                         tally["compared"] += 1
+                        # Per-mode counts: a divergence in one mode and a
+                        # divergence in both look the same in a digest
+                        # table unless each mode's failures are kept.
+                        if not primary.passed:
+                            tally["primary_failed"] = (
+                                tally.get("primary_failed", 0) + 1
+                            )
+                        if not other[fixture_name].passed:
+                            tally["contrast_failed"] = (
+                                tally.get("contrast_failed", 0) + 1
+                            )
                         reason = contrast_mismatch(
                             primary, other[fixture_name]
                         )
