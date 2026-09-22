@@ -405,7 +405,24 @@ ask -- the diff we run daily against the devnet branch.
         - patches/geth/0002-tests-attach-a-fixture-s-block-access-list-to-the-bl.patch
     runner_flags: [--bal.sequential]
     contrast_flags: []
+  - name: nethermind
+    build:
+      recipe: nethermind
+      ref: glamsterdam-devnet-8
+      patches:
+        - patches/nethermind/0001-Ethereum.Test.Base-attach-a-fixture-s-block-access-l.patch
+    runner_flags: [--parallelExecution, "false"]
+    contrast_flags: [--parallelExecution, "true"]
 ```
+
+Nethermind's series (one patch in `Ethereum.Test.Base`, branch
+`contrast-series-devnet-8` on `fselmo/nethermind`, base `7a63aa02da`)
+attaches the fixture's list the same way; probed at the
+`PrepareForProcessing` decision on a 40-fixture shard, `--parallelExecution
+true` takes the parallel path on 40 of 40 real blocks and `false` on none,
+with 40/40 verdicts both ways and a corrupted delivered list rejected in
+both. Its flag is honoured only once the list is attached, which is why
+the unpatched runner's `--parallelExecution` was inert.
 
 The same holds, by construction rather than by probe, for the other three
 at their pins: erigon's `IGNORE_BAL` gates staged sync, which its
