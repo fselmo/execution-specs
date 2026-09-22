@@ -42,19 +42,19 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 14
+BASELINE_GENERATOR_VERSION = 15
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    492,
-    931,
-    2776,
-    4262,
-    5246,
-    5631,
+    54,
+    243,
+    1224,
+    2357,
+    2953,
+    4664,
 )
-"""Greedy cover over a 6000-seed baseline: together these fire every
-target below.
+"""Greedy cover over a 5000-seed baseline at v15: together these fire
+every target below.
 
 Re-baseline over at least `GATE_BASELINE_SEEDS`, which is measured
 rather than chosen -- see `required_gate_seeds`. A narrower window
@@ -62,13 +62,16 @@ reports its own sampling as a regression: at 400 seeds this map lost
 `OutOfBoundsRead` at depths 2 and 3, and seeds 400-800 reach both while
 800-1200 reach neither."""
 
-GATE_BASELINE_SEEDS = 2000
+GATE_BASELINE_SEEDS = 2100
 """Baseline window, from the rarest gated cell's measured rate.
 
-`(3, "halt", "OutOfBoundsRead")` occurs 14 times in 6000 cases, a rate
-of 0.0023, which needs 1977 seeds to clear a 1% miss probability. Recheck
-it with `required_gate_seeds` whenever a motif is added: a draw at 0.002
-needs nearly 2800, and the number moving is the signal."""
+`(3, "halt", "OutOfBoundsRead")` occurs 11 times in 5000 cases at v15,
+a rate of 0.0022, which needs 2094 seeds to clear a 1% miss probability
+(at v14 it was 14 in 6000 and 1977). Recheck it with `required_gate_seeds`
+whenever a motif is added: a draw at 0.002 needs nearly 2800, and the
+number moving is the signal. A 2000-seed probe of v15 put the rarest cell
+at 2/2000 and asked for 4606; the small sample, not the generator, was
+what moved."""
 
 GATE_EVENTS: FrozenSet[str] = frozenset(
     {
@@ -85,6 +88,8 @@ GATE_EVENTS: FrozenSet[str] = frozenset(
         "state-gas-from-reservoir",
         "state-gas-interleave",
         "state-gas-reservoir",
+        "tx-state-gas",
+        "tx-state-gas-spill",
     }
 )
 

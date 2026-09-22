@@ -47,7 +47,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 14
+GENERATOR_VERSION = 15
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -119,6 +119,8 @@ def reset_discarded_draws() -> None:
 
 
 PRECOMPILE_FUNDING_RATE = 0.25
+FIXED_COINBASE = 0xC0FFEE
+"""The fee recipient when the coinbase draw aliases it with nothing."""
 """Fraction of cases that seed the precompiles into the pre-state. The
 majority leave them absent, so a value-bearing call to one pays the
 account-creation charge -- the historically bug-productive path."""
@@ -422,8 +424,21 @@ def generate_fuzzer_output(
         )
         nonces[sender] = max(nonces[sender], tx_nonce) + 1
 
+    # Drawn last so the case is what it was before this axis existed.
+    kinds, shares = zip(*domains.coinbase_shares, strict=False)
+    coinbase_kind = rng.choices(kinds, weights=shares)[0]
+    # The manifest's weighting carries over: a precompile the fork
+    # introduced is drawn as the coinbase more often too.
+    pools: Dict[str, List[Address]] = {
+        "sender": sender_addresses,
+        "code": [Address(i) for i in contract_ints],
+        "precompile": [Address(p) for p in precompiles],
+    }
+    aliased = pools.get(coinbase_kind, [])
+    coinbase = rng.choice(aliased) if aliased else Address(FIXED_COINBASE)
+
     env = Environment(
-        fee_recipient=Address(0xC0FFEE),
+        fee_recipient=coinbase,
         gas_limit=domains.block_gas_limit,
         number=1,
         timestamp=1000,

@@ -158,6 +158,18 @@ class ValueDomains:
     """Transaction types the generator draws, with their share. The keys
     are `GENERATED_TX_TYPES`; a test pins that they agree, so the reach
     map's no-tx-type bucket and the draw cannot disagree."""
+    coinbase_shares: Tuple[Tuple[str, float], ...] = (
+        ("fixed", 0.4),
+        ("sender", 0.2),
+        ("code", 0.2),
+        ("precompile", 0.2),
+    )
+    """Who the block's fee recipient is: an address nothing else touches,
+    a transaction sender, a code account the transactions call, or a
+    precompile. The coinbase's balance change is a block access list
+    entry; aliasing it with an account the block also touches is where a
+    client's BAL merging and ordering is exercised, and a fixed coinbase
+    collapsed that axis to one value."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays

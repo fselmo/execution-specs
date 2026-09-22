@@ -220,6 +220,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "call_gas": Counter(),
         "call_kind": Counter(),
         "contract_storage": Counter(),
+        "coinbase": Counter(),
     }
 
     for seed in seeds:
@@ -235,6 +236,20 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
             if account.code
             and int.from_bytes(bytes(a), "big") >= _FIRST_CONTRACT
         }
+        coinbase = int.from_bytes(bytes(case.env.fee_recipient), "big")
+        keyed = {
+            int.from_bytes(bytes(a), "big")
+            for a, account in case.accounts.items()
+            if account.private_key is not None
+        }
+        if coinbase in keyed:
+            tally["coinbase"]["sender"] += 1
+        elif coinbase in contracts:
+            tally["coinbase"]["contract"] += 1
+        elif coinbase in precompiles:
+            tally["coinbase"]["precompile"] += 1
+        else:
+            tally["coinbase"]["fixed"] += 1
         for tx in case.transactions:
             target = (
                 int.from_bytes(bytes(tx.to), "big")
@@ -317,6 +332,7 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "call_value": ("zero", "nonzero"),
     "call_gas": ("forwarded", "bounded"),
     "contract_storage": ("seeded", "empty"),
+    "coinbase": ("fixed", "sender", "contract", "precompile"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""
