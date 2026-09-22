@@ -351,18 +351,43 @@ campaigns:
     producer: evmone-t8n
 ```
 
-Three of the four clients run Amsterdam fixtures through their BAL-parallel
-processors by default, so a divergence from a blocktest runner may be a bug
-in that client's parallel path. Localizing one with a trace can hide it:
-geth's `supportsParallelExecution` (`core/state_processor_parallel.go:51`
-at the devnet-8 pin `aa1f2fcf5`) returns false whenever a tracer is
-attached, so `evm blocktest --trace` runs the sequential path that did not
-diverge. Before trusting a trace diff, re-run the seed *without* tracing
-and confirm it still reproduces; a divergence that reproduces untraced and
-vanishes traced is in the parallel path, and that is the finding. Forcing
-geth sequential without a tracer needs a one-line fork flag
-(`DisableParallelExecution`); `--bal.executionmode` is not wired to `evm`
-at that pin.
+Geth's `evm blocktest` at the devnet-8 pin (`aa1f2fcf5`) does **not** run
+its BAL-parallel processor on a fixture at all: the access list travels
+beside the block rather than in its RLP, blocktest decodes only the RLP,
+and `supportsParallelExecution` returns false on the nil list for every
+test block. The branch `contrast-flags-devnet-8` (two commits on the pin,
+in `el-clients/go-ethereum-contrast`) decodes the fixture's
+`blockAccessList`, normalizes the zero-padded hex quantities the fixtures
+write and geth's strict decoders reject, attaches it to the block, and adds
+`--bal.sequential`. On that build the parallel path runs by default (probed:
+every decision `parallel=true`), a corrupted delivered list is rejected
+(`access list hash mismatch`, which the unpatched blocktest let through),
+and the flag is the contrast:
+
+```yaml
+  - name: geth
+    build:
+      recipe: geth
+      repo: <fork carrying the branch>
+      ref: contrast-flags-devnet-8
+      # The pin's dependencies do not build on Go 1.27; pin the toolchain.
+      command: "GOTOOLCHAIN=go1.25.5 go build -o {out} ./cmd/evm"
+    contrast_flags: [--bal.sequential]
+```
+
+The fixtures write every quantity zero-padded to whole bytes (`"0x00"`,
+`"0x03e8"`), headers included, and geth's blocktest accepts that in headers
+through `math.HexOrDecimal` types; its `bal` package decodes with the
+strict JSON-RPC quantity rule instead, which is why the branch normalizes
+the list before decoding. The fixture format documents no encoding for the
+list's quantities; that is the gap to close upstream.
+
+Localizing a geth divergence with a trace changes the path under test:
+`supportsParallelExecution` returns false whenever a tracer is attached, so
+`evm blocktest --trace` runs the sequential path that did not diverge.
+Before trusting a trace diff, re-run the seed *without* tracing and confirm
+it still reproduces; a divergence that reproduces untraced and vanishes
+traced is in the parallel path, and that is the finding.
 
 Each batch produces one verdict per client per fixture:
 
