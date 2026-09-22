@@ -77,9 +77,15 @@ KNOWN_BUILDS: Dict[str, BuildSource] = {
     ),
     "nethermind": BuildSource(
         repo="NethermindEth/nethermind",
+        # `-m:1` because parallel MSBuild nodes race each other writing the
+        # shared artifact directory: `GenerateDepsFile` fails with an
+        # IOException on a file another node holds, and the publish exits
+        # non-zero after building most of the tree. It has cost two
+        # multi-hour detours on the same failure; a build this size gains
+        # little from the extra nodes.
         command=(
             "dotnet publish src/Nethermind/Nethermind.Test.Runner "
-            "-c release -o {out}.publish --sc false "
+            "-c release -o {out}.publish --sc false -m:1 "
             "&& ln -sf {out}.publish/nethtest {out}"
         ),
         binary="nethtest",
