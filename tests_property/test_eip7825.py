@@ -188,7 +188,7 @@ def validate(fork_name: str, transactions: ModuleType, tx: Any) -> Any:
         raise ValueError(f"unhandled fork: {fork_name}")
 
 
-def test_cap_constant_matches_eip(transactions: ModuleType) -> None:
+def test_cap_constant_matches_eip(fork_name: str) -> None:
     """
     The spec's cap constant equals the value EIP-7825 fixes.
 
@@ -200,7 +200,9 @@ def test_cap_constant_matches_eip(transactions: ModuleType) -> None:
     Grounding: EIP prose. Non-circular because the expected value is taken
     from the EIP text, not read back from the spec.
     """
-    assert transactions.TX_MAX_GAS_LIMIT == Uint(EIP_7825_GAS_CAP)
+    # The constant lives on `GasCosts` since #3534; the EIP fixes the value.
+    gas = importlib.import_module(f"ethereum.forks.{fork_name}.vm.gas")
+    assert gas.GasCosts.TX_MAX_GAS_LIMIT == Uint(EIP_7825_GAS_CAP)
 
 
 @pytest.mark.parametrize("tx_type", TX_TYPES)
