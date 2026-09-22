@@ -319,7 +319,14 @@ def test_a_client_disagreeing_with_itself_is_a_contrast_mismatch(
     )
     # Primary fails {1, 4}, contrast fails {0, 2, 4}: they differ on 0, 1, 2.
     assert state.counts["contrast-mismatch"] == 3
-    assert state.contrast == {"nethermind": {"compared": 6, "mismatches": 3}}
+    assert state.contrast == {
+        "nethermind": {
+            "compared": 6,
+            "mismatches": 3,
+            "primary_failed": 2,
+            "contrast_failed": 3,
+        }
+    }
     # The panel still sees only the primary run's two failures.
     assert state.counts["divergence"] == 2 and state.counts["agreed"] == 4
     reasons = sorted(
@@ -339,7 +346,7 @@ def test_a_client_disagreeing_with_itself_is_a_contrast_mismatch(
     verdicts = json.loads((bundle / "verdicts.json").read_text())
     assert set(verdicts) == {"nethermind", "nethermind (contrast)"}
     report = (tmp_path / "out" / "report.md").read_text()
-    assert "| nethermind | 6 | 3 |" in report
+    assert "| nethermind | 6 | 2 | 3 | 3 |" in report
     assert "| contrast mismatches (client vs itself) | 3 |" in report
 
 
