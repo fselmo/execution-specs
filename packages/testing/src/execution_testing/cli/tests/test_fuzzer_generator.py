@@ -173,3 +173,68 @@ def test_transactions_fit_the_block_gas_limit() -> None:
             out.env.gas_limit
         )
         assert out.transactions
+
+
+def test_the_coinbase_aliases_every_kind_of_account() -> None:
+    """
+    The fee recipient is drawn from four pools; a sender coinbase is one
+    of that case's own senders and a code coinbase one of its contracts,
+    so the alias is real, not a lookalike address.
+    """
+    from execution_testing.cli.fuzzer_bridge.generator import FIXED_COINBASE
+    from execution_testing.eip_properties import fuzz_precompile_targets
+    from execution_testing.forks import Amsterdam
+
+    precompiles = set(fuzz_precompile_targets(Amsterdam))
+    seen = set()
+    for seed in range(120):
+        case = generate_fuzzer_output(Amsterdam, seed)
+        coinbase = int.from_bytes(bytes(case.env.fee_recipient), "big")
+        senders = {
+            int.from_bytes(bytes(a), "big")
+            for a, acc in case.accounts.items()
+            if acc.private_key is not None
+        }
+        contracts = {
+            int.from_bytes(bytes(a), "big")
+            for a, acc in case.accounts.items()
+            if acc.code and acc.private_key is None
+        }
+        if coinbase in senders:
+            seen.add("sender")
+        elif coinbase in contracts:
+            seen.add("code")
+        elif coinbase in precompiles:
+            seen.add("precompile")
+        else:
+            assert coinbase == FIXED_COINBASE
+            seen.add("fixed")
+    assert seen == {"fixed", "sender", "code", "precompile"}
+
+
+def test_a_filled_case_carries_the_fork_s_system_contracts() -> None:
+    """
+    The fill merges the fork's predeploys into the pre-state, so a client
+    routing BLOCKHASH or the beacon root through a system contract's
+    storage adds an access the block access list can see. This pins it:
+    without the contracts the phantom read would be undetectable.
+    """
+    from execution_testing.cli.fuzzer_bridge.campaign import fill_case
+    from execution_testing.client_clis.clis.execution_specs import (
+        ExecutionSpecsTransitionTool,
+    )
+    from execution_testing.forks import Amsterdam
+
+    fixture = fill_case(
+        generate_fuzzer_output(Amsterdam, 3),
+        Amsterdam,
+        ExecutionSpecsTransitionTool(),
+    )
+    pre = {int(address, 16) for address in fixture["pre"]}
+    system = {
+        int.from_bytes(bytes(a), "big") for a in Amsterdam.system_contracts()
+    }
+    assert system and system <= pre
+    # The predeploy mapping is keyed by int, not Address.
+    predeploys = {int(a) for a in Amsterdam.pre_allocation_blockchain()}
+    assert predeploys <= pre
