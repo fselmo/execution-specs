@@ -23,6 +23,7 @@ from .differential_cli import (
     differential,
     load_config_or_fail,
     name_clients,
+    resolve_campaign,
     resolve_campaign_clients,
 )
 from .distill_cli import distill
@@ -159,14 +160,18 @@ def campaign(
     config = load_config_or_fail(config_path)
     campaign_config = campaign_or_fail(config, name)
     assert campaign_config is not None
-    clients = resolve_campaign_clients(config, campaign_config.clients)
+    resolved = resolve_campaign(config, campaign_config.clients)
+    clients = {n: r.binary for n, r in resolved.items()}
+    sources = {n: r.source for n, r in resolved.items()}
     fork = next(f for f in get_forks() if f.name() == campaign_config.fork)
     producer_name = producer_name or campaign_config.producer
-    producer = (
-        resolve_campaign_clients(config, [producer_name])[producer_name]
-        if producer_name
-        else None
-    )
+    producer = None
+    if producer_name:
+        producer_client = resolve_campaign(config, [producer_name])[
+            producer_name
+        ]
+        producer = producer_client.binary
+        sources[f"producer ({producer_name})"] = producer_client.source
     options = CampaignOptions(
         fork=fork,
         clients=clients,
@@ -192,6 +197,7 @@ def campaign(
         },
         producer=producer,
         producer_name=producer_name or "producer",
+        sources=sources,
     )
     if producer is not None:
         click.echo(

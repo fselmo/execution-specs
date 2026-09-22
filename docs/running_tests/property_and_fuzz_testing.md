@@ -379,6 +379,33 @@ lane, once a runner for it exists:
     contrast_flags: []
 ```
 
+A runner change like this is carried as a **patch series**, not a fork
+pin: `patches:` on the client names `git format-patch` files (paths
+relative to `fuzz.yaml`) that the build applies with `git am` on the
+pinned upstream commit. The series hash joins the commit in the cache key
+and in `manifest.json` (`sources`: `build@<commit>+series:<hash>`), so
+every verdict names both. A hunk outside the recipe's runner paths
+(`cmd/evm/` and `tests/` for geth, `cmd/evm/` for erigon,
+`ethereum/evmtool/` and `ethereum/referencetests/` for besu,
+`src/Nethermind/Nethermind.Test.Runner/` for nethermind) fails the build:
+the series may change the runner, never the client. A series that stops
+applying when the pin moves is the signal that upstream touched the
+runner; rebase it then, on our schedule. The series is also the upstream
+ask -- the diff we run daily against the devnet branch.
+
+```yaml
+  - name: geth
+    build:
+      recipe: geth
+      ref: glamsterdam-devnet-8
+      command: "GOTOOLCHAIN=go1.25.5 go build -o {out} ./cmd/evm"
+      patches:
+        - patches/geth/0001-cmd-evm-add-bal.sequential-to-blocktest.patch
+        - patches/geth/0002-tests-attach-a-fixture-s-block-access-list-to-the-bl.patch
+    runner_flags: [--bal.sequential]
+    contrast_flags: []
+```
+
 The same holds, by construction rather than by probe, for erigon and besu
 at their pins: erigon's `IGNORE_BAL` gates staged sync, which its
 `blockrunner.go` never imports, and besu's reference-test schedule passes

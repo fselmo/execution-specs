@@ -10,7 +10,7 @@ NAME` rather than a chain of flags.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -38,6 +38,15 @@ class BuildSource(BaseModel):
     which echoes the binary's name, so the name must be the canonical one
     (`evm`, `evmtool`, `nethtest`, ...).
     """
+    patches: List[Path] = Field(default_factory=list)
+    """A series of `git format-patch` files applied with `git am` on the
+    pinned commit before the build, paths relative to `fuzz.yaml`. The
+    series is what we run daily against the client's devnet branch, and
+    doubles as the upstream ask. A hunk outside `patch_paths` fails the
+    build: the series may change the runner, never the client."""
+    patch_paths: Tuple[str, ...] = ()
+    """Path prefixes a series may touch; the recipe supplies them. Empty
+    means no series is accepted."""
 
 
 KNOWN_BUILDS: Dict[str, BuildSource] = {
@@ -45,6 +54,7 @@ KNOWN_BUILDS: Dict[str, BuildSource] = {
         repo="ethereum/go-ethereum",
         command="go build -o {out} ./cmd/evm",
         binary="evm",
+        patch_paths=("cmd/evm/", "tests/"),
     ),
     "erigon": BuildSource(
         repo="erigontech/erigon",
@@ -52,6 +62,7 @@ KNOWN_BUILDS: Dict[str, BuildSource] = {
             "make BUILD_TAGS=nosqlite,noboltdb,nosilkworm evm "
             "&& cp build/bin/evm {out}"
         ),
+        patch_paths=("cmd/evm/",),
         binary="evm",
     ),
     "besu": BuildSource(
@@ -62,6 +73,7 @@ KNOWN_BUILDS: Dict[str, BuildSource] = {
             "&& ln -sf {out}.dist/bin/evmtool {out}"
         ),
         binary="evmtool",
+        patch_paths=("ethereum/evmtool/", "ethereum/referencetests/"),
     ),
     "nethermind": BuildSource(
         repo="NethermindEth/nethermind",
@@ -71,6 +83,7 @@ KNOWN_BUILDS: Dict[str, BuildSource] = {
             "&& ln -sf {out}.publish/nethtest {out}"
         ),
         binary="nethtest",
+        patch_paths=("src/Nethermind/Nethermind.Test.Runner/",),
     ),
     "evmone": BuildSource(
         repo="ethereum/evmone",
@@ -130,6 +143,9 @@ class ClientConfig(BaseModel):
             self.build.repo = self.build.repo or known.repo
             self.build.command = self.build.command or known.command
             self.build.binary = self.build.binary or known.binary
+            self.build.patch_paths = (
+                self.build.patch_paths or known.patch_paths
+            )
             missing = [
                 name
                 for name in ("repo", "command", "binary")
@@ -230,7 +246,15 @@ def load_fuzz_config(path: Optional[Path] = None) -> FuzzConfig:
     try:
         with path.open() as handle:
             data = yaml.safe_load(handle) or {}
-        return FuzzConfig.model_validate(data)
+        config = FuzzConfig.model_validate(data)
+        for client in config.clients:
+            if client.build is not None:
+                # Series paths are written relative to the file naming them.
+                client.build.patches = [
+                    (path.parent / p.expanduser()).resolve()
+                    for p in client.build.patches
+                ]
+        return config
     except yaml.YAMLError as exc:
         raise ValueError(f"{path}: {exc}") from exc
     except ValidationError as exc:

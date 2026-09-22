@@ -202,3 +202,25 @@ def test_every_known_build_has_a_canonical_binary_name() -> None:
     for name, build in KNOWN_BUILDS.items():
         assert build.repo and build.command and build.binary, name
         assert "{out}" in build.command, name
+
+
+def test_series_paths_resolve_relative_to_the_config_file(
+    tmp_path: Path,
+) -> None:
+    """A series is named beside fuzz.yaml; the recipe supplies the paths."""
+    (tmp_path / "patches").mkdir()
+    (tmp_path / "patches" / "0001-x.patch").write_text("")
+    cfg_path = tmp_path / "fuzz.yaml"
+    cfg_path.write_text(
+        "clients:\n"
+        "  - name: geth\n"
+        "    build:\n"
+        "      recipe: geth\n"
+        "      ref: abc\n"
+        "      patches: [patches/0001-x.patch]\n"
+    )
+    cfg = load_fuzz_config(cfg_path)
+    build = cfg.client("geth").build
+    assert build is not None
+    assert build.patches == [(tmp_path / "patches" / "0001-x.patch").resolve()]
+    assert build.patch_paths == ("cmd/evm/", "tests/")
