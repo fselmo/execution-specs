@@ -7,7 +7,7 @@ range, so a corpus entry can be reproduced and a report can be trusted.
 """
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
@@ -33,6 +33,9 @@ class RunManifest:
     count: int
     created: str
     producer: str = ""
+    sources: Dict[str, str] = field(default_factory=dict)
+    """Where each client binary came from: a path, or `build@<base commit>`
+    plus `+series:<hash>` when a patch series was applied on it."""
     """The transition tool that filled the cases when it was not EELS,
     with its version: a four-month-old evmone would have produced 22%
     "divergences" that were the producer, not the clients."""

@@ -979,6 +979,8 @@ class CampaignOptions:
     producer: Optional[Path] = None
     """A transition tool that fills instead of EELS; see `escalate`."""
     producer_name: str = "producer"
+    sources: Mapping[str, str] = field(default_factory=dict)
+    """Per client, where its binary came from, for the manifest."""
 
 
 def _seed_of(fixture_name: str) -> int:
@@ -1126,6 +1128,7 @@ def run_campaign(
         created=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         producer=producer_version
         and f"{options.producer_name}: {producer_version}",
+        sources=dict(options.sources),
     ).write(output / "manifest.json")
 
     def fill_spec(fixture_name: str) -> Tuple[Dict[str, Any], List[str]]:

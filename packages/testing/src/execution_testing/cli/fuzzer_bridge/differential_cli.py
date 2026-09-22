@@ -11,7 +11,7 @@ import click
 from execution_testing.forks import get_forks
 
 from .baseline import StaleClientError
-from .clients import resolve_client
+from .clients import PatchOutsideRunnerError, ResolvedClient, resolve_client
 from .config import CampaignConfig, FuzzConfig, load_fuzz_config
 from .differential import differential_fuzz
 from .generator import GENERATOR_VERSION
@@ -37,17 +37,26 @@ def name_clients(paths: Sequence[Path]) -> Dict[str, Path]:
     return names
 
 
+def resolve_campaign(
+    config: FuzzConfig, names: Sequence[str]
+) -> Dict[str, ResolvedClient]:
+    """Resolve campaign client names, building sources if needed."""
+    resolved: Dict[str, ResolvedClient] = {}
+    for name in names:
+        try:
+            resolved[name] = resolve_client(config.client(name))
+        except subprocess.CalledProcessError as exc:
+            raise click.ClickException(f"building {name}: {exc}") from exc
+        except (PatchOutsideRunnerError, RuntimeError) as exc:
+            raise click.ClickException(str(exc)) from exc
+    return resolved
+
+
 def resolve_campaign_clients(
     config: FuzzConfig, names: Sequence[str]
 ) -> Dict[str, Path]:
     """Map campaign client names to binaries, building sources if needed."""
-    clients: Dict[str, Path] = {}
-    for name in names:
-        try:
-            clients[name] = resolve_client(config.client(name)).binary
-        except subprocess.CalledProcessError as exc:
-            raise click.ClickException(f"building {name}: {exc}") from exc
-    return clients
+    return {n: r.binary for n, r in resolve_campaign(config, names).items()}
 
 
 def _pick(flag: Optional[T], campaign_value: Optional[T], default: T) -> T:

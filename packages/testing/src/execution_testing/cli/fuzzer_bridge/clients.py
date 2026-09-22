@@ -7,11 +7,12 @@ directory, so switching a client between branches never rebuilds what is
 already there and a run can always say which commit it compared against.
 """
 
+import hashlib
 import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple
+from typing import List, Sequence, Tuple
 
 from execution_testing.client_clis import FixtureConsumerTool, TransitionTool
 
@@ -50,6 +51,39 @@ class ResolvedClient:
     name: str
     binary: Path
     source: str
+
+
+class PatchOutsideRunnerError(Exception):
+    """A series hunk lands outside the client's runner paths."""
+
+
+def series_hash(patches: Sequence[Path]) -> str:
+    """A short digest of the series' bytes, in order; part of the cache key."""
+    digest = hashlib.sha256()
+    for patch in patches:
+        digest.update(patch.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+def patched_files(patch: Path) -> List[str]:
+    """Paths a `git format-patch` file touches, from its diff headers."""
+    return [
+        line.split(" b/", 1)[0][len("diff --git a/") :]
+        for line in patch.read_text().splitlines()
+        if line.startswith("diff --git a/")
+    ]
+
+
+def paths_outside(
+    patches: Sequence[Path], allowed: Sequence[str]
+) -> List[str]:
+    """Touched paths no allowed prefix covers, as `patch: path` strings."""
+    return [
+        f"{patch.name}: {path}"
+        for patch in patches
+        for path in patched_files(patch)
+        if not any(path.startswith(prefix) for prefix in allowed)
+    ]
 
 
 def _git(repo_dir: Path, *args: str) -> str:
@@ -101,11 +135,23 @@ def ensure_built(
     else:
         commit = marker.read_text().strip()
 
-    out = root / commit / build.binary
+    build_id = commit
+    if build.patches:
+        outside = paths_outside(build.patches, build.patch_paths)
+        if outside:
+            raise PatchOutsideRunnerError(
+                f"client {name!r}: the series touches paths outside the "
+                f"runner ({', '.join(build.patch_paths) or 'none allowed'}): "
+                + "; ".join(outside)
+            )
+        build_id = f"{commit}+{series_hash(build.patches)}"
+    out = root / build_id / build.binary
     if not out.exists():
         if not build_missing:
             raise NotBuiltError(name)
         _git(repo_dir, "checkout", "--quiet", "--detach", commit)
+        if build.patches:
+            _apply_series(name, repo_dir, build.patches)
         out.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             build.command.format(out=out),
@@ -113,7 +159,45 @@ def ensure_built(
             cwd=repo_dir,
             check=True,
         )
-    return out, commit
+    return out, build_id
+
+
+def _apply_series(name: str, repo_dir: Path, patches: Sequence[Path]) -> None:
+    """
+    Apply the series on the pinned commit, in order.
+
+    A patch that no longer applies is the signal that upstream touched
+    the runner under the pin: the series is rebased on our schedule, not
+    silently skipped.
+    """
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_dir),
+            "-c",
+            "user.name=fuzz",
+            "-c",
+            "user.email=fuzz@eels",
+            "-c",
+            "commit.gpgsign=false",
+            "am",
+            "--quiet",
+            *[str(p) for p in patches],
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        subprocess.run(
+            ["git", "-C", str(repo_dir), "am", "--abort"],
+            capture_output=True,
+        )
+        raise RuntimeError(
+            f"client {name!r}: the patch series does not apply on the "
+            f"pinned commit -- upstream touched the runner; rebase the "
+            f"series. git am said: {result.stderr.strip()[:400]}"
+        )
 
 
 def resolve_client(
@@ -126,10 +210,12 @@ def resolve_client(
             raise FileNotFoundError(f"client {client.name!r}: {path}")
         return ResolvedClient(client.name, path, "path")
     assert client.build is not None
-    binary, commit = ensure_built(
+    binary, build_id = ensure_built(
         client.name, client.build, update=update, build_missing=build_missing
     )
-    return ResolvedClient(client.name, binary, f"build@{commit[:12]}")
+    commit, _, series = build_id.partition("+")
+    source = f"build@{commit[:12]}" + (f"+series:{series}" if series else "")
+    return ResolvedClient(client.name, binary, source)
 
 
 def binary_version(binary: Path) -> str:
