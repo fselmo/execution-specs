@@ -387,7 +387,8 @@ and in `manifest.json` (`sources`: `build@<commit>+series:<hash>`), so
 every verdict names both. A hunk outside the recipe's runner paths
 (`cmd/evm/` and `tests/` for geth, `cmd/evm/` for erigon,
 `ethereum/evmtool/` and `ethereum/referencetests/` for besu,
-`src/Nethermind/Nethermind.Test.Runner/` for nethermind) fails the build:
+`src/Nethermind/Nethermind.Test.Runner/` plus `Ethereum.Test.Base/` for
+nethermind, where the runner's block construction lives) fails the build:
 the series may change the runner, never the client. A series that stops
 applying when the pin moves is the signal that upstream touched the
 runner; rebase it then, on our schedule. The series is also the upstream

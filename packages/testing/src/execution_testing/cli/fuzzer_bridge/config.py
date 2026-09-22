@@ -83,7 +83,13 @@ KNOWN_BUILDS: Dict[str, BuildSource] = {
             "&& ln -sf {out}.publish/nethtest {out}"
         ),
         binary="nethtest",
-        patch_paths=("src/Nethermind/Nethermind.Test.Runner/",),
+        # Attaching a fixture's access list to the block under test lives in
+        # the test base the runner is built on, so that one path is allowed
+        # beside the runner's own.
+        patch_paths=(
+            "src/Nethermind/Nethermind.Test.Runner/",
+            "src/Nethermind/Ethereum.Test.Base/",
+        ),
     ),
     "evmone": BuildSource(
         repo="ethereum/evmone",
