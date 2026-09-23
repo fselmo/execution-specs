@@ -540,6 +540,63 @@ def event_rate_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
     return record
 
 
+def bal_space_record(fork: "Fork") -> Dict[str, Any]:
+    """
+    One trendable reach-log record of the BAL space and what has entered
+    it.
+
+    Recorded before the first block-sequence shape exists, so the shapes
+    that land later are measured against a number written down in advance
+    rather than against whatever the space happened to be once they were
+    written. The size is a property of the fork and the derivation, not of
+    a seed range, so no seeds are filled to produce it.
+    """
+    from datetime import datetime, timezone
+
+    from execution_testing.cli.fuzzer_bridge.bal_reach import (
+        bal_reach_space,
+        entry_kinds,
+        entry_reasons,
+        unwitnessed,
+    )
+    from execution_testing.cli.fuzzer_bridge.generator import (
+        GENERATOR_VERSION,
+    )
+    from execution_testing.cli.mutation.reach_log import eels_commit
+
+    cells, pairs = bal_reach_space(fork)
+    return {
+        "kind": "bal-space",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "eels_commit": eels_commit(),
+        "fork": fork.name(),
+        "generator_version": GENERATOR_VERSION,
+        "reasons": len(entry_reasons(fork)),
+        "kinds": sorted(entry_kinds(fork)),
+        "cells": len(cells),
+        "alias_pairs": len(pairs),
+        # Nothing supplies reached cells yet, so a run that recorded
+        # coverage here would be recording a claim. Written explicitly so
+        # the first non-zero entry is visibly the observation source
+        # landing, not a silent change of meaning.
+        "cells_reached": 0,
+        "alias_pairs_reached": 0,
+        "unwitnessed_reasons": unwitnessed(fork),
+    }
+
+
+def render_bal_space(record: Dict[str, Any]) -> str:
+    """Render one BAL-space record as the line a shape is measured against."""
+    return (
+        f"BAL space (generator v{record['generator_version']}, "
+        f"{record['fork']}): {record['reasons']} reasons, "
+        f"{record['cells']} cells "
+        f"({record['cells_reached']} reached), "
+        f"{record['alias_pairs']} alias pairs "
+        f"({record['alias_pairs_reached']} reached)"
+    )
+
+
 def render_event_rates(record: Dict[str, Any]) -> str:
     """Render one event-rate record as a small table, flagging the floor."""
     seeds = record["seeds"]
