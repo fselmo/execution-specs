@@ -267,6 +267,24 @@ def binary_version(
     )
 
 
+def verify_client(client: ClientConfig) -> Tuple[bool, str]:
+    """
+    Whether ``client`` can run right now, and the line that says so.
+
+    `fuzz clients` prints that a client was declared and never built, then
+    exits 0, so a campaign started from a script runs without it and the
+    gap only shows in the report: `besu-gate`, the positive control of an
+    overnight run, was declared and unbuilt on the morning of that run.
+    This never builds -- it answers about the pool as it stands.
+    """
+    try:
+        resolved = resolve_client(client, build_missing=False)
+        version = binary_version(resolved.binary)
+    except Exception as exc:  # noqa: BLE001 - the reason is the answer
+        return False, str(exc)
+    return True, f"{resolved.source:<18} {resolved.binary}  {version}"
+
+
 def client_status(client: ClientConfig, *, update: bool = False) -> str:
     """
     One status line: source, binary, and version -- or what is wrong.
