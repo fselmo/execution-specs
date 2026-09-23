@@ -148,3 +148,52 @@ def test_the_space_pairs_a_reason_only_with_kinds_it_can_cause() -> None:
     }
     assert {kind for kind, _ in sload} == {"storage_read"}
     assert pairs and all(a < b for a, b in pairs)
+
+
+def test_every_derived_reason_has_a_witness_family() -> None:
+    """
+    A reason nobody can confirm is a decision owed. An empty list here
+    means every family the fork actually uses is covered; a fork growing
+    a reason in a new module fails this and forces the call.
+    """
+    from ..fuzzer_bridge.bal_reach import unwitnessed
+
+    assert unwitnessed(Amsterdam) == []
+
+
+def test_an_unwitnessed_reason_cannot_be_counted_reached() -> None:
+    """
+    The rule `EVENT_WITNESSES` spells out, carried onto this axis: a cell
+    subtracted on no evidence reports coverage nothing confirms, and a
+    false green never gets worked on the way a gap does.
+    """
+    from ..fuzzer_bridge.bal_reach import unreached, witness_kind
+
+    assert witness_kind("vm.instructions.storage.sload") == "trace"
+    assert witness_kind("fork.process_withdrawals") == "behavioral"
+    assert witness_kind("somewhere.new.reason") == ""
+
+    witnessed = ("vm.instructions.storage.sload", "storage_read", "success")
+    invented = ("somewhere.new.reason", "storage_read", "success")
+    cells, _ = unreached(Amsterdam, [witnessed, invented])
+    assert witnessed not in cells
+    # The invented one is not in the derived space at all, so the guard
+    # is that claiming it changes nothing rather than adding a cell.
+    assert invented not in cells
+
+
+def test_the_tracker_reports_the_whole_space_before_any_case() -> None:
+    """
+    A fresh run has reached nothing, so the map is the full space -- the
+    honest first state for an instrument built before its shapes.
+    """
+    from ..fuzzer_bridge.signature_baseline import NoveltyTracker
+
+    tracker = NoveltyTracker()
+    cells, pairs = bal_reach_space(Amsterdam)
+    assert len(tracker.unreached_bal_cells(Amsterdam)) == len(cells)
+    assert len(tracker.unreached_bal_aliases(Amsterdam)) == len(pairs)
+    tracker.observe_bal(
+        cells=[("vm.instructions.storage.sload", "storage_read", "success")]
+    )
+    assert len(tracker.unreached_bal_cells(Amsterdam)) == len(cells) - 1
