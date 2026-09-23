@@ -170,6 +170,30 @@ class ValueDomains:
     entry; aliasing it with an account the block also touches is where a
     client's BAL merging and ordering is exercised, and a fixed coinbase
     collapsed that axis to one value."""
+    withdrawal_rate: float = 0.0
+    """Share of cases whose block carries withdrawals. `fork_domains` sets
+    it from the fork, so a fork without withdrawals never draws one."""
+    withdrawal_recipient_shares: Tuple[Tuple[str, float], ...] = (
+        ("nonexistent", 0.2),
+        ("precompile", 0.2),
+        ("coinbase", 0.2),
+        ("sender", 0.2),
+        ("code", 0.2),
+        ("system_contract", 0.2),
+    )
+    """Who a withdrawal credits: an address nothing else touches, a
+    precompile, the block's coinbase, a transaction sender, a code account
+    the transactions call, or one of the fork's system contracts.
+    Withdrawals share their block access index with the post-block request
+    calls, so a system contract is the only recipient that can be entered
+    twice at one index -- credited by the withdrawal and read and written
+    by the request call. A coinbase or sender recipient appears at two
+    indices instead, which is a different thing."""
+    withdrawal_zero_amount_share: float = 0.25
+    """Share of withdrawals of zero. A zero withdrawal touches its
+    recipient without changing it, which the access list must still
+    record -- the entry most easily dropped."""
+    max_withdrawals: int = 4
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays
@@ -325,6 +349,7 @@ def fork_domains(
         reservoir_tx_gas=reservoir_tx_gas,
         block_gas_limit=limit,
         salt_domain=tuple(range(4)),
+        withdrawal_rate=0.3 if fork.header_withdrawals_required() else 0.0,
     )
 
 

@@ -108,6 +108,17 @@ class FuzzerTransactionInput(BaseModel):
     )
 
 
+class FuzzerWithdrawalInput(BaseModel):
+    """One withdrawal in the case's block; `amount` is in Gwei."""
+
+    index: HexNumber
+    validator_index: HexNumber = Field(..., alias="validatorIndex")
+    address: Address
+    amount: HexNumber
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class FuzzerOutput(CamelModel):
     """
     Main fuzzer output format v2.
@@ -128,3 +139,4 @@ class FuzzerOutput(CamelModel):
     transactions: List[FuzzerTransactionInput]
     env: Environment
     parent_beacon_block_root: Hash | None = None
+    withdrawals: List[FuzzerWithdrawalInput] = Field(default_factory=list)

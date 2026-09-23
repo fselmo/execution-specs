@@ -178,7 +178,13 @@ def test_role_tagging_moves_every_reference_and_no_byte_of_layout() -> None:
         ExecutionSpecsTransitionTool,
     )
 
-    case = _single_tx_case()
+    # Any case whose first transaction calls an account in its pre-state:
+    # which seed that is changes with every generator version.
+    case = next(
+        candidate
+        for candidate in (_single_tx_case(seed) for seed in range(50))
+        if candidate.transactions[0].to in candidate.accounts
+    )
     tagged = role_tagged(case)
     old_contracts = sorted(
         a for a, acc in case.accounts.items() if acc.private_key is None

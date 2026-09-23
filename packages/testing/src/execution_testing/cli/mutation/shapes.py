@@ -251,4 +251,33 @@ SHAPES: Dict[str, Shape] = {
             ),
         ),
     ),
+    "withdrawal-zero-untouched": Shape(
+        name="withdrawal-zero-untouched",
+        description=(
+            "REACH PROBE, NOT A CLIENT MODEL. A zero withdrawal is skipped "
+            "instead of crediting nothing, so its recipient is never "
+            "touched and drops out of the block access list, while the "
+            "state root is unchanged -- the empty account would have been "
+            "deleted anyway. Only the list's hash can see it. No client is "
+            "known to have had this defect; it measures whether the "
+            "withdrawal draws reach the entry most easily dropped."
+        ),
+        edits=(
+            Edit(
+                module=f"{_AMSTERDAM}/fork.py",
+                find=(
+                    "        create_ether(wd_state, wd.address, "
+                    "U256(wd.amount) * GWEI_TO_WEI)\n"
+                ),
+                replace=(
+                    "        if wd.amount != 0:\n"
+                    "            create_ether(\n"
+                    "                wd_state, wd.address, "
+                    "U256(wd.amount) * GWEI_TO_WEI\n"
+                    "            )\n"
+                ),
+            ),
+        ),
+        models_client_bug=False,
+    ),
 }

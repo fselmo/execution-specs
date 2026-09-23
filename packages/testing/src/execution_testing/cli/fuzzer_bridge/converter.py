@@ -13,7 +13,7 @@ Key Responsibilities:
    BEFORE model_post_init
 """
 
-from typing import Dict
+from typing import Dict, List
 
 from execution_testing.base_types import Account, Address, Hash, HexNumber
 from execution_testing.forks import Fork
@@ -23,6 +23,7 @@ from execution_testing.test_types import (
     AuthorizationTuple,
     Environment,
     Transaction,
+    Withdrawal,
 )
 from execution_testing.test_types.account_types import EOA
 
@@ -255,6 +256,15 @@ def blockchain_test_from_fuzzer(
         block_time,
         env,
         fuzzer_output.parent_beacon_block_root,
+        withdrawals=[
+            Withdrawal(
+                index=w.index,
+                validator_index=w.validator_index,
+                address=w.address,
+                amount=w.amount,
+            )
+            for w in fuzzer_output.withdrawals
+        ],
     )
 
     return BlockchainTest(
@@ -325,6 +335,7 @@ def _distribute_transactions_to_blocks(
     block_time: int,
     base_env: Environment,
     parent_beacon_block_root: Hash | None,
+    withdrawals: List[Withdrawal] | None = None,
 ) -> list[Block]:
     """
     Distribute transactions across multiple blocks.
@@ -336,6 +347,7 @@ def _distribute_transactions_to_blocks(
         block_time: Seconds between blocks
         base_env: Base environment for first block
         parent_beacon_block_root: Beacon root (only for first block)
+        withdrawals: Withdrawals for the last block, if any
 
     Returns:
         List of Block objects
@@ -376,6 +388,11 @@ def _distribute_transactions_to_blocks(
                 fee_recipient=base_env.fee_recipient,
                 parent_beacon_block_root=parent_beacon_block_root
                 if i == 0
+                else None,
+                # Withdrawals go on the last block, after every transaction
+                # the case drew, which is where the spec processes them.
+                withdrawals=withdrawals
+                if withdrawals and i == len(tx_distribution) - 1
                 else None,
             )
         )

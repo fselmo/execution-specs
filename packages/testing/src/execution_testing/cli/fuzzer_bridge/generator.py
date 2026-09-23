@@ -41,13 +41,14 @@ from .models import (
     FuzzerAuthorizationInput,
     FuzzerOutput,
     FuzzerTransactionInput,
+    FuzzerWithdrawalInput,
 )
 
 # Contract bodies and calldata come from the shared strategy library
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 15
+GENERATOR_VERSION = 16
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -232,6 +233,57 @@ def _authorizations(
             # generated while contributing nothing.
             nonces[authority] += 1
     return out
+
+
+WITHDRAWAL_RECIPIENT_BASE = 0x2F000
+"""Where a withdrawal to an address nothing else touches is sent: a
+dedicated range, so the recipient is guaranteed absent from the
+pre-state and from every other role in the case."""
+
+
+def _withdrawals(
+    rng: random.Random,
+    domains: ValueDomains,
+    coinbase: Address,
+    pools: Dict[str, List[Address]],
+) -> List[FuzzerWithdrawalInput]:
+    """
+    The block's withdrawals, drawn once the coinbase is known.
+
+    A recipient can be the coinbase, so the coinbase is drawn first. An
+    empty pool falls back to an untouched address rather than skipping the
+    draw, so a recipient kind can never silently turn into no withdrawal at
+    all.
+    """
+    if rng.random() >= domains.withdrawal_rate:
+        return []
+    kinds, shares = zip(*domains.withdrawal_recipient_shares, strict=False)
+    drawn = []
+    for index in range(rng.randint(1, domains.max_withdrawals)):
+        kind = rng.choices(kinds, weights=shares)[0]
+        fresh = Address(WITHDRAWAL_RECIPIENT_BASE + index)
+        if kind == "coinbase":
+            recipient = coinbase
+        elif kind == "nonexistent":
+            recipient = fresh
+        elif kind in ("sender", "code", "precompile", "system_contract"):
+            pool = pools[kind]
+            recipient = rng.choice(pool) if pool else fresh
+        else:
+            raise ValueError(f"unknown withdrawal recipient kind {kind!r}")
+        if rng.random() < domains.withdrawal_zero_amount_share:
+            amount = 0
+        else:
+            amount = rng.randrange(1, 10**9)
+        drawn.append(
+            FuzzerWithdrawalInput(
+                index=HexNumber(index),
+                validator_index=HexNumber(rng.randrange(0, 2**16)),
+                address=recipient,
+                amount=HexNumber(amount),
+            )
+        )
+    return drawn
 
 
 def generate_fuzzer_output(
@@ -437,6 +489,13 @@ def generate_fuzzer_output(
     aliased = pools.get(coinbase_kind, [])
     coinbase = rng.choice(aliased) if aliased else Address(FIXED_COINBASE)
 
+    withdrawals = _withdrawals(
+        rng,
+        domains,
+        coinbase,
+        {**pools, "system_contract": list(fork.system_contracts())},
+    )
+
     env = Environment(
         fee_recipient=coinbase,
         gas_limit=domains.block_gas_limit,
@@ -453,4 +512,5 @@ def generate_fuzzer_output(
         accounts=accounts,
         transactions=transactions,
         env=env,
+        withdrawals=withdrawals,
     )
