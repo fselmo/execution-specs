@@ -209,6 +209,7 @@ cells
 unattributed
 closed_by_state
 unresolved
+unindexed
 bindings
 
 # packages/testing/src/execution_testing/evm_tools/daemon.py -

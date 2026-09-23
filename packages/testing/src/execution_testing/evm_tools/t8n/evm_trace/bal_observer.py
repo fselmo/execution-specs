@@ -74,6 +74,30 @@ def group_outcome(halt: Optional[str]) -> str:
     return "exceptional_halt"
 
 
+def _block_env(frame: Any, evm: Any) -> Any:
+    """
+    The block environment a recorder call belongs to.
+
+    An EVM frame carries it; a fork phase takes it as a parameter; a
+    delegation step has neither, so a few frames further up are searched.
+    """
+    if evm is not None:
+        return getattr(evm, "block_env", None)
+    current, hops = frame, 0
+    while current is not None and hops < 8:
+        names = current.f_code.co_varnames
+        if "block_env" in names:
+            candidate = current.f_locals.get("block_env")
+            if type(candidate).__name__ == "BlockEnvironment":
+                return candidate
+        if "evm" in names:
+            candidate = current.f_locals.get("evm")
+            if type(candidate).__name__ == "Evm":
+                return getattr(candidate, "block_env", None)
+        current, hops = current.f_back, hops + 1
+    return None
+
+
 class _Tally:
     """
     Stand in for one tracker collection during one call, counting adds.
@@ -159,6 +183,10 @@ class BalObservation:
     """Entries whose frame neither the trace nor the frame object could
     say how it ended. Not turned into cells: an outcome nobody saw is not
     claimed."""
+    unindexed: int
+    """Recorder calls whose block access index could not be read, grouped
+    by transaction state instead. Non-zero means aliases between states
+    sharing an index can be missed."""
     calls: int
     bindings: FrozenSet[Tuple[str, str]]
     """`(module, name)` of every recorder binding that was wrapped."""
@@ -186,9 +214,11 @@ class BalReachObserver:
         self._pending_txs: Dict[int, Tuple[Any, List[Tuple]]] = {}
         self._closed_txs: Dict[int, Tuple[Any, str]] = {}
         self._cells: Set[Tuple[str, str, str]] = set()
-        self._reasons_at: Dict[int, Dict[Any, Set[str]]] = defaultdict(
+        self._reasons_at: Dict[Tuple, Dict[Any, Set[str]]] = defaultdict(
             lambda: defaultdict(set)
         )
+        self._blocks: Dict[int, Any] = {}
+        self._unindexed = 0
         self._unattributed: Counter = Counter()
         self._unresolved = 0
         self._closed_by_state = 0
@@ -326,13 +356,16 @@ class BalReachObserver:
                 changed.add(kind)
         return changed
 
-    def _locate(self, frame: Any) -> Tuple[Optional[str], Optional[str], Any]:
+    def _locate(
+        self, frame: Any
+    ) -> Tuple[Optional[str], Optional[str], Any, Any]:
         """
         The first frame outside the tracker, whether it is a derived
-        reason, and the EVM frame the call was made in (if any).
+        reason, the EVM frame the call was made in (if any), and the
+        block it belongs to.
 
-        Returns `(reason, caller, evm)`: `reason` is set when the caller
-        is derived, `caller` is its name either way.
+        Returns `(reason, caller, evm, block_env)`: `reason` is set when
+        the caller is derived, `caller` is its name either way.
         """
         evm = None
         own = __name__
@@ -351,20 +384,23 @@ class BalReachObserver:
                 caller = f"{module[len(self._prefix) :]}.{code.co_name}"
             else:
                 caller = f"{module}.{code.co_name}"
+            block_env = _block_env(current, evm)
             if caller in self.spec.reasons:
-                return caller, caller, evm
-            return None, caller, evm
-        return None, "<no caller>", evm
+                return caller, caller, evm, block_env
+            return None, caller, evm, block_env
+        return None, "<no caller>", evm, None
 
     def _record(
         self, frame: Any, tx_state: Any, address: Any, kinds: Set[str]
     ) -> None:
         self._calls += 1
-        reason, caller, evm = self._locate(frame)
+        reason, caller, evm, block_env = self._locate(frame)
         if reason is None:
             self._unattributed[caller] += 1
             return
-        self._reasons_at[id(tx_state)][address].add(reason)
+        self._reasons_at[self._index_key(block_env, tx_state)][address].add(
+            reason
+        )
         entries = [(reason, kind) for kind in kinds]
         if not entries:
             return
@@ -378,6 +414,24 @@ class BalReachObserver:
             return
         holder = self._pending_txs.setdefault(id(tx_state), (tx_state, []))
         holder[1].extend(entries)
+
+    def _index_key(self, block_env: Any, tx_state: Any) -> Tuple[Any, ...]:
+        """
+        The block access index this call's entry lands at.
+
+        Read from the builder at call time rather than inferred from the
+        transaction state: several states share one index -- every
+        pre-block system call at 0, the withdrawals and every post-block
+        request call at N+1 -- and aliasing is defined per index, so
+        keying on the state object missed every alias between them. The
+        block is pinned so a later block cannot reuse its id.
+        """
+        builder = getattr(block_env, "block_access_list_builder", None)
+        if builder is None:
+            self._unindexed += 1
+            return ("state", id(tx_state))
+        self._blocks[id(block_env)] = block_env
+        return (id(block_env), int(builder.block_access_index))
 
     def _settle(self, entries: List[Tuple], outcome: str) -> None:
         for reason, kind in entries:
@@ -442,6 +496,7 @@ class BalReachObserver:
             unattributed=dict(self._unattributed),
             closed_by_state=self._closed_by_state,
             unresolved=self._unresolved,
+            unindexed=self._unindexed,
             calls=self._calls,
             bindings=self._bindings,
         )
