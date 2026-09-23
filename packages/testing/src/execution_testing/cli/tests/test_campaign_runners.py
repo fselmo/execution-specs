@@ -140,6 +140,36 @@ def test_with_flags_keeps_the_binary_and_kind() -> None:
     assert other.flags == ("--x",) and runner.flags == ()
 
 
+def test_with_env_layers_overrides_on_the_parent_environment() -> None:
+    """
+    Erigon selects its execution path with `IGNORE_BAL`, not argv, so a
+    contrast that only varies flags cannot reach it. The override has to
+    sit on top of the inherited environment, not replace it, or the
+    binary loses PATH and HOME.
+    """
+    import os
+
+    runner = FixtureRunner("erigon", Path("/bin/evm"), "ErigonFixtureConsumer")
+    other = runner.with_env({"IGNORE_BAL": "true"})
+    assert other.env == {"IGNORE_BAL": "true"} and runner.env == {}
+    environ = other._environ()
+    assert environ["IGNORE_BAL"] == "true"
+    assert set(os.environ) <= set(environ)
+
+
+def test_a_contrast_can_vary_flags_and_env_together() -> None:
+    """
+    The two knobs compose; erigon sizes its parallel path as well as
+    selecting it.
+    """
+    runner = FixtureRunner("erigon", Path("/bin/evm"), "ErigonFixtureConsumer")
+    other = runner.with_flags(["--x"]).with_env(
+        {"IGNORE_BAL": "true", "EXEC3_WORKERS": "4"}
+    )
+    assert other.flags == ("--x",)
+    assert other.env == {"IGNORE_BAL": "true", "EXEC3_WORKERS": "4"}
+
+
 @pytest.mark.parametrize(
     "kind, subcommand",
     [

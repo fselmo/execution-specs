@@ -150,15 +150,33 @@ class _FakeRunner:
     """
 
     def __init__(
-        self, name: str, failing: Any, contrast: Any = None, flags: Any = ()
+        self,
+        name: str,
+        failing: Any,
+        contrast: Any = None,
+        flags: Any = (),
+        env: Any = None,
     ) -> None:
         self.name = name
         self.failing = failing
         self.contrast = contrast
         self.flags = tuple(flags)
+        self.env = dict(env or {})
 
     def with_flags(self, flags: Any) -> "_FakeRunner":
-        return _FakeRunner(self.name, self.contrast, None, flags)
+        return _FakeRunner(self.name, self.contrast, None, flags, self.env)
+
+    def with_env(self, env: Any) -> "_FakeRunner":
+        # Swap to the contrast script only if `with_flags` has not
+        # already done it: a client may contrast on env alone, and a
+        # double swap would hand the contrast run the primary verdicts.
+        if self.contrast is not None:
+            failing = self.contrast
+        else:
+            failing = self.failing
+        return _FakeRunner(
+            self.name, failing, None, self.flags, {**self.env, **env}
+        )
 
     def version(self) -> str:
         return f"{self.name} version 1"
@@ -182,6 +200,7 @@ def _campaign(
     failing: Dict[str, Any],
     echo: Any = None,
     contrast: Optional[Dict[str, Any]] = None,
+    contrast_via_env: bool = False,
     **kw: Any,
 ) -> Any:
     from ..fuzzer_bridge import campaign as campaign_module
@@ -197,7 +216,9 @@ def _campaign(
             )
         ),
     )
-    if contrast:
+    if contrast and contrast_via_env:
+        kw["contrast_env"] = {n: {"IGNORE_BAL": "true"} for n in contrast}
+    elif contrast:
         kw["contrast_flags"] = {n: ["--contrast"] for n in contrast}
     monkeypatch.setattr(campaign_module, "_eels_commit", lambda: "abc123")
     monkeypatch.setattr(
@@ -302,6 +323,29 @@ def test_event_contrast_reads_the_rate_without_from_the_totals() -> None:
     )
     assert text == "besu=312/320 (97.5% -> 0.4%)"
     assert _event_contrast({"cases": 5}, 10, {}) == "-"
+
+
+def test_a_contrast_declared_only_by_environment_still_runs(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Erigon selects its execution path with `IGNORE_BAL`, not argv. A
+    client declaring `contrast_env` and no `contrast_flags` must still
+    get a contrast run, or its half of the panel has no self-witness.
+    """
+    failing = {"geth": lambda _s: False, "erigon": lambda s: s % 3 == 1}
+    contrast = {"erigon": lambda s: s % 2 == 0}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        contrast=contrast,
+        contrast_via_env=True,
+        count=6,
+        batch=3,
+    )
+    assert state.counts["contrast-mismatch"] == 3
+    assert state.contrast["erigon"]["compared"] == 6
 
 
 def test_a_client_disagreeing_with_itself_is_a_contrast_mismatch(

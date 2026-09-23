@@ -142,6 +142,12 @@ class ClientConfig(BaseModel):
     `contrast-mismatch`, the client disagreeing with itself, which needs
     no other witness. Today's use is nethermind's BAL parallel execution
     against its sequential path (`--parallelExecution true` / `false`)."""
+    contrast_env: Optional[Dict[str, str]] = None
+    """Environment overrides for the contrast run, layered on the parent
+    environment. The same witness as `contrast_flags` for clients whose
+    knobs are not argv: erigon selects its path with `IGNORE_BAL` and
+    sizes it with `EXEC3_WORKERS`. Either may be set, or both; a client
+    declaring neither has no contrast run."""
 
     @model_validator(mode="after")
     def _one_source(self) -> "ClientConfig":
