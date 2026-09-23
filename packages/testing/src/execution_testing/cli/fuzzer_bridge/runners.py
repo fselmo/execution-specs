@@ -29,6 +29,24 @@ class Verdict:
     error: str = ""
 
 
+RUNNER_ERROR_PREFIX = "runner-error: "
+"""Marks a verdict the harness produced, not the client: a timed-out
+runner, a non-zero exit with no parseable report, or a fixture the runner
+never mentioned.
+
+The client never judged the case, so this is the same class as a tool
+refusing the input -- never a failure, never a divergence, never a
+signature. It keeps its own prefix rather than borrowing the refusal
+patterns because the two say different things: a refusal is a property of
+the case, a runner error is a property of our harness, and a broken
+runner has to stay visible instead of reading as a stream of refusals."""
+
+
+def is_runner_error(message: str) -> bool:
+    """Whether a verdict's error came from the harness, not the client."""
+    return message.startswith(RUNNER_ERROR_PREFIX)
+
+
 _NETHERMIND_SUFFIX = re.compile(r"_d\d+g\d+v\d+_$")
 
 
@@ -198,7 +216,7 @@ class FixtureRunner:
         missing = [n for n in names if n not in verdicts]
         for name in missing:
             verdicts[name] = Verdict(
-                False, f"runner-error: no result from {self.name}"
+                False, f"{RUNNER_ERROR_PREFIX}no result from {self.name}"
             )
         return verdicts
 
@@ -244,12 +262,15 @@ class FixtureRunner:
             )
         if not verdicts and proc.returncode != 0:
             verdicts = self._all_failed(
-                f"runner-error: {proc.stderr.strip()[:200]}"
+                f"{RUNNER_ERROR_PREFIX}{proc.stderr.strip()[:200]}"
             )
         for name in names:
             verdicts.setdefault(
                 name,
-                Verdict(False, f"runner-error: no result from {self.name}"),
+                Verdict(
+                    False,
+                    f"{RUNNER_ERROR_PREFIX}no result from {self.name}",
+                ),
             )
         return verdicts
 
@@ -261,7 +282,7 @@ class FixtureRunner:
         verdicts = parse_json_array(proc.stdout)
         if not verdicts and proc.returncode != 0:
             return self._all_failed(
-                f"runner-error: {proc.stderr.strip()[:200]}"
+                f"{RUNNER_ERROR_PREFIX}{proc.stderr.strip()[:200]}"
             )
         return verdicts
 
@@ -277,7 +298,7 @@ class FixtureRunner:
         verdicts = parse_gtest_report(data)
         if not verdicts and proc.returncode not in (0, 1):
             return self._all_failed(
-                f"runner-error: {proc.stderr.strip()[:200]}"
+                f"{RUNNER_ERROR_PREFIX}{proc.stderr.strip()[:200]}"
             )
         return verdicts
 
@@ -286,7 +307,7 @@ class FixtureRunner:
         verdicts = parse_besu_summary(proc.stdout)
         if not verdicts and proc.returncode != 0:
             return self._all_failed(
-                f"runner-error: {proc.stderr.strip()[:200]}"
+                f"{RUNNER_ERROR_PREFIX}{proc.stderr.strip()[:200]}"
             )
         return verdicts
 
@@ -296,7 +317,7 @@ class FixtureRunner:
         verdicts = {strip_nethermind_suffix(n): v for n, v in parsed.items()}
         if not verdicts and proc.returncode != 0:
             return self._all_failed(
-                f"runner-error: {proc.stderr.strip()[:200]}"
+                f"{RUNNER_ERROR_PREFIX}{proc.stderr.strip()[:200]}"
             )
         return verdicts
 

@@ -66,7 +66,7 @@ from .generator import GENERATOR_VERSION, generate_fuzzer_output
 from .models import FuzzerOutput
 from .reproducer import client_judge, write_reproducer
 from .run_manifest import RunManifest, _eels_commit
-from .runners import FixtureRunner, Verdict
+from .runners import FixtureRunner, Verdict, is_runner_error
 
 Signature = Tuple[str, str]
 """One client and the normalized reason it rejected a block."""
@@ -152,6 +152,35 @@ def partition_rejections(
     return ran, rejected
 
 
+def partition_runner_errors(
+    verdicts: Mapping[str, Verdict],
+) -> "Tuple[Dict[str, Verdict], Dict[str, Verdict]]":
+    """
+    Split verdicts into clients that answered and clients the harness
+    never got an answer from.
+
+    A timeout, a non-zero exit with no parseable report, or a fixture the
+    runner never mentioned means the client did not judge the case. Left
+    in, it counts as that client failing while the others pass -- a
+    divergence, a signature, and a bundle, all manufactured by our own
+    harness. Excluded here for the same reason a refused input is, and
+    counted per client so a runner that is simply broken still shows.
+
+    Applied before :func:`partition_rejections`: a batch-level failure
+    carries the runner's whole stderr, which may quote a refusal phrase
+    for one case while saying nothing about the other few hundred in the
+    file. That is a harness outcome for all of them, not a refusal of
+    each.
+    """
+    ran, errored = {}, {}
+    for name, verdict in verdicts.items():
+        if not verdict.passed and is_runner_error(verdict.error):
+            errored[name] = verdict
+        else:
+            ran[name] = verdict
+    return ran, errored
+
+
 def classify(verdicts: Mapping[str, Verdict]) -> str:
     """
     ``agreed`` when every client accepts, ``all-fail`` when none does (a
@@ -168,6 +197,20 @@ def classify(verdicts: Mapping[str, Verdict]) -> str:
     return "divergence"
 
 
+def contrast_excluded(primary: Verdict, contrast: Verdict) -> bool:
+    """
+    Whether a client's two runs cannot be compared to each other.
+
+    Either run refusing the input or never reporting leaves nothing to
+    compare; the pair is dropped from the contrast tally as well as from
+    the finding, so the mismatch rate stays a rate over real comparisons.
+    """
+    return any(
+        is_tool_rejection(verdict.error) or is_runner_error(verdict.error)
+        for verdict in (primary, contrast)
+    )
+
+
 def contrast_mismatch(primary: Verdict, contrast: Verdict) -> Optional[str]:
     """
     Why one run of a client failed where its other run passed.
@@ -176,9 +219,11 @@ def contrast_mismatch(primary: Verdict, contrast: Verdict) -> Optional[str]:
     the panel; the contrast run is the same binary under
     `contrast_flags`. When they disagree the client has diverged from
     itself, and no spec or other client is needed to call it a finding.
-    None when they agree, or when either refused the input.
+    None when they agree, when either refused the input, or when either
+    run never reported -- a client cannot be said to disagree with itself
+    on a case one of its runs never judged.
     """
-    if is_tool_rejection(primary.error) or is_tool_rejection(contrast.error):
+    if contrast_excluded(primary, contrast):
         return None
     if primary.passed == contrast.passed:
         return None
@@ -228,6 +273,11 @@ class CampaignState:
     )
     client_failures: Dict[str, int] = field(default_factory=dict)
     rejections: Dict[str, int] = field(default_factory=dict)
+    runner_errors: Dict[str, int] = field(default_factory=dict)
+    """Per client: cases its runner never returned a verdict on. Kept
+    apart from `rejections` because this one accuses the harness, and a
+    number climbing here means a campaign judged fewer cases than it
+    counted."""
     by_tx_type: Dict[str, Dict[str, int]] = field(default_factory=dict)
     """Per transaction type: cases seen, and per-client failures and
     refusals. A client rejecting a typed transaction the spec accepts is
@@ -261,6 +311,7 @@ class CampaignState:
                 counts=data.get("counts", {}),
                 client_failures=data.get("client_failures", {}),
                 rejections=data.get("rejections", {}),
+                runner_errors=data.get("runner_errors", {}),
                 by_tx_type=data.get("by_tx_type", {}),
                 by_event=data.get("by_event", {}),
                 contrast=data.get("contrast", {}),
@@ -282,6 +333,7 @@ class CampaignState:
                     "counts": self.counts,
                     "client_failures": self.client_failures,
                     "rejections": self.rejections,
+                    "runner_errors": self.runner_errors,
                     "by_tx_type": self.by_tx_type,
                     "by_event": self.by_event,
                     "contrast": self.contrast,
@@ -446,13 +498,18 @@ def render_report(
         "",
         "## Failures per client",
         "",
-        "| client | fixtures failed | inputs refused |",
-        "| --- | --- | --- |",
+        "| client | fixtures failed | inputs refused | no verdict |",
+        "| --- | --- | --- | --- |",
     ]
     lines += [
         f"| {name} | {state.client_failures.get(name, 0)} "
-        f"| {state.rejections.get(name, 0)} |"
-        for name in sorted(set(state.client_failures) | set(state.rejections))
+        f"| {state.rejections.get(name, 0)} "
+        f"| {state.runner_errors.get(name, 0)} |"
+        for name in sorted(
+            set(state.client_failures)
+            | set(state.rejections)
+            | set(state.runner_errors)
+        )
     ]
     if state.contrast:
         lines += [
@@ -1034,7 +1091,10 @@ def escalate(
     """
     found = Escalation()
     for name in names:
-        ran, _ = partition_rejections({c: results[c][name] for c in results})
+        answered, _ = partition_runner_errors(
+            {c: results[c][name] for c in results}
+        )
+        ran, _ = partition_rejections(answered)
         if classify(ran) == "agreed":
             continue
         found.escalated.append(name)
@@ -1338,6 +1398,11 @@ def run_campaign(
                     verdicts = {
                         name: results[name][fixture_name] for name in runners
                     }
+                    verdicts, errored = partition_runner_errors(verdicts)
+                    for name in errored:
+                        state.runner_errors[name] = (
+                            state.runner_errors.get(name, 0) + 1
+                        )
                     verdicts, rejected = partition_rejections(verdicts)
                     for name in rejected:
                         state.rejections[name] = (
@@ -1367,9 +1432,7 @@ def run_campaign(
                     events = case_events.get(fixture_name, [])
                     for name, other in contrast_results.items():
                         primary = results[name][fixture_name]
-                        if is_tool_rejection(primary.error) or (
-                            is_tool_rejection(other[fixture_name].error)
-                        ):
+                        if contrast_excluded(primary, other[fixture_name]):
                             continue
                         tally = state.contrast.setdefault(
                             name, {"compared": 0, "mismatches": 0}

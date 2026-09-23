@@ -535,6 +535,109 @@ def test_a_real_failure_is_never_read_as_a_refusal() -> None:
     assert classify(ran) == "divergence"
 
 
+def test_a_runner_that_never_answered_is_not_a_client_failure() -> None:
+    """
+    A timed-out runner produced no judgement, so the clients that did
+    answer are judged only against each other. Left in, the harness
+    manufactures a divergence and a signature out of its own timeout.
+    """
+    from ..fuzzer_bridge.campaign import classify, partition_runner_errors
+    from ..fuzzer_bridge.runners import Verdict
+
+    verdicts = {
+        "nethermind": Verdict(False, "runner-error: timed out after 30s"),
+        "geth": Verdict(True),
+        "besu": Verdict(True),
+    }
+    ran, errored = partition_runner_errors(verdicts)
+    assert set(errored) == {"nethermind"}
+    assert set(ran) == {"geth", "besu"}
+    assert classify(ran) == "agreed"
+
+
+def test_a_fixture_the_runner_skipped_is_not_a_client_failure() -> None:
+    """
+    The other half of a harness outcome: the runner ran but never
+    mentioned this fixture, so it holds no verdict on it.
+    """
+    from ..fuzzer_bridge.campaign import classify, partition_runner_errors
+    from ..fuzzer_bridge.runners import Verdict
+
+    ran, errored = partition_runner_errors(
+        {
+            "besu": Verdict(False, "runner-error: no result from besu"),
+            "geth": Verdict(True),
+        }
+    )
+    assert set(errored) == {"besu"}
+    assert classify(ran) == "agreed"
+
+
+def test_a_real_failure_is_never_read_as_a_runner_error() -> None:
+    """
+    The near-miss: a client that answered and rejected the block is a
+    finding, however much its text reads like plumbing.
+    """
+    from ..fuzzer_bridge.campaign import classify, partition_runner_errors
+    from ..fuzzer_bridge.runners import Verdict
+
+    ran, errored = partition_runner_errors(
+        {
+            "erigon": Verdict(False, "error: no result for block <hex>"),
+            "geth": Verdict(True),
+        }
+    )
+    assert not errored
+    assert classify(ran) == "divergence"
+
+
+def test_a_batch_level_failure_is_a_harness_outcome_not_a_refusal() -> None:
+    """
+    The confusable case, and why the runner-error partition runs first.
+
+    A runner exiting non-zero reports one stderr for the whole file, so a
+    refusal phrase in it describes at most one of the few hundred cases
+    the message is attached to. Counting all of them as inputs geth
+    refused would overstate refusals by the batch size and hide the fact
+    that geth judged nothing.
+    """
+    from ..fuzzer_bridge.campaign import (
+        partition_rejections,
+        partition_runner_errors,
+    )
+    from ..fuzzer_bridge.runners import Verdict
+
+    verdicts = {
+        "geth": Verdict(False, "runner-error: Unable to validate CALLF"),
+        "besu": Verdict(True),
+    }
+    ran, errored = partition_runner_errors(verdicts)
+    assert set(errored) == {"geth"}
+    # Without the ordering this lands in rejections and reads as a
+    # per-case refusal of every fixture in the file.
+    assert not partition_rejections(ran)[1]
+
+
+def test_a_contrast_pair_missing_a_verdict_is_not_a_mismatch() -> None:
+    """
+    A client cannot disagree with itself on a case one of its two runs
+    never judged; the pair leaves no finding and no comparison.
+    """
+    from ..fuzzer_bridge.campaign import (
+        contrast_excluded,
+        contrast_mismatch,
+    )
+    from ..fuzzer_bridge.runners import Verdict
+
+    timed_out = Verdict(False, "runner-error: timed out after 30s")
+    assert contrast_excluded(timed_out, Verdict(True))
+    assert contrast_mismatch(timed_out, Verdict(True)) is None
+    # The kill check: a genuine self-disagreement still reports.
+    real = Verdict(False, "block access list mismatch")
+    assert not contrast_excluded(real, Verdict(True))
+    assert contrast_mismatch(real, Verdict(True)) is not None
+
+
 def test_every_hit_seed_is_recorded_up_to_the_cap(tmp_path: Path) -> None:
     """
     Signature dedup must not lose the seeds. The first blind campaign
