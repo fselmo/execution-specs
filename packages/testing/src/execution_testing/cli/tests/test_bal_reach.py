@@ -2,6 +2,7 @@
 
 from execution_testing.evm_tools.t8n.evm_trace.bal_observer import (
     BalObservation,
+    BalReachObserver,
 )
 from execution_testing.forks import Amsterdam
 
@@ -387,3 +388,68 @@ def test_the_observation_record_carries_the_cross_check() -> None:
     assert set(record["reasons_never_observed"]) <= set(
         entry_reasons(Amsterdam)
     )
+
+
+def test_only_one_recorder_can_be_called_and_record_nothing() -> None:
+    """
+    Derived from where each recorder's recording statements sit:
+    `destroy_storage` records only under a branch, while `set_storage`'s
+    guarded initialisation sits beside an unconditional write.
+    """
+    from ..fuzzer_bridge.bal_reach import conditional_recorders
+
+    assert conditional_recorders(Amsterdam) == frozenset({"destroy_storage"})
+
+
+def test_a_destroy_with_nothing_pending_is_not_a_storage_read() -> None:
+    """
+    The fee-path phantom: a zero-tip credit to an empty coinbase destroys
+    it, and the destroy finds no pending writes, so nothing is read. The
+    positive is a destroy that does turn a pending write into a read.
+    """
+    import importlib
+    from types import SimpleNamespace
+
+    from ..fuzzer_bridge.bal_reach import observer_spec
+
+    tracker = importlib.import_module("ethereum.forks.amsterdam.state_tracker")
+    observer = BalReachObserver(observer_spec(Amsterdam))
+    address = b"\x00" * 19 + b"\x0f"
+
+    def state(pending: dict) -> SimpleNamespace:
+        return SimpleNamespace(
+            storage_writes=pending,
+            storage_reads=set(),
+            account_reads=set(),
+            account_writes={},
+        )
+
+    _, nothing = observer.observe_call(
+        "destroy_storage", tracker.destroy_storage, (state({}), address), {}
+    )
+    assert nothing == set()
+
+    pending = state({address: {b"\x01" * 32: 7}})
+    _, read = observer.observe_call(
+        "destroy_storage", tracker.destroy_storage, (pending, address), {}
+    )
+    assert read == {"storage_read"}
+    assert (address, b"\x01" * 32) in pending.storage_reads
+
+
+def test_a_real_destroy_of_pending_writes_is_still_a_read() -> None:
+    """
+    The positive on real execution for the conditional check: an account
+    destroyed at the end of its transaction with writes still pending
+    (created and self-destructed in one transaction) has those writes
+    enter the list as reads, and that must survive the check that removed
+    the empty-destroy phantom.
+    """
+    observations = _observed_fills(range(0, 100))
+    reads = {
+        cell
+        for observation in observations
+        for cell in observation.cells
+        if cell[0] == "fork.process_transaction" and cell[1] == "storage_read"
+    }
+    assert reads, "no destroyed pending write in range; widen the seeds"

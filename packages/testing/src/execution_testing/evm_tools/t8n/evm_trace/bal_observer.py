@@ -28,7 +28,7 @@ import pkgutil
 import sys
 from collections import Counter, defaultdict
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     Any,
     Callable,
@@ -74,6 +74,50 @@ def group_outcome(halt: Optional[str]) -> str:
     return "exceptional_halt"
 
 
+class _Tally:
+    """
+    Stand in for one tracker collection during one call, counting adds.
+
+    Forwards everything to the real set or dict, which may be shared with
+    the block state, so the fill sees exactly what it would have. It only
+    counts the calls that put something into the collection, because
+    whether a conditional recorder recorded is whether that statement ran:
+    checking what the collection holds afterwards cannot tell, since a
+    written slot was almost always read first and re-adding it to a set
+    changes nothing.
+    """
+
+    def __init__(self, target: Any) -> None:
+        self.target = target
+        self.added = 0
+
+    def add(self, item: Any) -> None:
+        self.added += 1
+        self.target.add(item)
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        self.added += 1
+        self.target[key] = value
+
+    def __getitem__(self, key: Any) -> Any:
+        return self.target[key]
+
+    def __delitem__(self, key: Any) -> None:
+        del self.target[key]
+
+    def __contains__(self, key: Any) -> bool:
+        return key in self.target
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self.target)
+
+    def __len__(self) -> int:
+        return len(self.target)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.target, name)
+
+
 @dataclass(frozen=True)
 class BalReachSpec:
     """What the observer needs from the derivation, handed in by value."""
@@ -86,6 +130,13 @@ class BalReachSpec:
     """Tracker function name to the collections it records into."""
     fanout: Mapping[str, FrozenSet[str]]
     """Tracker collection kind to the builder's entry kinds."""
+    conditional: FrozenSet[str] = frozenset()
+    """Recorders whose every recording statement is behind a branch, so a
+    call can record nothing; for these the observer counts what the call
+    actually added rather than trusting the call."""
+    attributes: Mapping[str, str] = field(default_factory=dict)
+    """Tracker collection kind to its attribute on the transaction state,
+    e.g. `storage_read -> storage_reads`."""
 
 
 @dataclass(frozen=True)
@@ -188,24 +239,64 @@ class BalReachObserver:
                 setattr(module, attribute, value)
 
     def _wrap(self, name: str, original: Callable) -> Callable:
-        collections = self.spec.recorders[name]
-
         def hooked(*args: Any, **kwargs: Any) -> Any:
-            tx_state, address = args[0], args[1]
-            kinds: Set[str] = set()
-            for collection in collections:
-                if collection == "account_write":
-                    kinds |= self._account_kinds(tx_state, address, args[2])
-                else:
-                    kinds |= self.spec.fanout.get(
-                        collection, frozenset({collection})
-                    )
-            result = original(*args, **kwargs)
-            self._record(sys._getframe(1), tx_state, address, kinds)
+            result, kinds = self.observe_call(name, original, args, kwargs)
+            self._record(sys._getframe(1), args[0], args[1], kinds)
             return result
 
         hooked.__name__ = f"bal_reach_{name}"
         return hooked
+
+    def observe_call(
+        self,
+        name: str,
+        original: Callable,
+        args: Tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Tuple[Any, Set[str]]:
+        """
+        Run one recorder call; return its result and what it recorded.
+
+        A recorder whose recording is entirely behind a branch is judged
+        by the collection, not the call: `destroy_storage` with no pending
+        writes records nothing, and crediting the call is how fee payment
+        came to look like a storage read.
+        """
+        collections = self.spec.recorders[name]
+        tx_state, address = args[0], args[1]
+        tallies: Dict[str, _Tally] = {}
+        if name in self.spec.conditional:
+            for collection in collections:
+                attribute = self.spec.attributes[collection]
+                tallies[collection] = _Tally(getattr(tx_state, attribute))
+        kinds: Set[str] = set()
+        for collection in collections:
+            if collection == "account_write":
+                kinds |= self._account_kinds(tx_state, address, args[2])
+            else:
+                kinds |= self.spec.fanout.get(
+                    collection, frozenset({collection})
+                )
+        if not tallies:
+            return original(*args, **kwargs), kinds
+        for collection, tally in tallies.items():
+            setattr(tx_state, self.spec.attributes[collection], tally)
+        try:
+            result = original(*args, **kwargs)
+        finally:
+            for collection, tally in tallies.items():
+                setattr(
+                    tx_state, self.spec.attributes[collection], tally.target
+                )
+        recorded = {c for c, tally in tallies.items() if tally.added}
+        kinds = {
+            kind
+            for collection in recorded
+            for kind in self.spec.fanout.get(
+                collection, frozenset({collection})
+            )
+        }
+        return result, kinds
 
     def _account_kinds(
         self, tx_state: Any, address: Any, new: Any

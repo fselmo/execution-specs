@@ -131,6 +131,59 @@ def _records(fn: ast.FunctionDef) -> Set[Kind]:
     return kinds
 
 
+def _records_only_conditionally(fn: ast.FunctionDef) -> bool:
+    """
+    Whether every recording statement in `fn` sits under a branch or loop.
+
+    Such a recorder can be called and record nothing: `destroy_storage`
+    turns an address's pending writes into reads, and with none pending it
+    adds nothing. Counting the call rather than the mutation credited fee
+    payment with storage reads it never made -- a zero-tip credit to an
+    empty coinbase destroys the account, and the destroy found no writes.
+    """
+    guarded: List[bool] = []
+
+    def visit(node: ast.AST, under_branch: bool) -> None:
+        for child in ast.iter_child_nodes(node):
+            branch = under_branch or isinstance(
+                child, (ast.If, ast.For, ast.While, ast.Try, ast.With)
+            )
+            if _records(_as_function(child)):
+                if isinstance(child, (ast.Expr, ast.Assign)):
+                    guarded.append(under_branch)
+                    continue
+            visit(child, branch)
+
+    visit(fn, False)
+    return bool(guarded) and all(guarded)
+
+
+def _as_function(node: ast.AST) -> ast.FunctionDef:
+    """Wrap one statement so `_records` can be asked about it alone."""
+    return ast.FunctionDef(
+        name="_",
+        args=ast.arguments(
+            posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]
+        ),
+        body=[node] if isinstance(node, ast.stmt) else [],
+        decorator_list=[],
+        type_params=[],
+    )
+
+
+def conditional_recorders(fork: Fork) -> FrozenSet[str]:
+    """The recorders that can be called and record nothing."""
+    tree = _module_asts(_fork_package(fork))[TRACKER_MODULE]
+    names = set(recorders(fork))
+    return frozenset(
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name in names
+        and _records_only_conditionally(node)
+    )
+
+
 def _functions(
     trees: Mapping[str, ast.Module],
 ) -> Dict[str, Tuple[str, ast.FunctionDef]]:
@@ -315,6 +368,8 @@ def observer_spec(fork: Fork) -> BalReachSpec:
         reasons=frozenset(entry_reasons(fork)),
         recorders=recorders(fork),
         fanout=_kind_fanout(_module_asts(_fork_package(fork))),
+        conditional=conditional_recorders(fork),
+        attributes={kind: name for name, kind in _COLLECTIONS.items()},
     )
 
 
