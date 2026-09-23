@@ -330,7 +330,7 @@ clients:
     contrast_flags: [--parallelExecution, "false"]  # the witness: the same client, serial
   - name: erigon
     build: {recipe: erigon, ref: glamsterdam-devnet-8}
-    contrast_env: {IGNORE_BAL: "true"}               # erigon's knob is the environment
+    contrast_env: {EXEC3_WORKERS: "1"}               # the path contrast: one worker, sequential
 ```
 
 The report counts mismatches per client and records each distinct one as a
@@ -443,26 +443,38 @@ with 40/40 verdicts both ways and a corrupted delivered list rejected in
 both. Its flag is honoured only once the list is attached, which is why
 the unpatched runner's `--parallelExecution` was inert.
 
-Erigon is the exception, and the claim that stood here was wrong: it takes
-the parallel path by default and always has. Probed with
-`TRACE_BAL_FEED=true`, 500 of 500 blocks report BAL-FEED, and 500 of 500
-report BAL-MISSING under `IGNORE_BAL=true`; `NewBlockAccessListSidecar` is
-present at the devnet-8 head too. Erigon's roles are inverted relative to
-geth's: parallel is its real default and its vote in the panel, and
-sequential (`IGNORE_BAL=true`) is the contrast, which is why its entry
-declares `contrast_env` rather than `contrast_flags`.
+Erigon is the exception: it takes the parallel path by default and always
+has. Probed with `TRACE_BAL_FEED=true`, 500 of 500 blocks report BAL-FEED,
+and `NewBlockAccessListSidecar` is present at the devnet-8 head. Its knobs
+are environment variables, and they are two different contrasts.
+`IGNORE_BAL=true` withholds the delivered list -- 500 of 500 blocks report
+BAL-MISSING -- while execution stays parallel: a *hint* contrast, the same
+path with and without the list's guidance. `EXEC3_WORKERS=1` runs one
+worker: the *path* contrast, parallel against sequential, which is the one
+the other three clients' flags express. Parallel is erigon's default and
+its vote in the panel, so its entry declares a `contrast_env`.
 
-The same holds, by construction rather than by probe, for the other two
-at their pins: nethermind honours `--parallelExecution`
-but `BlockAccessListManager.PrepareForProcessing` needs a list that
-`Ethereum.Test.Base` never assigns on the blocktest lane, so the flag is
-inert; besu's reference-test schedule passes
-`isParallelTxProcessingEnabled=false`, so its parallel processor is never
-built. **Three of the four have never had their parallel path exercised by
-a campaign**; erigon's verdicts have been parallel-path throughout. Those
-three each need their own series -- attach the list (geth, nethermind) or
-unlock the processor (besu) -- and until a client's series exists its
-contrast compares the sequential path with itself.
+The other three reach their parallel path only through a series: geth and
+nethermind attach the fixture's list to the block under test (the
+unpatched runners never did, which is why nethermind's
+`--parallelExecution` was inert), and besu unlocks the parallel processor
+its reference-test schedule never builds. Each series was proven live
+behaviourally before it was trusted: with a corrupted delivered list the
+stock runner passes and the series rejects, on geth, nethermind and besu.
+Besu needed two hunks where reading the code said one would do; the
+by-construction reading stopped a hunk short, and only a count of blocks
+actually taking the parallel path showed it.
+
+The first four-client parallel-path shard (500 fixtures, each client
+judging every fixture twice, 2026-09-23) had no contrast mismatch on geth,
+erigon, besu or nethermind. What a parallel-path failure looks like differs
+by client, so the signal to watch does too. Geth, erigon and besu propagate
+a parallel failure, so a `contrast-mismatch` is their signal. Nethermind
+silently retries the block sequentially, so its verdict never changes and
+its signal is a retry on a block whose list was valid, counted with the
+exception class that caused it. On the engine lane nethermind ran 1,005
+parallel executions on valid lists with no retry, and retried on 35 of 43
+blocks carrying invalid lists, all expected.
 
 What that corrects, rather than weakens: the `dbf21974` finding -- all 46
 hits and both reductions -- was a parallel-path bug found on the parallel

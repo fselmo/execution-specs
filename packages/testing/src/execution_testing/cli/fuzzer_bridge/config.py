@@ -145,9 +145,10 @@ class ClientConfig(BaseModel):
     contrast_env: Optional[Dict[str, str]] = None
     """Environment overrides for the contrast run, layered on the parent
     environment. The same witness as `contrast_flags` for clients whose
-    knobs are not argv: erigon selects its path with `IGNORE_BAL` and
-    sizes it with `EXEC3_WORKERS`. Either may be set, or both; a client
-    declaring neither has no contrast run."""
+    knobs are not argv. Erigon has two: `EXEC3_WORKERS=1` runs one worker,
+    the path contrast; `IGNORE_BAL=true` withholds the delivered list while
+    execution stays parallel, a hint contrast. Either may be set, or both;
+    a client declaring neither has no contrast run."""
 
     @model_validator(mode="after")
     def _one_source(self) -> "ClientConfig":

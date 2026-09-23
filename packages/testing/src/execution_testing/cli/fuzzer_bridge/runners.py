@@ -156,9 +156,9 @@ class FixtureRunner:
     flags: Tuple[str, ...] = ()
     env: Dict[str, str] = field(default_factory=dict)
     """Environment overrides layered on the parent environment. Some
-    clients take their knobs this way rather than on argv -- erigon gates
-    its staged sync with `IGNORE_BAL` -- so a contrast run that only
-    varies argv cannot reach that half of them."""
+    clients take their knobs this way rather than on argv -- erigon's
+    `EXEC3_WORKERS` and `IGNORE_BAL` -- so a contrast run that only varies
+    argv cannot reach them."""
     timeout: float = 1800.0
     _last_error: str = ""
 
