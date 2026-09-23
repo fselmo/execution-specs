@@ -310,6 +310,55 @@ def outcomes(fork: Fork) -> FrozenSet[Outcome]:
     return frozenset(grouped)
 
 
+REASON_WITNESSES: Mapping[str, str] = {
+    "vm.instructions": "trace",
+    "vm.interpreter": "trace",
+    "vm.eoa_delegation": "behavioral",
+    "fork": "behavioral",
+}
+"""What would confirm that a reason, not something else, put an address in
+the list -- the `EVENT_WITNESSES` rule carried onto this axis.
+
+- ``trace``: the reason is an opcode or a frame boundary, so an
+  independent reader of EELS's EIP-3155 output sees it happen.
+- ``behavioral``: the reason is a fork phase or a delegation step, which
+  the trace stream does not name. The witness is the entry's own
+  `block_access_index` together with the address the case already knows
+  is its sender, coinbase or withdrawal recipient.
+
+Keyed by module prefix rather than by reason, so a fork adding a function
+to a family inherits that family's witness, while a reason appearing in a
+*new* module is unwitnessed and forces a decision instead of quietly
+being counted. Nothing may be marked reached without one: inventing a
+signal for a phenomenon the run does not carry is the failure
+`EVENT_WITNESSES` documents at length, and a reach axis is exactly where
+it would be invisible."""
+
+
+def witness_kind(reason: Reason) -> str:
+    """
+    How a claim that `reason` was reached would be confirmed.
+
+    Empty when no family covers it, which makes the reason ineligible for
+    the reached set rather than silently trusted.
+    """
+    for prefix, kind in REASON_WITNESSES.items():
+        if reason == prefix or reason.startswith(prefix + "."):
+            return kind
+    return ""
+
+
+def unwitnessed(fork: Fork) -> List[Reason]:
+    """
+    Derived reasons no witness family covers.
+
+    A non-empty list is a decision owed, not a defect: the fork grew a
+    reason in a module nobody has said how to witness, and until someone
+    does its cells cannot be counted as reached.
+    """
+    return sorted(r for r in entry_reasons(fork) if not witness_kind(r))
+
+
 def bal_reach_space(
     fork: Fork,
 ) -> Tuple[FrozenSet[Cell], FrozenSet[AliasCell]]:
@@ -367,9 +416,22 @@ def unreached(
     cells_seen: Iterable[Cell],
     aliases_seen: Iterable[AliasCell] = (),
 ) -> Tuple[List[Cell], List[AliasCell]]:
-    """The derived space minus what a run actually reached."""
+    """
+    The derived space minus what a run is entitled to claim it reached.
+
+    A cell whose reason has no witness family stays unreached however
+    often it was observed. Subtracting it would let the map report
+    coverage that nothing confirms, which is worse than reporting a gap:
+    a gap gets worked on, a false green does not.
+    """
     cells, pairs = bal_reach_space(fork)
+    claimed = {cell for cell in cells_seen if witness_kind(cell[0])}
+    claimed_pairs = {
+        pair
+        for pair in aliases_seen
+        if witness_kind(pair[0]) and witness_kind(pair[1])
+    }
     return (
-        sorted(cells - set(cells_seen)),
-        sorted(pairs - set(aliases_seen)),
+        sorted(cells - claimed),
+        sorted(pairs - claimed_pairs),
     )

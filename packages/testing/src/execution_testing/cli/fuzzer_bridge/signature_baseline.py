@@ -16,6 +16,7 @@ from typing import (
     Any,
     Dict,
     FrozenSet,
+    Iterable,
     List,
     Optional,
     Set,
@@ -43,6 +44,8 @@ class NoveltyTracker:
         self._events: Set[str] = set()
         self._bigrams: Set[Tuple[str, str]] = set()
         self._tx_types: Set[int] = set()
+        self._bal_cells: Set[Tuple[str, str, str]] = set()
+        self._bal_aliases: Set[Tuple[str, str]] = set()
 
     def observe(self, signature: "Signature") -> bool:
         """Fold a signature in; return whether L0 or L1 grew (set-union)."""
@@ -69,6 +72,38 @@ class NoveltyTracker:
         )
 
         return sorted(KNOWN_EVENTS - self._events)
+
+    def observe_bal(
+        self,
+        cells: "Iterable[Tuple[str, str, str]]" = (),
+        aliases: "Iterable[Tuple[str, str]]" = (),
+    ) -> None:
+        """
+        Fold in the BAL cells a case reached.
+
+        Separate from `observe` because these do not come from the
+        signature: nothing in the trace stream names the fork phase that
+        put an address in the list, so a case's cells are supplied by
+        whatever witnessed them. Never drives novelty promotion -- the
+        space is enumerated to be reported against, not to steer the
+        scheduler.
+        """
+        self._bal_cells |= set(cells)
+        self._bal_aliases |= set(aliases)
+
+    def unreached_bal_cells(
+        self, fork: "Fork"
+    ) -> "List[Tuple[str, str, str]]":
+        """Derived BAL cells no witnessed case has entered."""
+        from execution_testing.cli.fuzzer_bridge.bal_reach import unreached
+
+        return unreached(fork, self._bal_cells, self._bal_aliases)[0]
+
+    def unreached_bal_aliases(self, fork: "Fork") -> "List[Tuple[str, str]]":
+        """Derived aliasing pairs no witnessed case has entered."""
+        from execution_testing.cli.fuzzer_bridge.bal_reach import unreached
+
+        return unreached(fork, self._bal_cells, self._bal_aliases)[1]
 
     def unreached_frames(
         self, fork: "Optional[Fork]" = None
