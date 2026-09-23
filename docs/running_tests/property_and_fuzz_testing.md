@@ -298,6 +298,19 @@ tmux new -s fuzz
 uv run fuzz campaign devnet --hours 8 --fill-workers 24
 ```
 
+A campaign writes one fixture format, chosen by the lane its runners read:
+`fixture_format: blockchain_test` (the default) for the import lane, or
+`blockchain_test_engine` for the newPayload lane. The two exercise
+different client code, and the engine format carries the block access list
+inside `engineNewPayloads[].params[0].blockAccessList`, which is where an
+engine loader reads it -- nethermind's blocktest loader drops the list, so
+the engine format is how its parallel processor runs on our own fixtures.
+Each case is filled and serialized once, in that format, and the format is
+recorded in `manifest.json` and in every fixture's `_info`.
+`blockchain_test_engine_x` is not yet a campaign format: it fills around
+shared pre-allocation groups, and asking for it is refused before the
+campaign starts.
+
 A client entry can carry `runner_flags`, passed to its fixture runner on
 every run, and `contrast_flags`, a second flag set the same binary is also
 run with on every shard. Where a client's knob is not argv, `contrast_env`

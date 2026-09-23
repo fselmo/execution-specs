@@ -33,12 +33,17 @@ class RunManifest:
     count: int
     created: str
     producer: str = ""
-    sources: Dict[str, str] = field(default_factory=dict)
-    """Where each client binary came from: a path, or `build@<base commit>`
-    plus `+series:<hash>` when a patch series was applied on it."""
     """The transition tool that filled the cases when it was not EELS,
     with its version: a four-month-old evmone would have produced 22%
     "divergences" that were the producer, not the clients."""
+    sources: Dict[str, str] = field(default_factory=dict)
+    """Where each client binary came from: a path, or `build@<base commit>`
+    plus `+series:<hash>` when a patch series was applied on it."""
+    fixture_format: str = "blockchain_test"
+    """The one format the run wrote. A verdict is a statement about a
+    client's import path or its newPayload path, which are different code,
+    so a manifest that did not say which would leave every verdict in it
+    ambiguous about what was actually exercised."""
 
     def write(self, path: Path) -> Path:
         """Write the manifest as JSON to ``path``."""

@@ -41,6 +41,7 @@ from typing import (
     Sequence,
     Set,
     Tuple,
+    Type,
 )
 
 from execution_testing.client_clis import TransitionTool
@@ -50,7 +51,11 @@ from execution_testing.client_clis.clis.execution_specs import (
 from execution_testing.evm_tools.t8n.evm_trace.bal_witness import (
     bracket_width,
 )
-from execution_testing.fixtures import BlockchainFixture
+from execution_testing.fixtures import (
+    BaseFixture,
+    BlockchainEngineFixture,
+    BlockchainFixture,
+)
 from execution_testing.forks import Fork
 from execution_testing.specs.invariants import (
     InvariantViolationWarning,
@@ -626,12 +631,40 @@ def render_report(
 
 _FILL: Dict[str, Any] = {}
 
+CAMPAIGN_FORMATS: Tuple[str, ...] = (
+    BlockchainFixture.format_name,
+    BlockchainEngineFixture.format_name,
+)
+"""The formats a campaign may write, one per campaign, chosen by the lane
+its runners consume: the import lane reads `blockchain_test`, the
+newPayload lane `blockchain_test_engine`, whose `engineNewPayloads` carry
+the block access list inside `params[0]` where an engine loader reads it.
+
+`blockchain_test_engine_x` is not here yet. It fills in two phases around
+shared pre-allocation groups, which is plugin machinery a campaign does
+not run; giving each case a group of its own is the route in, and until
+then asking for it fails at option parsing rather than mid-campaign."""
+
+
+def campaign_format(name: str) -> Type[BaseFixture]:
+    """The fixture class for a campaign format name, or a loud refusal."""
+    if name not in CAMPAIGN_FORMATS:
+        raise ValueError(
+            f"fixture format {name!r} is not one a campaign writes; "
+            f"choose from {', '.join(CAMPAIGN_FORMATS)}"
+        )
+    return BaseFixture.formats[name]
+
 
 def _init_fill_worker(
-    fork_name: str, invariants: bool = False, producer: Optional[str] = None
+    fork_name: str,
+    invariants: bool = False,
+    producer: Optional[str] = None,
+    fixture_format: str = BlockchainFixture.format_name,
 ) -> None:
     """Build the per-process fill tool once."""
     _FILL["fork"] = _fork_by_name(fork_name)
+    _FILL["format"] = campaign_format(fixture_format)
     _FILL["invariants"] = invariants
     _FILL["producer"] = producer
     if invariants:
@@ -704,9 +737,13 @@ def fill_case(
     fork: Fork,
     eels: ExecutionSpecsTransitionTool,
     violations: Optional[List[Any]] = None,
+    fixture_format: Type[BaseFixture] = BlockchainFixture,
 ) -> Dict[str, Any]:
     """
-    Fill one case into a blockchain fixture's JSON, with its `_info`.
+    Fill one case into a fixture's JSON, with its `_info`.
+
+    One fill, one serialization, in the one format the campaign's lane
+    reads; the format is stamped into `_info` by the fixture itself.
 
     A block that fails to build makes the spec dump traces and allocs to
     stdout before raising; unfillable candidates are routine here, so that
@@ -719,7 +756,7 @@ def fill_case(
             # into a log nobody keeps -- the failure mode that lost the
             # per-case timings twice.
             warnings.simplefilter("ignore", InvariantViolationWarning)
-            result = test.generate(t8n=eels, fixture_format=BlockchainFixture)
+            result = test.generate(t8n=eels, fixture_format=fixture_format)
     if violations is not None:
         violations.extend(test.invariant_violations)
     return result.fixture.json_dict_with_info()
@@ -732,7 +769,12 @@ def _fill_seed(
     try:
         return (
             seed,
-            fill_case(generate_fuzzer_output(fork, seed), fork, _FILL["eels"]),
+            fill_case(
+                generate_fuzzer_output(fork, seed),
+                fork,
+                _FILL["eels"],
+                fixture_format=_FILL["format"],
+            ),
             None,
         )
     except Exception as exc:  # noqa: BLE001 - a fill failure is data, not a crash
@@ -744,6 +786,7 @@ def _fill_pool(
     fork: Fork,
     invariants: bool = False,
     producer: Optional[Path] = None,
+    fixture_format: str = BlockchainFixture.format_name,
 ) -> ProcessPoolExecutor:
     return ProcessPoolExecutor(
         max_workers=workers,
@@ -752,6 +795,7 @@ def _fill_pool(
             fork.name(),
             invariants,
             str(producer) if producer is not None else None,
+            fixture_format,
         ),
     )
 
@@ -911,7 +955,11 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
         try:
             with _case_deadline(FILL_TIMEOUT_SECONDS):
                 fixtures[f"seed_{seed}"] = fill_case(
-                    case, fork, _FILL["eels"], violations=seen
+                    case,
+                    fork,
+                    _FILL["eels"],
+                    violations=seen,
+                    fixture_format=_FILL["format"],
                 )
         except FillTimeoutError:
             timeouts[seed] = FILL_TIMEOUT_SECONDS
@@ -1039,6 +1087,15 @@ class CampaignOptions:
     producer: Optional[Path] = None
     """A transition tool that fills instead of EELS; see `escalate`."""
     producer_name: str = "producer"
+    fixture_format: str = BlockchainFixture.format_name
+    """The one format this campaign writes, chosen by the lane its runners
+    read; see `CAMPAIGN_FORMATS`. Validated when the options are built so a
+    campaign never starts on a format it cannot finish."""
+
+    def __post_init__(self) -> None:
+        """Refuse an unwritable format before anything is filled."""
+        campaign_format(self.fixture_format)
+
     sources: Mapping[str, str] = field(default_factory=dict)
     """Per client, where its binary came from, for the manifest."""
 
@@ -1197,13 +1254,19 @@ def run_campaign(
         producer=producer_version
         and f"{options.producer_name}: {producer_version}",
         sources=dict(options.sources),
+        fixture_format=options.fixture_format,
     ).write(output / "manifest.json")
 
     def fill_spec(fixture_name: str) -> Tuple[Dict[str, Any], List[str]]:
         assert spec_tool is not None
         spec_tool.last_signature = None
         case = generate_fuzzer_output(options.fork, _seed_of(fixture_name))
-        fixture = fill_case(case, options.fork, spec_tool)
+        fixture = fill_case(
+            case,
+            options.fork,
+            spec_tool,
+            fixture_format=campaign_format(options.fixture_format),
+        )
         return fixture, _case_events(spec_tool)
 
     if state.signatures_reset:
@@ -1245,6 +1308,7 @@ def run_campaign(
         options.fork,
         options.invariant_checks,
         options.producer,
+        options.fixture_format,
     ) as pool:
         in_flight = max(2 * options.fill_workers, 2)
         pending: Deque[Tuple[range, "Future[Dict[str, Any]]"]] = deque()
@@ -1632,7 +1696,12 @@ def _write_bundle(
 
     def still_fails(candidate: FuzzerOutput) -> bool:
         try:
-            filled = fill_case(candidate, options.fork, eels)
+            filled = fill_case(
+                candidate,
+                options.fork,
+                eels,
+                fixture_format=campaign_format(options.fixture_format),
+            )
         except Exception:  # noqa: BLE001 - an unfillable candidate is not a reduction
             return False
         with tempfile.TemporaryDirectory() as tmp:
@@ -1648,7 +1717,12 @@ def _write_bundle(
     save_case(minimized, bundle / "minimized.json")
     eels.compute_signature = True
     eels.last_signature = None
-    fill_case(minimized, options.fork, eels)
+    fill_case(
+        minimized,
+        options.fork,
+        eels,
+        fixture_format=campaign_format(options.fixture_format),
+    )
     mechanism["minimized"] = _case_events(eels)
     (bundle / "events.json").write_text(json.dumps(mechanism, indent=1))
     _reproducer(bundle, minimized, options, eels, runners[focus_client])

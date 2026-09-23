@@ -205,6 +205,11 @@ class CampaignConfig(BaseModel):
     the panel does not agree on: a producer that disagrees with EELS
     there is a `producer-disagreement`, and the clients are judged again
     on the spec's fixture. Fast mode has no execution signature."""
+    fixture_format: str = "blockchain_test"
+    """The one format the campaign writes, chosen by the lane its runners
+    read: `blockchain_test` for the import lane, `blockchain_test_engine`
+    for the newPayload lane, which is the route by which nethermind's
+    engine loader reaches its parallel processor on our own fixtures."""
 
 
 class FuzzConfig(BaseModel):
