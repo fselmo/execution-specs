@@ -198,6 +198,19 @@ check_bal_against_witness
 bal_slots_from_model
 bracket_width
 
+# packages/testing/src/execution_testing/evm_tools/t8n/evm_trace/
+# bal_observer.py - the observer is constructed through a function-local
+# import in ExecutionSpecsTransitionTool._evaluate, and its observation is
+# read from cli/fuzzer_bridge, which vulture does not scan
+BalReachObserver
+installed
+observation
+cells
+unattributed
+closed_by_state
+unresolved
+bindings
+
 # packages/testing/src/execution_testing/evm_tools/daemon.py -
 # overrides `BaseHTTPRequestHandler.log_request`
 log_request

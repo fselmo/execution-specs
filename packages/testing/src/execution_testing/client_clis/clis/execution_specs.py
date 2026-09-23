@@ -31,6 +31,10 @@ from execution_testing.forks import Fork
 
 if TYPE_CHECKING:
     from execution_testing.evm_tools.t8n import ForkCache
+    from execution_testing.evm_tools.t8n.evm_trace.bal_observer import (
+        BalObservation,
+        BalReachSpec,
+    )
     from execution_testing.evm_tools.t8n.evm_trace.bal_witness import (
         BalWitness,
     )
@@ -59,6 +63,14 @@ class ExecutionSpecsTransitionTool(TransitionTool):
         self.last_signature: Optional["Signature"] = None
         self.compute_bal_witness = False
         self.last_bal_witness: Optional["BalWitness"] = None
+        self.bal_reach: Optional["BalReachSpec"] = None
+        """The derived BAL reach space to observe against; None is off."""
+        self.bal_reach_every = 1
+        """Observe one run in this many. The hook costs a few percent of
+        fill, and a reach map needs a cell seen at least once, not every
+        time, so a later measurement can trade rate for cost here."""
+        self.last_bal_observation: Optional["BalObservation"] = None
+        self._bal_reach_runs = 0
         self._info_metadata: Optional[Dict[str, Any]] = {}
         # Defer importing the `ethereum` package (see `fork_cache` and
         # `version`) until the tool is actually used. The tool is constructed
@@ -174,13 +186,31 @@ class ExecutionSpecsTransitionTool(TransitionTool):
                 tracers = GroupTracer()
             tracers.add(signature_tracer)
 
+        bal_observer = None
+        if self.bal_reach is not None:
+            self._bal_reach_runs += 1
+            if (self._bal_reach_runs - 1) % self.bal_reach_every == 0:
+                from execution_testing.evm_tools.t8n.evm_trace.bal_observer import (  # noqa: E501
+                    BalReachObserver,
+                )
+
+                bal_observer = BalReachObserver(self.bal_reach)
+                if tracers is None:
+                    tracers = GroupTracer()
+                tracers.add(bal_observer)
+
         t8n = T8N(
             transition_tool_data,
             cache=self.fork_cache,
             tracers=tracers,
             exception_mapper=self.exception_mapper,
         )
-        output = t8n.run()
+        if bal_observer is not None:
+            with bal_observer.installed():
+                output = t8n.run()
+            self.last_bal_observation = bal_observer.observation()
+        else:
+            output = t8n.run()
 
         if count_tracer is not None:
             output.result.opcode_count = OpcodeCount.model_validate(

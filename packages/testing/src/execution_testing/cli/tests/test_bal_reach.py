@@ -1,5 +1,8 @@
 """Tests for the BAL reach space derived from the fork's own source."""
 
+from execution_testing.evm_tools.t8n.evm_trace.bal_observer import (
+    BalObservation,
+)
 from execution_testing.forks import Amsterdam
 
 from ..fuzzer_bridge.bal_reach import (
@@ -222,3 +225,165 @@ def test_the_space_record_is_trendable_and_starts_at_zero_reached() -> None:
     assert record["generator_version"] and record["eels_commit"]
     json.dumps(record)  # one reach-log line
     assert "reasons" in render_bal_space(record)
+
+
+def _observed_fills(seeds: range, spec: object = None) -> list:
+    """Fill real cases with the observer on; one observation per case."""
+    import contextlib
+    import io
+    import warnings
+
+    from ..fuzzer_bridge import campaign as mod
+    from ..fuzzer_bridge.bal_reach import observer_spec
+    from ..fuzzer_bridge.generator import generate_fuzzer_output
+
+    mod._init_fill_worker("Amsterdam")
+    fork, eels = mod._FILL["fork"], mod._FILL["eels"]
+    eels.bal_reach = spec or observer_spec(fork)
+    observations = []
+    for seed in seeds:
+        eels.last_bal_observation = None
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    mod.fill_case(
+                        generate_fuzzer_output(fork, seed), fork, eels
+                    )
+        except Exception:  # noqa: BLE001 - an unfillable seed observes nothing
+            continue
+        observations.append(eels.last_bal_observation)
+    return observations
+
+
+def test_every_recorder_binding_the_fork_imports_is_wrapped() -> None:
+    """
+    The recorders are imported by name, so a binding the hook does not
+    replace is a quarter of the calls going nowhere with no error. The
+    bindings that must exist are read off the fork's own imports rather
+    than listed, and an import inside a function body -- which no
+    module-level wrapping can reach -- fails here rather than silently.
+    """
+    import ast
+
+    from ..fuzzer_bridge.bal_reach import (
+        TRACKER_MODULE,
+        _fork_package,
+        _module_asts,
+        recorders,
+    )
+
+    names = set(recorders(Amsterdam))
+    expected = {(TRACKER_MODULE, name) for name in names}
+    lazy = []
+    for module, tree in _module_asts(_fork_package(Amsterdam)).items():
+        top_level = set(tree.body)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if not (node.module or "").endswith(TRACKER_MODULE):
+                continue
+            for alias in node.names:
+                if alias.name not in names:
+                    continue
+                if node in top_level:
+                    expected.add((module, alias.asname or alias.name))
+                else:
+                    lazy.append((module, alias.name))
+    assert not lazy, f"recorders imported inside functions: {lazy}"
+    (observation,) = _observed_fills(range(710000, 710001))
+    assert expected <= observation.bindings
+
+
+def test_no_recorder_call_goes_unattributed() -> None:
+    """
+    The runtime witness for the derivation: every recorder call's first
+    frame outside the tracker is a derived reason. The kill check drops
+    one reason from the spec, and its calls must then surface as
+    unattributed rather than be credited to a reason further up the
+    stack, which is what a looser rule would do without complaint.
+    """
+    import dataclasses
+
+    from ..fuzzer_bridge.bal_reach import observer_spec
+
+    observations = _observed_fills(range(710000, 710010))
+    assert observations
+    assert all(not o.unattributed for o in observations)
+
+    spec = observer_spec(Amsterdam)
+    dropped = "vm.instructions.storage.sload"
+    blind = dataclasses.replace(spec, reasons=spec.reasons - {dropped})
+    missed = _observed_fills(range(710000, 710010), blind)
+    assert any(dropped in o.unattributed for o in missed)
+
+
+def test_a_frame_that_runs_no_code_still_gets_its_outcome() -> None:
+    """
+    A call into an account with no code emits no `EvmStop`, so the trace
+    never closes its frame; the frame's own `error` says how it ended.
+    Dropping those would lose plain value transfers into accounts.
+    """
+    observations = _observed_fills(range(710000, 710030))
+    assert sum(o.closed_by_state for o in observations) > 0
+    assert all(o.unresolved == 0 for o in observations)
+
+
+def test_fees_join_the_transaction_they_were_charged_for() -> None:
+    """
+    `TransactionEnd` is traced before the fees are disbursed, so fee
+    entries arrive after their transaction has closed. Both phases belong
+    to the same transaction, so per case they must show the same outcomes;
+    a broken late join would leave the fee entries all `success`.
+    """
+    observations = _observed_fills(range(710000, 710060))
+
+    def outcomes(observation: BalObservation, reason: str) -> set:
+        return {
+            outcome
+            for r, kind, outcome in observation.cells
+            if r == reason and kind == "touched_account"
+        }
+
+    non_success = False
+    for observation in observations:
+        sender = outcomes(observation, "fork.update_sender_state")
+        fees = outcomes(observation, "fork.disburse_gas_fees")
+        assert sender == fees
+        non_success |= bool(sender - {"success"})
+    assert non_success, "no failing transaction in range; widen the seeds"
+
+
+def test_the_wrapping_is_undone_when_the_fill_returns() -> None:
+    """The hook must not leak into fills that did not ask for it."""
+    import importlib
+
+    tracker = importlib.import_module("ethereum.forks.amsterdam.state_tracker")
+    storage = importlib.import_module(
+        "ethereum.forks.amsterdam.vm.instructions.storage"
+    )
+    _observed_fills(range(710000, 710001))
+    assert tracker.get_storage.__name__ == "get_storage"
+    assert storage.get_storage is tracker.get_storage
+
+
+def test_the_observation_record_carries_the_cross_check() -> None:
+    """
+    The reach-log line for the runtime half: unattributed calls are the
+    number that must be zero, and the frame-state fallback is counted so
+    it reads as a number rather than a silent default.
+    """
+    import json
+
+    from ..fuzzer_bridge.bal_reach import entry_reasons
+    from ..fuzzer_bridge.signature_baseline import bal_observation_record
+
+    record = bal_observation_record(Amsterdam, range(710000, 710010))
+    json.dumps(record)
+    assert record["kind"] == "bal-observed"
+    assert record["unattributed"] == {}
+    assert record["unresolved"] == 0
+    assert 0 < record["cells_reached"] <= record["cells"]
+    assert set(record["reasons_never_observed"]) <= set(
+        entry_reasons(Amsterdam)
+    )
