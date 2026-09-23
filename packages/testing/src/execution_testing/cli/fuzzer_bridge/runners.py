@@ -54,13 +54,25 @@ _NETHERMIND_SUFFIX = re.compile(r"_d\d+g\d+v\d+_$")
 
 
 def parse_json_array(stdout: str) -> Dict[str, Verdict]:
-    """Verdicts from a `[{"name", "pass", "error"}, ...]` list in stdout."""
-    start = stdout.find("[")
-    if start < 0:
-        return {}
-    try:
-        results = json.loads(stdout[start:])
-    except json.JSONDecodeError:
+    """
+    Verdicts from a `[{"name", "pass", "error"}, ...]` list in stdout.
+
+    The list is the first line-initial `[` that decodes: erigon prints
+    `[WARN] ... use ERIGON_ prefix` lines ahead of it whenever an
+    environment knob such as `IGNORE_BAL` is set, and taking the first `[`
+    lost every verdict of its contrast run.
+    """
+    decoder = json.JSONDecoder()
+    results: Any = None
+    for match in re.finditer(r"^\[", stdout, re.MULTILINE):
+        try:
+            results, _ = decoder.raw_decode(stdout, match.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(results, list):
+            break
+        results = None
+    if results is None:
         return {}
     verdicts: Dict[str, Verdict] = {}
     for entry in results:

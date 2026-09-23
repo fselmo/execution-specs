@@ -555,14 +555,16 @@ def render_report(
             "environment, named `<client>:<run>`. A fixture the two judge "
             "differently is the client disagreeing with itself, a finding "
             "that needs no other witness. Compared counts only fixtures "
-            "neither run refused.",
+            "neither run refused; not compared counts the rest, where "
+            "either run refused the case or never reported on it.",
             "",
-            "| client run | compared | primary failed | contrast failed | "
-            "mismatches |",
-            "| --- | --- | --- | --- | --- |",
+            "| client run | compared | not compared | primary failed | "
+            "contrast failed | mismatches |",
+            "| --- | --- | --- | --- | --- | --- |",
         ]
         lines += [
             f"| {name} | {tally.get('compared', 0)} | "
+            f"{tally.get('not_compared', 0)} | "
             f"{tally.get('primary_failed', 0)} | "
             f"{tally.get('contrast_failed', 0)} | "
             f"{tally.get('mismatches', 0)} |"
@@ -1547,11 +1549,18 @@ def run_campaign(
                     for lane, other in contrast_results.items():
                         name = contrast_runners[lane][0]
                         primary = results[name][fixture_name]
-                        if contrast_excluded(primary, other[fixture_name]):
-                            continue
                         tally = state.contrast.setdefault(
                             lane, {"compared": 0, "mismatches": 0}
                         )
+                        # Counted, not just skipped: erigon's contrast once
+                        # lost every verdict to a parser that stopped at a
+                        # `[WARN]` line, and a lane that compares nothing
+                        # read as a lane that found nothing.
+                        if contrast_excluded(primary, other[fixture_name]):
+                            tally["not_compared"] = (
+                                tally.get("not_compared", 0) + 1
+                            )
+                            continue
                         tally["compared"] += 1
                         # Per-mode counts: a divergence in one mode and a
                         # divergence in both look the same in a digest

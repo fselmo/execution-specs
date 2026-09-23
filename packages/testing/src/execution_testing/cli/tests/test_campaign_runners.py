@@ -31,6 +31,17 @@ def test_parse_json_array_from_noisy_stdout() -> None:
     assert verdicts["seed_2"].error == "root mismatch"
 
 
+def test_parse_json_array_past_erigon_env_warnings() -> None:
+    """Erigon's `[WARN]` lines start with `[` and must not end the search."""
+    out = (
+        "[WARN] [09-23|23:54:01.399] [env] use ERIGON_ prefix for env "
+        "var=IGNORE_BAL\n"
+        "[WARN] [09-23|23:54:01.399] [env]      IGNORE_BAL=true\n"
+        '[\n  {"name": "seed_1", "pass": true, "error": ""}\n]\n'
+    )
+    assert parse_json_array(out)["seed_1"].passed
+
+
 def test_parse_json_array_without_results_is_empty() -> None:
     """Garbage output yields no verdicts rather than an exception."""
     assert parse_json_array("boom") == {}
