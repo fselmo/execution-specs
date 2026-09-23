@@ -202,6 +202,7 @@ def campaign(
         },
         producer=producer,
         producer_name=producer_name or "producer",
+        fixture_format=campaign_config.fixture_format,
         sources=sources,
     )
     if producer is not None:
@@ -212,7 +213,8 @@ def campaign(
     click.echo(
         f"campaign {name}: {campaign_config.fork} vs {', '.join(clients)} "
         f"-> {options.output} "
-        f"(batch {batch}, {options.fill_workers} fill workers)"
+        f"(batch {batch}, {options.fill_workers} fill workers, "
+        f"{options.fixture_format})"
     )
     contrasted = set(options.contrast_flags) | set(options.contrast_env)
     for n in sorted(contrasted):

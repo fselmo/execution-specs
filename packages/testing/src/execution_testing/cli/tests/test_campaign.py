@@ -761,7 +761,9 @@ def test_a_timed_out_case_is_recorded_and_the_slice_continues(
 
     monkeypatch.setattr(mod, "FILL_TIMEOUT_SECONDS", 0.2)
     monkeypatch.setattr(mod, "ExecutionSpecsTransitionTool", _Eels)
-    monkeypatch.setattr(mod, "_FILL", {"fork": Osaka})
+    monkeypatch.setattr(
+        mod, "_FILL", {"fork": Osaka, "format": mod.BlockchainFixture}
+    )
     mod._FILL["eels"] = mod._reference_tool()
     mod._FILL["capabilities"] = mod._capabilities(mod._FILL["eels"])
 
@@ -772,9 +774,13 @@ def test_a_timed_out_case_is_recorded_and_the_slice_continues(
     monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
 
     def fake_fill(
-        case: Any, fork: Any, eels: Any, violations: Any = None
+        case: Any,
+        fork: Any,
+        eels: Any,
+        violations: Any = None,
+        fixture_format: Any = None,
     ) -> Dict[str, Any]:
-        del fork, eels, violations
+        del fork, eels, violations, fixture_format
         if case._seed == 2:
             _time.sleep(5)
         return {"ok": case._seed}
@@ -816,7 +822,9 @@ def test_a_degraded_rebuild_after_a_timeout_stops_the_worker(
 
     monkeypatch.setattr(mod, "FILL_TIMEOUT_SECONDS", 0.2)
     monkeypatch.setattr(mod, "ExecutionSpecsTransitionTool", _Eels)
-    monkeypatch.setattr(mod, "_FILL", {"fork": Osaka})
+    monkeypatch.setattr(
+        mod, "_FILL", {"fork": Osaka, "format": mod.BlockchainFixture}
+    )
     original = mod._reference_tool()
     original.compute_bal_witness = True
     mod._FILL["eels"] = original
@@ -865,7 +873,11 @@ def test_a_fill_slice_reports_its_own_generator_version(
         def reset_opcode_count(self) -> None:
             pass
 
-    monkeypatch.setattr(mod, "_FILL", {"fork": Osaka, "eels": _Eels()})
+    monkeypatch.setattr(
+        mod,
+        "_FILL",
+        {"fork": Osaka, "eels": _Eels(), "format": mod.BlockchainFixture},
+    )
 
     def fake_generate(fork: Any, seed: int) -> Any:
         del fork
@@ -874,9 +886,13 @@ def test_a_fill_slice_reports_its_own_generator_version(
     monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
 
     def fake_fill(
-        case: Any, fork: Any, eels: Any, violations: Any = None
+        case: Any,
+        fork: Any,
+        eels: Any,
+        violations: Any = None,
+        fixture_format: Any = None,
     ) -> Dict[str, Any]:
-        del fork, eels, violations
+        del fork, eels, violations, fixture_format
         return {"ok": case._seed}
 
     monkeypatch.setattr(mod, "fill_case", fake_fill)
@@ -903,16 +919,24 @@ def test_invariant_violations_are_counted_not_warned(
         def reset_opcode_count(self) -> None:
             pass
 
-    monkeypatch.setattr(mod, "_FILL", {"fork": Osaka, "eels": _Eels()})
+    monkeypatch.setattr(
+        mod,
+        "_FILL",
+        {"fork": Osaka, "eels": _Eels(), "format": mod.BlockchainFixture},
+    )
 
     def fake_generate(fork: Any, seed: int) -> Any:
         del fork
         return SimpleNamespace(transactions=[], _seed=seed)
 
     def fake_fill(
-        case: Any, fork: Any, eels: Any, violations: Any = None
+        case: Any,
+        fork: Any,
+        eels: Any,
+        violations: Any = None,
+        fixture_format: Any = None,
     ) -> Dict[str, Any]:
-        del fork, eels
+        del fork, eels, fixture_format
         if case._seed == 2 and violations is not None:
             violations.append(SimpleNamespace(invariant="bal_access_witness"))
         return {"ok": case._seed}
@@ -1100,3 +1124,81 @@ def test_a_producer_fill_carries_no_events(
     result = mod._fill_slice(([7], str(tmp_path)))
     assert result["names"] == ["seed_7"]
     assert result["case_events"] == {"seed_7": []}
+
+
+def test_a_campaign_writes_only_formats_its_runners_can_read() -> None:
+    """
+    The import lane and the newPayload lane each read one format. Engine X
+    is refused until a campaign can give each case its own pre-allocation
+    group; asking for it has to fail before a campaign starts, not after
+    it has filled a night of cases no runner will read.
+    """
+    from ..fuzzer_bridge.campaign import CampaignOptions, campaign_format
+
+    assert campaign_format("blockchain_test").format_name == "blockchain_test"
+    assert (
+        campaign_format("blockchain_test_engine").format_name
+        == "blockchain_test_engine"
+    )
+    for refused in ("blockchain_test_engine_x", "state_test", "bogus"):
+        with pytest.raises(ValueError, match="not one a campaign writes"):
+            campaign_format(refused)
+    with pytest.raises(ValueError, match="not one a campaign writes"):
+        CampaignOptions(
+            fork=Osaka,
+            clients={},
+            output=Path("unused"),
+            fixture_format="blockchain_test_engine_x",
+        )
+
+
+def test_an_engine_fixture_carries_the_access_list_where_loaders_read_it() -> (
+    None
+):
+    """
+    The premise the newPayload lane rests on, witnessed on a real fill:
+    nethermind's blocktest loader drops the list, its engine loader reads
+    it from `params[0].blockAccessList`. If the engine format stopped
+    putting it there, the lane would reach the parallel processor on
+    nothing -- so this fills a real case rather than trusting the model.
+    The near-miss is the import format, which has no payload to carry it.
+    """
+    from ..fuzzer_bridge import campaign as mod
+    from ..fuzzer_bridge.generator import generate_fuzzer_output
+
+    mod._init_fill_worker("Amsterdam", fixture_format="blockchain_test_engine")
+    fork, eels = mod._FILL["fork"], mod._FILL["eels"]
+    case = generate_fuzzer_output(fork, 700001)
+
+    engine = mod.fill_case(
+        case, fork, eels, fixture_format=mod._FILL["format"]
+    )
+    assert engine["_info"]["fixture-format"] == "blockchain_test_engine"
+    payload = engine["engineNewPayloads"][0]
+    assert int(payload["newPayloadVersion"]) >= 5
+    assert payload["params"][0]["blockAccessList"]
+
+    imported = mod.fill_case(case, fork, eels)
+    assert "engineNewPayloads" not in imported
+    assert imported["_info"]["fixture-format"] == "blockchain_test"
+
+
+def test_the_manifest_names_the_format_the_run_wrote(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A verdict is about a client's import path or its newPayload path,
+    which are different code; a manifest silent on which would leave every
+    verdict in the run ambiguous about what it exercised.
+    """
+    failing = {"geth": lambda _s: False}
+    _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        count=3,
+        batch=3,
+        fixture_format="blockchain_test_engine",
+    )
+    manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
+    assert manifest["fixture_format"] == "blockchain_test_engine"
