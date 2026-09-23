@@ -4,10 +4,11 @@ The reach gate: landed capabilities must keep firing.
 A capability regression -- an event or enumerated frame cell the
 generator could reach going dark after a refactor or a distribution
 change -- must fail like a broken test, not wait for a human to notice
-it in the unreached map. The baseline below was measured on the
-400-seed Amsterdam curve: a greedy cover chose the fewest seeds that
-together fire every reached L1 event and every reached cell of the
-enumerated fork space. Cases are deterministic from
+it in the unreached map. The baseline below was measured over 5000
+Amsterdam seeds: a greedy cover chose the fewest seeds that together
+fire every reached L1 event, every reached cell of the enumerated fork
+space, and every BAL cell the window samples reliably (see
+`bal_gate_floor`). Cases are deterministic from
 ``(fork, GENERATOR_VERSION, seed)``, so the gate is deterministic.
 
 Re-baseline deliberately, never silently: the version guard fails first
@@ -46,12 +47,18 @@ BASELINE_GENERATOR_VERSION = 15
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    54,
     243,
+    371,
+    437,
+    808,
+    1049,
+    1185,
     1224,
-    2357,
-    2953,
-    4664,
+    1513,
+    3107,
+    4028,
+    4275,
+    4809,
 )
 """Greedy cover over a 5000-seed baseline at v15: together these fire
 every target below.
@@ -163,6 +170,375 @@ GATE_FRAMES: FrozenSet[Tuple[int, str, str]] = frozenset(
 )
 
 
+GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
+    {
+        ("fork.check_transaction", "touched_account", "exceptional_halt"),
+        ("fork.check_transaction", "touched_account", "out_of_gas"),
+        ("fork.check_transaction", "touched_account", "revert"),
+        ("fork.check_transaction", "touched_account", "success"),
+        ("fork.disburse_gas_fees", "balance_change", "exceptional_halt"),
+        ("fork.disburse_gas_fees", "balance_change", "out_of_gas"),
+        ("fork.disburse_gas_fees", "balance_change", "revert"),
+        ("fork.disburse_gas_fees", "balance_change", "success"),
+        ("fork.disburse_gas_fees", "touched_account", "exceptional_halt"),
+        ("fork.disburse_gas_fees", "touched_account", "out_of_gas"),
+        ("fork.disburse_gas_fees", "touched_account", "revert"),
+        ("fork.disburse_gas_fees", "touched_account", "success"),
+        (
+            "fork.process_checked_system_transaction",
+            "touched_account",
+            "success",
+        ),
+        ("fork.update_sender_state", "balance_change", "exceptional_halt"),
+        ("fork.update_sender_state", "balance_change", "out_of_gas"),
+        ("fork.update_sender_state", "balance_change", "revert"),
+        ("fork.update_sender_state", "balance_change", "success"),
+        ("fork.update_sender_state", "nonce_change", "exceptional_halt"),
+        ("fork.update_sender_state", "nonce_change", "out_of_gas"),
+        ("fork.update_sender_state", "nonce_change", "revert"),
+        ("fork.update_sender_state", "nonce_change", "success"),
+        ("fork.update_sender_state", "touched_account", "exceptional_halt"),
+        ("fork.update_sender_state", "touched_account", "out_of_gas"),
+        ("fork.update_sender_state", "touched_account", "revert"),
+        ("fork.update_sender_state", "touched_account", "success"),
+        (
+            "vm.eoa_delegation.calculate_delegation_cost",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        (
+            "vm.eoa_delegation.calculate_delegation_cost",
+            "touched_account",
+            "out_of_gas",
+        ),
+        (
+            "vm.eoa_delegation.calculate_delegation_cost",
+            "touched_account",
+            "revert",
+        ),
+        (
+            "vm.eoa_delegation.calculate_delegation_cost",
+            "touched_account",
+            "success",
+        ),
+        (
+            "vm.eoa_delegation.resolve_delegated_code_address",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        (
+            "vm.eoa_delegation.resolve_delegated_code_address",
+            "touched_account",
+            "out_of_gas",
+        ),
+        (
+            "vm.eoa_delegation.resolve_delegated_code_address",
+            "touched_account",
+            "revert",
+        ),
+        (
+            "vm.eoa_delegation.resolve_delegated_code_address",
+            "touched_account",
+            "success",
+        ),
+        (
+            "vm.eoa_delegation.set_delegation",
+            "code_change",
+            "exceptional_halt",
+        ),
+        ("vm.eoa_delegation.set_delegation", "code_change", "out_of_gas"),
+        ("vm.eoa_delegation.set_delegation", "code_change", "revert"),
+        ("vm.eoa_delegation.set_delegation", "code_change", "success"),
+        (
+            "vm.eoa_delegation.set_delegation",
+            "nonce_change",
+            "exceptional_halt",
+        ),
+        ("vm.eoa_delegation.set_delegation", "nonce_change", "out_of_gas"),
+        ("vm.eoa_delegation.set_delegation", "nonce_change", "revert"),
+        ("vm.eoa_delegation.set_delegation", "nonce_change", "success"),
+        (
+            "vm.eoa_delegation.set_delegation",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        ("vm.eoa_delegation.set_delegation", "touched_account", "out_of_gas"),
+        ("vm.eoa_delegation.set_delegation", "touched_account", "revert"),
+        ("vm.eoa_delegation.set_delegation", "touched_account", "success"),
+        (
+            "vm.eoa_delegation.validate_authorization",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        (
+            "vm.eoa_delegation.validate_authorization",
+            "touched_account",
+            "out_of_gas",
+        ),
+        (
+            "vm.eoa_delegation.validate_authorization",
+            "touched_account",
+            "revert",
+        ),
+        (
+            "vm.eoa_delegation.validate_authorization",
+            "touched_account",
+            "success",
+        ),
+        (
+            "vm.instructions.environment.balance",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        (
+            "vm.instructions.environment.balance",
+            "touched_account",
+            "out_of_gas",
+        ),
+        ("vm.instructions.environment.balance", "touched_account", "success"),
+        (
+            "vm.instructions.environment.extcodecopy",
+            "touched_account",
+            "out_of_gas",
+        ),
+        (
+            "vm.instructions.environment.extcodehash",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        (
+            "vm.instructions.environment.extcodehash",
+            "touched_account",
+            "out_of_gas",
+        ),
+        (
+            "vm.instructions.environment.extcodehash",
+            "touched_account",
+            "success",
+        ),
+        (
+            "vm.instructions.environment.extcodesize",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        (
+            "vm.instructions.environment.extcodesize",
+            "touched_account",
+            "out_of_gas",
+        ),
+        (
+            "vm.instructions.environment.extcodesize",
+            "touched_account",
+            "success",
+        ),
+        (
+            "vm.instructions.environment.self_balance",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        (
+            "vm.instructions.environment.self_balance",
+            "touched_account",
+            "out_of_gas",
+        ),
+        (
+            "vm.instructions.environment.self_balance",
+            "touched_account",
+            "revert",
+        ),
+        (
+            "vm.instructions.environment.self_balance",
+            "touched_account",
+            "success",
+        ),
+        ("vm.instructions.storage.sload", "storage_read", "exceptional_halt"),
+        ("vm.instructions.storage.sload", "storage_read", "out_of_gas"),
+        ("vm.instructions.storage.sload", "storage_read", "revert"),
+        ("vm.instructions.storage.sload", "storage_read", "success"),
+        ("vm.instructions.storage.sstore", "storage_read", "exceptional_halt"),
+        ("vm.instructions.storage.sstore", "storage_read", "out_of_gas"),
+        ("vm.instructions.storage.sstore", "storage_read", "revert"),
+        ("vm.instructions.storage.sstore", "storage_read", "success"),
+        (
+            "vm.instructions.storage.sstore",
+            "storage_write",
+            "exceptional_halt",
+        ),
+        ("vm.instructions.storage.sstore", "storage_write", "out_of_gas"),
+        ("vm.instructions.storage.sstore", "storage_write", "revert"),
+        ("vm.instructions.storage.sstore", "storage_write", "success"),
+        (
+            "vm.instructions.storage.sstore",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        ("vm.instructions.storage.sstore", "touched_account", "out_of_gas"),
+        ("vm.instructions.storage.sstore", "touched_account", "revert"),
+        ("vm.instructions.storage.sstore", "touched_account", "success"),
+        ("vm.instructions.system.call", "touched_account", "exceptional_halt"),
+        ("vm.instructions.system.call", "touched_account", "out_of_gas"),
+        ("vm.instructions.system.call", "touched_account", "revert"),
+        ("vm.instructions.system.call", "touched_account", "success"),
+        (
+            "vm.instructions.system.callcode",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        ("vm.instructions.system.callcode", "touched_account", "out_of_gas"),
+        ("vm.instructions.system.callcode", "touched_account", "revert"),
+        ("vm.instructions.system.callcode", "touched_account", "success"),
+        (
+            "vm.instructions.system.create",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        ("vm.instructions.system.create", "touched_account", "out_of_gas"),
+        (
+            "vm.instructions.system.delegatecall",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        (
+            "vm.instructions.system.delegatecall",
+            "touched_account",
+            "out_of_gas",
+        ),
+        ("vm.instructions.system.delegatecall", "touched_account", "revert"),
+        ("vm.instructions.system.delegatecall", "touched_account", "success"),
+        (
+            "vm.instructions.system.generic_create",
+            "nonce_change",
+            "exceptional_halt",
+        ),
+        (
+            "vm.instructions.system.generic_create",
+            "nonce_change",
+            "out_of_gas",
+        ),
+        ("vm.instructions.system.generic_create", "nonce_change", "revert"),
+        ("vm.instructions.system.generic_create", "nonce_change", "success"),
+        (
+            "vm.instructions.system.generic_create",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        (
+            "vm.instructions.system.generic_create",
+            "touched_account",
+            "out_of_gas",
+        ),
+        ("vm.instructions.system.generic_create", "touched_account", "revert"),
+        (
+            "vm.instructions.system.generic_create",
+            "touched_account",
+            "success",
+        ),
+        ("vm.instructions.system.selfdestruct", "balance_change", "success"),
+        ("vm.instructions.system.selfdestruct", "touched_account", "success"),
+        (
+            "vm.instructions.system.staticcall",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        ("vm.instructions.system.staticcall", "touched_account", "out_of_gas"),
+        ("vm.instructions.system.staticcall", "touched_account", "revert"),
+        ("vm.instructions.system.staticcall", "touched_account", "success"),
+        (
+            "vm.interpreter.charge_value_transfer_to_non_alive_account",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        (
+            "vm.interpreter.charge_value_transfer_to_non_alive_account",
+            "touched_account",
+            "out_of_gas",
+        ),
+        (
+            "vm.interpreter.charge_value_transfer_to_non_alive_account",
+            "touched_account",
+            "revert",
+        ),
+        (
+            "vm.interpreter.charge_value_transfer_to_non_alive_account",
+            "touched_account",
+            "success",
+        ),
+        ("vm.interpreter.create_evm", "touched_account", "exceptional_halt"),
+        ("vm.interpreter.create_evm", "touched_account", "out_of_gas"),
+        ("vm.interpreter.create_evm", "touched_account", "revert"),
+        ("vm.interpreter.create_evm", "touched_account", "success"),
+        ("vm.interpreter.process_call", "balance_change", "exceptional_halt"),
+        ("vm.interpreter.process_call", "balance_change", "out_of_gas"),
+        ("vm.interpreter.process_call", "balance_change", "revert"),
+        ("vm.interpreter.process_call", "balance_change", "success"),
+        ("vm.interpreter.process_call", "touched_account", "exceptional_halt"),
+        ("vm.interpreter.process_call", "touched_account", "out_of_gas"),
+        ("vm.interpreter.process_call", "touched_account", "revert"),
+        ("vm.interpreter.process_call", "touched_account", "success"),
+        ("vm.interpreter.process_create", "code_change", "success"),
+        ("vm.interpreter.process_create", "nonce_change", "exceptional_halt"),
+        ("vm.interpreter.process_create", "nonce_change", "out_of_gas"),
+        ("vm.interpreter.process_create", "nonce_change", "revert"),
+        ("vm.interpreter.process_create", "nonce_change", "success"),
+        (
+            "vm.interpreter.process_create",
+            "touched_account",
+            "exceptional_halt",
+        ),
+        ("vm.interpreter.process_create", "touched_account", "out_of_gas"),
+        ("vm.interpreter.process_create", "touched_account", "revert"),
+        ("vm.interpreter.process_create", "touched_account", "success"),
+    }
+)
+"""BAL cells the baseline window samples reliably: 132 of the
+145 reached over 5000 seeds at v15, each seen at least
+`bal_gate_floor` = 11 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
+
+BAL_CELLS_BELOW_WINDOW: Dict[Tuple[str, str, str], int] = {
+    ("fork.process_transaction", "code_change", "success"): 1,
+    (
+        "vm.instructions.environment.extcodecopy",
+        "touched_account",
+        "revert",
+    ): 1,
+    ("vm.instructions.system.create", "touched_account", "revert"): 4,
+    (
+        "vm.instructions.system.selfdestruct",
+        "touched_account",
+        "out_of_gas",
+    ): 4,
+    ("vm.instructions.environment.balance", "touched_account", "revert"): 5,
+    (
+        "vm.instructions.environment.extcodecopy",
+        "touched_account",
+        "success",
+    ): 5,
+    (
+        "vm.instructions.environment.extcodehash",
+        "touched_account",
+        "revert",
+    ): 5,
+    ("fork.process_transaction", "nonce_change", "success"): 7,
+    ("fork.process_transaction", "storage_read", "success"): 7,
+    ("fork.process_transaction", "touched_account", "success"): 7,
+    ("vm.instructions.system.create", "touched_account", "success"): 7,
+    (
+        "vm.instructions.environment.extcodesize",
+        "touched_account",
+        "revert",
+    ): 9,
+    (
+        "vm.instructions.environment.extcodecopy",
+        "touched_account",
+        "exceptional_halt",
+    ): 10,
+}
+"""Reached in the 5000-seed baseline but fewer than `bal_gate_floor` times,
+with their occurrence counts. Listed so they stay visible rather than gated:
+the window that would sample them reliably is far wider than the one the
+gate runs on, and the rate record is the instrument for rare."""
+
+
 def check_reach_gate(fork: "Fork") -> List[str]:
     """
     Fill the gate seeds; return every declared target that went dark.
@@ -170,6 +546,7 @@ def check_reach_gate(fork: "Fork") -> List[str]:
     An empty list means every landed capability still fires. A gate seed
     that fails to fill raises -- that too is a regression.
     """
+    from execution_testing.cli.fuzzer_bridge.bal_reach import observer_spec
     from execution_testing.cli.fuzzer_bridge.campaign import fill_case
     from execution_testing.cli.fuzzer_bridge.generator import (
         GENERATOR_VERSION,
@@ -193,20 +570,30 @@ def check_reach_gate(fork: "Fork") -> List[str]:
 
     eels = ExecutionSpecsTransitionTool()
     eels.compute_signature = True
+    eels.bal_reach = observer_spec(fork)
     events: Set[str] = set()
     frames: Set[Tuple[int, str, str]] = set()
+    bal: Set[Tuple[str, str, str]] = set()
     for seed in GATE_SEEDS:
         eels.last_signature = None
+        eels.last_bal_observation = None
         fill_case(generate_fuzzer_output(fork, seed), fork, eels)
         signature = eels.last_signature
         if signature is not None:
             events |= signature.events
             frames |= signature.frames
+        bal |= {
+            item[1] for item in _bal_items(eels.last_bal_observation, seed)
+        }
 
     missing = [f"event {name}" for name in sorted(GATE_EVENTS - events)]
     missing += [
         f"depth{'>=' if bucket == 3 else ' '}{bucket} {kind} {name}"
         for bucket, kind, name in sorted(GATE_FRAMES - frames)
+    ]
+    missing += [
+        f"bal {reason} {kind} {outcome}"
+        for reason, kind, outcome in sorted(GATE_BAL_CELLS - bal)
     ]
     return missing
 
@@ -257,6 +644,27 @@ def required_gate_seeds(
         return sample
     rarest_rate = min(seen) / sample
     return ceil(log(1 / miss_probability) / rarest_rate)
+
+
+def bal_gate_floor(
+    window: int,
+    sample: int,
+    miss_probability: float = GATE_MISS_PROBABILITY,
+) -> int:
+    """
+    How often a BAL cell must occur in `sample` cases to be gated.
+
+    The inverse of `required_gate_seeds`: a window of `window` seeds
+    samples a cell at rate `p` with the stated miss probability only when
+    `p >= ln(1 / miss) / window`. The window stays the one the events and
+    frame cells already need, and a BAL cell rarer than it can sample is
+    listed as reached but below the window rather than allowed to widen
+    it. Gating the two cells seen once in 5000 would have needed a window
+    of 23,026 seeds, a re-baseline long enough that people stop running
+    it, which is worse than not gating those two. The gate detects dark,
+    not rare; the rate record is the instrument for rare.
+    """
+    return ceil(sample * log(1 / miss_probability) / window)
 
 
 def _rarest(occurrences: Dict[Any, int], sample: int) -> Optional[str]:
@@ -347,8 +755,20 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
         items |= _bal_items(eels.last_bal_observation, seed)
         per_seed[seed] = items
 
-    uncovered = set().union(*per_seed.values()) if per_seed else set()
-    targets = set(uncovered)
+    occurrences: Dict[Any, int] = {}
+    for items in per_seed.values():
+        for item in items:
+            occurrences[item] = occurrences.get(item, 0) + 1
+    base = {k: v for k, v in occurrences.items() if k[0] != "bal"}
+    window = required_gate_seeds(base, len(per_seed))
+    floor = bal_gate_floor(window, len(per_seed))
+    below_window = {
+        k[1]: v for k, v in occurrences.items() if k[0] == "bal" and v < floor
+    }
+    targets = {
+        k for k, v in occurrences.items() if k[0] != "bal" or v >= floor
+    }
+    uncovered = set(targets)
     chosen: List[int] = []
     while uncovered:
         best = max(per_seed, key=lambda s: len(per_seed[s] & uncovered))
@@ -358,11 +778,7 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
         chosen.append(best)
         uncovered -= gain
 
-    occurrences: Dict[Any, int] = {}
-    for items in per_seed.values():
-        for item in items:
-            occurrences[item] = occurrences.get(item, 0) + 1
-
+    gated = {k: v for k, v in occurrences.items() if k in targets}
     return {
         "generator_version": GENERATOR_VERSION,
         "fork": fork.name(),
@@ -370,11 +786,11 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
         "events": sorted(t[1] for t in targets if t[0] == "event"),
         "frames": sorted(t[1] for t in targets if t[0] == "frame"),
         "bal_cells": sorted(t[1] for t in targets if t[0] == "bal"),
-        "bal_occurrences": {
-            "|".join(item[1]): count
-            for item, count in sorted(occurrences.items())
-            if item[0] == "bal"
+        "bal_floor": floor,
+        "bal_below_window": {
+            "|".join(cell): count
+            for cell, count in sorted(below_window.items())
         },
-        "required_seeds": required_gate_seeds(occurrences, len(per_seed)),
-        "rarest": _rarest(occurrences, len(per_seed)),
+        "required_seeds": required_gate_seeds(gated, len(per_seed)),
+        "rarest": _rarest(gated, len(per_seed)),
     }
