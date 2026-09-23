@@ -1,6 +1,8 @@
 """Tests for the reach gate: landed capabilities must keep firing."""
 
 import math
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -26,6 +28,82 @@ def test_gate_baseline_matches_the_generator_version() -> None:
         "GENERATOR_VERSION bumped: re-baseline the reach gate with "
         "compute_gate_baseline(fork, range(400)) and update reach_gate.py"
     )
+
+
+def _reach_log() -> Path:
+    """The tracked reach log at the repository root."""
+    for directory in Path(__file__).resolve().parents:
+        candidate = directory / "reach_log.jsonl"
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError("reach_log.jsonl not found above the tests")
+
+
+def test_a_generator_version_ships_with_its_rate_records() -> None:
+    """
+    A version bump re-draws every case, and the reach gate only sees a
+    capability go dark, not go rare. So each bump appends an event-rate and
+    a composition-density record, and its event counts show no drop against
+    the previous version's beyond what sampling explains. Versions 12 to 15
+    were bumped without either record, and nothing noticed.
+    """
+    import json
+
+    from execution_testing.cli.fuzzer_bridge.density import significant_drops
+
+    records = [
+        json.loads(line) for line in _reach_log().read_text().splitlines()
+    ]
+
+    def latest(kind: str, version: int) -> Any:
+        found = [
+            r
+            for r in records
+            if r.get("kind") == kind and r.get("generator_version") == version
+        ]
+        return found[-1] if found else None
+
+    how = (
+        "append `signature_baseline.event_rate_record(fork, range(400))` "
+        "and `density.density_record(fork, range(400))` to reach_log.jsonl"
+    )
+    current = latest("event-rates", GENERATOR_VERSION)
+    assert current is not None, f"no v{GENERATOR_VERSION} event-rates: {how}"
+    assert latest("composition-density", GENERATOR_VERSION) is not None, (
+        f"no v{GENERATOR_VERSION} composition-density record: {how}"
+    )
+    previous = latest("event-rates", GENERATOR_VERSION - 1)
+    assert previous is not None, (
+        f"no v{GENERATOR_VERSION - 1} event-rates record to compare against"
+    )
+
+    def counts(record: Any) -> Any:
+        return {name: e["count"] for name, e in record["rates"].items()}
+
+    assert (
+        significant_drops(
+            counts(previous),
+            counts(current),
+            previous["seeds"],
+            current["seeds"],
+        )
+        == []
+    )
+
+
+def test_a_rare_event_s_noise_is_not_a_regression() -> None:
+    """
+    The false alarm that shaped the check: `child-revert` fell 6 to 2 in
+    400 seeds between v15 and v16 and rose 11 to 25 on the next 2000. A
+    drop as large as the v6-to-v9 collapse still has to be caught.
+    """
+    from execution_testing.cli.fuzzer_bridge.density import significant_drops
+
+    assert (
+        significant_drops({"child-revert": 6}, {"child-revert": 2}, 400, 400)
+        == []
+    )
+    assert significant_drops({"x": 297}, {"x": 133}, 400, 400)
 
 
 def test_landed_capabilities_still_fire() -> None:

@@ -32,6 +32,7 @@ Coverage proves reach. Density finds bugs. Both need a guard.
 """
 
 from collections import Counter
+from math import comb
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -399,6 +400,54 @@ def rate_regressions(
                 f"{name} {before:.2f} -> {after:.2f} (-{drop:.0%})"
             )
     return regressions
+
+
+REGRESSION_ALPHA = 0.01
+"""How unlikely a count drop must be under an unchanged rate before it is
+a regression rather than sampling."""
+
+
+def significant_drops(
+    previous: Dict[str, int],
+    current: Dict[str, int],
+    previous_seeds: int,
+    current_seeds: int,
+    tolerance: float = REGRESSION_TOLERANCE,
+    alpha: float = REGRESSION_ALPHA,
+) -> List[str]:
+    """
+    Event counts that fell further than ``tolerance`` *and* further than
+    sampling explains.
+
+    A proportional threshold alone cries wolf on rare events: `child-revert`
+    went from 6 to 2 in 400 seeds between v15 and v16, a 67% drop, and
+    from 11 to 25 on the next 2000. Under an unchanged rate the later
+    count, given the total of the two, is binomial with the later sample's
+    share of the seeds, so the chance of a count this low is exact and
+    needs no approximation. A check that alarms on noise gets ignored,
+    which is how four version bumps went unchecked.
+    """
+    share = current_seeds / (previous_seeds + current_seeds)
+    drops = []
+    for name, before in sorted(previous.items()):
+        after = current.get(name, 0)
+        if before <= 0:
+            continue
+        before_rate = before / previous_seeds
+        after_rate = after / current_seeds
+        if (before_rate - after_rate) / before_rate <= tolerance:
+            continue
+        total = before + after
+        chance = sum(
+            comb(total, k) * share**k * (1 - share) ** (total - k)
+            for k in range(after + 1)
+        )
+        if chance < alpha:
+            drops.append(
+                f"{name} {before}/{previous_seeds} -> "
+                f"{after}/{current_seeds} (p={chance:.1e})"
+            )
+    return drops
 
 
 def density_floor_warnings(density: Dict[str, float]) -> List[str]:
