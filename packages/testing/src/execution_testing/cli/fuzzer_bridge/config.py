@@ -128,6 +128,15 @@ besu's Gradle toolchain asks for (25 on the devnet branches; point
 """
 
 
+class ContrastRun(BaseModel):
+    """One more way to run a client's binary on every shard."""
+
+    flags: Optional[List[str]] = None
+    """Replaces the client's `runner_flags`; the primary flags when unset."""
+    env: Dict[str, str] = Field(default_factory=dict)
+    """Environment overrides, layered on the client's own `env`."""
+
+
 class ClientConfig(BaseModel):
     """One client under test: a binary path or a source build."""
 
@@ -155,9 +164,23 @@ class ClientConfig(BaseModel):
     the path contrast; `IGNORE_BAL=true` withholds the delivered list while
     execution stays parallel, a hint contrast. Either may be set, or both;
     a client declaring neither has no contrast run."""
+    contrasts: Dict[str, ContrastRun] = Field(default_factory=dict)
+    """Further contrast runs by name, for a client with more than one knob
+    worth separating: erigon's `IGNORE_BAL` drops the BAL's scheduling
+    hints while its executor stays parallel, and `EXEC3_WORKERS=1` makes
+    it serial. A client that differs with hints off has a different bug
+    from one that differs serial against parallel, so each is its own run,
+    its own tally, and its own `<client>:<name>` signature. `contrast` is
+    the name `contrast_flags`/`contrast_env` already use."""
 
     @model_validator(mode="after")
     def _one_source(self) -> "ClientConfig":
+        if "contrast" in self.contrasts:
+            raise ValueError(
+                f"client {self.name!r}: `contrast` is the run "
+                "contrast_flags/contrast_env declare; name this one "
+                "something else"
+            )
         if (self.path is None) == (self.build is None):
             raise ValueError(
                 f"client {self.name!r}: declare exactly one of path or build"

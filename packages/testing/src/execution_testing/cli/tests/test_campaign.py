@@ -201,20 +201,31 @@ def _campaign(
     echo: Any = None,
     contrast: Optional[Dict[str, Any]] = None,
     contrast_via_env: bool = False,
+    runner: Any = None,
     **kw: Any,
 ) -> Any:
     from ..fuzzer_bridge import campaign as campaign_module
     from ..fuzzer_bridge.campaign import CampaignOptions, run_campaign
 
     contrast = contrast or {}
+    make = runner or (
+        lambda name, flags: _FakeRunner(
+            name, failing[name], contrast.get(name), flags
+        )
+    )
+
+    def detect(
+        _cls: Any, name: str, _binary: Any, flags: Any = (), env: Any = None
+    ) -> Any:
+        made = make(name, flags)
+        if env:
+            made.env = dict(env)
+        return made
+
     monkeypatch.setattr(
         campaign_module.FixtureRunner,
         "detect",
-        classmethod(
-            lambda _cls, name, _binary, flags=(), env=None: _FakeRunner(
-                name, failing[name], contrast.get(name), flags, env
-            )
-        ),
+        classmethod(detect),
     )
     if contrast and contrast_via_env:
         kw["contrast_env"] = {n: {"EXEC3_WORKERS": "1"} for n in contrast}
@@ -345,7 +356,68 @@ def test_a_contrast_declared_only_by_environment_still_runs(
         batch=3,
     )
     assert state.counts["contrast-mismatch"] == 3
-    assert state.contrast["erigon"]["compared"] == 6
+    assert state.contrast["erigon:contrast"]["compared"] == 6
+
+
+class _KnobRunner(_FakeRunner):
+    """Scripted by environment: which seeds fail under each knob setting."""
+
+    def __init__(self, name: str, scripts: Dict[str, Any], env: Any = None):
+        self.scripts = scripts
+        knob = ",".join(f"{k}={v}" for k, v in sorted((env or {}).items()))
+        super().__init__(name, scripts[knob], None, (), env)
+
+    def with_flags(self, _flags: Any) -> "_FakeRunner":
+        return self
+
+    def with_env(self, env: Any) -> "_FakeRunner":
+        return _KnobRunner(self.name, self.scripts, {**self.env, **env})
+
+
+def test_each_named_contrast_is_its_own_witness(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Erigon's hints-off and serial runs are different questions: a client
+    that only differs serial has no hint-consumption bug, so each run
+    keeps its own tally and its own signature name.
+    """
+    from ..fuzzer_bridge.config import ContrastRun
+
+    scripts = {
+        "": lambda s: s % 3 == 1,
+        "IGNORE_BAL=true": lambda s: s % 3 == 1,
+        "EXEC3_WORKERS=1": lambda _s: False,
+    }
+    failing = {"geth": lambda _s: False, "erigon": scripts[""]}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        runner=lambda name, _flags: (
+            _KnobRunner(name, scripts)
+            if name == "erigon"
+            else _FakeRunner(name, failing[name])
+        ),
+        contrasts={
+            "erigon": {
+                "hints-off": ContrastRun(env={"IGNORE_BAL": "true"}),
+                "serial": ContrastRun(env={"EXEC3_WORKERS": "1"}),
+            }
+        },
+        count=6,
+        batch=3,
+    )
+    assert state.contrast["erigon:hints-off"]["compared"] == 6
+    assert state.contrast["erigon:hints-off"]["mismatches"] == 0
+    assert state.contrast["erigon:serial"]["mismatches"] == 2
+    contrast_clients = {
+        e["client"] for e in state.signatures.values() if ":" in e["client"]
+    }
+    assert contrast_clients == {"erigon:serial"}
+    report = (tmp_path / "out" / "report.md").read_text()
+    assert "| erigon:hints-off | 6 |" in report
+    assert "| erigon:serial | 6 |" in report
 
 
 def test_a_client_disagreeing_with_itself_is_a_contrast_mismatch(
@@ -364,7 +436,7 @@ def test_a_client_disagreeing_with_itself_is_a_contrast_mismatch(
     # Primary fails {1, 4}, contrast fails {0, 2, 4}: they differ on 0, 1, 2.
     assert state.counts["contrast-mismatch"] == 3
     assert state.contrast == {
-        "nethermind": {
+        "nethermind:contrast": {
             "compared": 6,
             "mismatches": 3,
             "primary_failed": 2,
@@ -390,7 +462,7 @@ def test_a_client_disagreeing_with_itself_is_a_contrast_mismatch(
     verdicts = json.loads((bundle / "verdicts.json").read_text())
     assert set(verdicts) == {"nethermind", "nethermind (contrast)"}
     report = (tmp_path / "out" / "report.md").read_text()
-    assert "| nethermind | 6 | 2 | 3 | 3 |" in report
+    assert "| nethermind:contrast | 6 | 2 | 3 | 3 |" in report
     assert "| contrast mismatches (client vs itself) | 3 |" in report
 
 

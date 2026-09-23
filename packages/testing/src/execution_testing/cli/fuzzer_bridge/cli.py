@@ -8,7 +8,7 @@ import click
 from execution_testing.forks import get_forks
 
 from .baseline import StaleClientError
-from .campaign import CampaignOptions, run_campaign
+from .campaign import CampaignOptions, contrast_lanes, run_campaign
 from .clients import client_status, verify_client
 from .corpus import load_case
 from .differential import (
@@ -254,6 +254,11 @@ def campaign(
             if (env := config.client(n).contrast_env) is not None
         },
         client_env={n: dict(r.env) for n, r in resolved.items() if r.env},
+        contrasts={
+            n: runs
+            for n in campaign_config.clients
+            if (runs := config.client(n).contrasts)
+        },
         producer=producer,
         producer_name=producer_name or "producer",
         fixture_format=campaign_config.fixture_format,
@@ -270,15 +275,18 @@ def campaign(
         f"(batch {batch}, {options.fill_workers} fill workers, "
         f"{options.fixture_format})"
     )
-    contrasted = set(options.contrast_flags) | set(options.contrast_env)
-    for n in sorted(contrasted):
-        knobs = list(options.contrast_flags.get(n, ()))
-        knobs += [
-            f"{k}={v}" for k, v in options.contrast_env.get(n, {}).items()
+    for lane, (_, contrast_run) in sorted(contrast_lanes(options).items()):
+        knobs = [
+            *(
+                contrast_run.flags
+                if contrast_run.flags is not None
+                else ["(primary flags)"]
+            ),
+            *(f"{k}={v}" for k, v in contrast_run.env.items()),
         ]
         click.echo(
-            f"  {n} also runs under {' '.join(knobs)}; a fixture it "
-            "judges differently there is a contrast-mismatch"
+            f"  {lane} runs under {' '.join(knobs) or '(no flags)'}; a "
+            "fixture judged differently there is a contrast-mismatch"
         )
     try:
         state = run_campaign(options, echo=click.echo)
