@@ -136,6 +136,12 @@ class ClientConfig(BaseModel):
     build: Optional[BuildSource] = None
     runner_flags: List[str] = Field(default_factory=list)
     """Extra arguments for the client's fixture runner on every run."""
+    env: Dict[str, str] = Field(default_factory=dict)
+    """Environment for everything that runs this client's toolchain -- its
+    source build, its fixture runner, its t8n -- layered on the parent
+    environment and recorded in the manifest. Besu's `JAVA_HOME` and
+    nethermind's `DOTNET_ROOT` belong here: a toolchain found only through
+    the shell that launched the run is a verdict nobody can reproduce."""
     contrast_flags: Optional[List[str]] = None
     """A second flag set for the same binary. A campaign runs each shard
     under both; a fixture the two runs judge differently is a

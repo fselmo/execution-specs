@@ -1084,6 +1084,9 @@ class CampaignOptions:
     contrast_env: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     """Per client, environment overrides for that second run. A client
     may appear here, in `contrast_flags`, or in both."""
+    client_env: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    """Per client, the environment its runner always runs under; a
+    contrast's `contrast_env` is layered on top of it."""
     producer: Optional[Path] = None
     """A transition tool that fills instead of EELS; see `escalate`."""
     producer_name: str = "producer"
@@ -1211,7 +1214,10 @@ def run_campaign(
 
     runners = {
         name: FixtureRunner.detect(
-            name, path, options.runner_flags.get(name, ())
+            name,
+            path,
+            options.runner_flags.get(name, ()),
+            env=options.client_env.get(name, {}),
         )
         for name, path in options.clients.items()
     }
@@ -1255,6 +1261,7 @@ def run_campaign(
         and f"{options.producer_name}: {producer_version}",
         sources=dict(options.sources),
         fixture_format=options.fixture_format,
+        client_env={n: dict(e) for n, e in options.client_env.items() if e},
     ).write(output / "manifest.json")
 
     def fill_spec(fixture_name: str) -> Tuple[Dict[str, Any], List[str]]:

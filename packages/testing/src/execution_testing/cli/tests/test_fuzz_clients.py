@@ -89,6 +89,50 @@ def test_build_is_cached_by_commit(tmp_path: Path, monkeypatch: Any) -> None:
     assert binary.read_text() == "1"
 
 
+def test_a_client_s_env_reaches_its_build_and_rides_its_resolution(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Besu's `JAVA_HOME` and nethermind's `DOTNET_ROOT` come from the config,
+    not from the shell that happened to launch the run: the build command
+    sees them, and the resolved client carries them to everything that
+    runs it afterwards.
+    """
+    repo = _make_repo(tmp_path)
+    monkeypatch.setenv(clients_module.CACHE_ENV, str(tmp_path / "cache"))
+    monkeypatch.delenv("FUZZ_TOOLCHAIN", raising=False)
+    client = ClientConfig(
+        name="demo",
+        env={"FUZZ_TOOLCHAIN": "/opt/jdk-25"},
+        build=BuildSource(
+            repo=str(repo),
+            command='printf "$FUZZ_TOOLCHAIN" > {out}',
+            binary="v",
+        ),
+    )
+    resolved = resolve_client(client)
+    assert resolved.binary.read_text() == "/opt/jdk-25"
+    assert resolved.env == {"FUZZ_TOOLCHAIN": "/opt/jdk-25"}
+
+
+def test_a_client_environment_is_scoped_and_restored(monkeypatch: Any) -> None:
+    """
+    One client's environment must not leak into the next client's run: a
+    variable it overrode comes back, and one it introduced goes away.
+    """
+    import os
+
+    from ..fuzzer_bridge.clients import client_environment
+
+    monkeypatch.setenv("FUZZ_KEPT", "shell")
+    monkeypatch.delenv("FUZZ_ADDED", raising=False)
+    with client_environment({"FUZZ_KEPT": "client", "FUZZ_ADDED": "x"}):
+        assert os.environ["FUZZ_KEPT"] == "client"
+        assert os.environ["FUZZ_ADDED"] == "x"
+    assert os.environ["FUZZ_KEPT"] == "shell"
+    assert "FUZZ_ADDED" not in os.environ
+
+
 def test_resolve_path_client(tmp_path: Path) -> None:
     """A path source resolves to itself."""
     exe = tmp_path / "evm"
@@ -122,7 +166,7 @@ def test_status_reports_version_or_error(
     monkeypatch.setattr(
         clients_module,
         "binary_version",
-        lambda _path: "evm version 9",
+        lambda _path, _env=None: "evm version 9",
     )
     line = client_status(ClientConfig(name="geth", path=exe))
     assert "path" in line and "evm version 9" in line and "more" not in line
@@ -143,7 +187,7 @@ def test_clients_command_lists_each_client(
     monkeypatch.setattr(
         clients_module,
         "binary_version",
-        lambda _path: "evm version 9",
+        lambda _path, _env=None: "evm version 9",
     )
     result = CliRunner().invoke(
         fuzz, ["clients", "--config", str(tmp_path / "fuzz.yaml")]
@@ -162,7 +206,7 @@ def test_status_never_builds_but_update_does(
     monkeypatch.setattr(
         clients_module,
         "binary_version",
-        lambda _path: "v version 1",
+        lambda _path, _env=None: "v version 1",
     )
     client = ClientConfig(
         name="demo",

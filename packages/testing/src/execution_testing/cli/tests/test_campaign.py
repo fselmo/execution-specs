@@ -211,8 +211,8 @@ def _campaign(
         campaign_module.FixtureRunner,
         "detect",
         classmethod(
-            lambda _cls, name, _binary, flags=(): _FakeRunner(
-                name, failing[name], contrast.get(name), flags
+            lambda _cls, name, _binary, flags=(), env=None: _FakeRunner(
+                name, failing[name], contrast.get(name), flags, env
             )
         ),
     )
@@ -1181,6 +1181,26 @@ def test_an_engine_fixture_carries_the_access_list_where_loaders_read_it() -> (
     imported = mod.fill_case(case, fork, eels)
     assert "engineNewPayloads" not in imported
     assert imported["_info"]["fixture-format"] == "blockchain_test"
+
+
+def test_the_manifest_records_each_client_s_environment(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A verdict is reproducible only if the toolchain it ran under is
+    written down with it.
+    """
+    failing = {"besu": lambda _s: False}
+    _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        count=3,
+        batch=3,
+        client_env={"besu": {"JAVA_HOME": "/opt/jdk-25"}},
+    )
+    manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
+    assert manifest["client_env"] == {"besu": {"JAVA_HOME": "/opt/jdk-25"}}
 
 
 def test_the_manifest_names_the_format_the_run_wrote(
