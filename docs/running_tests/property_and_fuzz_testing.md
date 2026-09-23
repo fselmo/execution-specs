@@ -316,7 +316,12 @@ every run, and `contrast_flags`, a second flag set the same binary is also
 run with on every shard. Where a client's knob is not argv, `contrast_env`
 carries the same witness as environment overrides layered on the parent
 environment; a client may declare either or both, and one declaring
-neither has no contrast run. The primary run is the client's vote in the panel;
+neither has no contrast run. A client's `env` is the environment everything
+that runs its toolchain runs under -- the source build, the fixture runner,
+the t8n in `fuzz diff` -- and is recorded in `manifest.json`: besu's
+`JAVA_HOME` and nethermind's `DOTNET_ROOT` belong there rather than in the
+shell that launched the run. A contrast's `contrast_env` is layered on top
+of it. The primary run is the client's vote in the panel;
 a fixture the two runs judge differently is a `contrast-mismatch` — the
 client disagreeing with itself, a finding that needs neither the spec nor
 another client. The lane this exists for is a client's BAL parallel

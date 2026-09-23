@@ -157,6 +157,39 @@ def test_with_env_layers_overrides_on_the_parent_environment() -> None:
     assert set(os.environ) <= set(environ)
 
 
+def test_detection_runs_under_the_client_env_and_the_runner_keeps_it(
+    monkeypatch: Any,
+) -> None:
+    """
+    EEST detects a runner by running it, and a Java or .NET runner cannot
+    start without its toolchain, so detection happens under the client's
+    env. The runner keeps that env for every run, and a contrast layers
+    its own overrides on top rather than replacing it.
+    """
+    import os
+
+    from ..fuzzer_bridge import runners as runners_module
+
+    seen = {}
+
+    def fake_detect(binary_path: Path) -> Any:
+        del binary_path
+        seen["home"] = os.environ.get("FUZZ_TOOLCHAIN")
+        return type("GethFixtureConsumer", (), {})()
+
+    monkeypatch.delenv("FUZZ_TOOLCHAIN", raising=False)
+    monkeypatch.setattr(
+        runners_module.FixtureConsumerTool, "from_binary_path", fake_detect
+    )
+    runner = FixtureRunner.detect(
+        "besu", Path("/bin/evmtool"), env={"FUZZ_TOOLCHAIN": "/opt/jdk"}
+    )
+    assert seen["home"] == "/opt/jdk"
+    assert "FUZZ_TOOLCHAIN" not in os.environ
+    contrast = runner.with_env({"EXEC3_WORKERS": "1"})
+    assert contrast.env == {"FUZZ_TOOLCHAIN": "/opt/jdk", "EXEC3_WORKERS": "1"}
+
+
 def test_a_contrast_can_vary_flags_and_env_together() -> None:
     """
     The two knobs compose: a contrast can vary a flag and erigon's worker

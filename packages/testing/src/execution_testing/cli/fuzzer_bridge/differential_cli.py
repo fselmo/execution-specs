@@ -52,13 +52,6 @@ def resolve_campaign(
     return resolved
 
 
-def resolve_campaign_clients(
-    config: FuzzConfig, names: Sequence[str]
-) -> Dict[str, Path]:
-    """Map campaign client names to binaries, building sources if needed."""
-    return {n: r.binary for n, r in resolve_campaign(config, names).items()}
-
-
 def _pick(flag: Optional[T], campaign_value: Optional[T], default: T) -> T:
     """Flag beats campaign beats default."""
     if flag is not None:
@@ -187,9 +180,8 @@ def differential(
         raise click.UsageError("--fork or --campaign is required")
     fork = _resolve_fork(fork_name)
 
-    clients = (
-        resolve_campaign_clients(config, campaign.clients) if campaign else {}
-    )
+    resolved = resolve_campaign(config, campaign.clients) if campaign else {}
+    clients = {name: r.binary for name, r in resolved.items()}
     clients.update(name_clients(client_paths))
     if not clients:
         raise click.UsageError(
@@ -221,6 +213,7 @@ def differential(
             fork,  # type: ignore[arg-type]
             seeds,
             clients=clients,
+            client_env={n: r.env for n, r in resolved.items() if r.env},
             corpus_dir=corpus_dir,
             minimize_cases=not no_minimize,
             workers=workers,

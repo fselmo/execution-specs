@@ -17,9 +17,11 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from execution_testing.client_clis import FixtureConsumerTool
+
+from .clients import client_environment
 
 
 @dataclass(frozen=True)
@@ -164,15 +166,27 @@ class FixtureRunner:
 
     @classmethod
     def detect(
-        cls, name: str, binary: Path, flags: Sequence[str] = ()
+        cls,
+        name: str,
+        binary: Path,
+        flags: Sequence[str] = (),
+        env: Optional[Mapping[str, str]] = None,
     ) -> "FixtureRunner":
-        """Identify the runner behind ``binary`` via EEST detection."""
-        consumer = FixtureConsumerTool.from_binary_path(binary_path=binary)
+        """
+        Identify the runner behind ``binary`` via EEST detection.
+
+        Detection runs the binary, so it runs under the client's own
+        environment; the runner then carries that environment into every
+        run, and a contrast layers its overrides on top.
+        """
+        with client_environment(env or {}):
+            consumer = FixtureConsumerTool.from_binary_path(binary_path=binary)
         return cls(
             name=name,
             binary=binary,
             kind=type(consumer).__name__,
             flags=tuple(flags),
+            env=dict(env or {}),
         )
 
     def with_flags(self, flags: Sequence[str]) -> "FixtureRunner":

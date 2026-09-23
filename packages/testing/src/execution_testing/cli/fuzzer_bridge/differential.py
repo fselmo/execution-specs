@@ -19,7 +19,7 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 from execution_testing.client_clis import LazyAlloc, TransitionTool
 from execution_testing.client_clis.cli_types import Result
@@ -33,6 +33,7 @@ from execution_testing.specs.blockchain import (
 )
 from execution_testing.test_types import Alloc, Environment
 
+from .clients import client_environment
 from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
 from .generator import GENERATOR_VERSION, generate_fuzzer_output
@@ -238,7 +239,8 @@ def run_tools(
     allocs: Dict[str, Alloc] = {}
     for name, tool in tools.items():
         try:
-            results[name], alloc = _transition(tool, prepared)
+            with client_environment(getattr(tool, _CLIENT_ENV, {})):
+                results[name], alloc = _transition(tool, prepared)
         except Exception as exc:  # noqa: BLE001
             message = f"{type(exc).__name__}: {exc}"
             if is_tool_rejection(message):
@@ -363,19 +365,34 @@ def still_diverges(
     return signature <= divergence_signature(outcome)
 
 
-def build_client_tool(path: Path) -> TransitionTool:
+_CLIENT_ENV = "fuzz_client_env"
+"""Attribute a client tool carries its configured environment on. EEST's
+tools launch their binary themselves and take no environment, so every
+call that runs one is wrapped in `client_environment` with this."""
+
+
+def build_client_tool(
+    path: Path, env: Optional[Mapping[str, str]] = None
+) -> TransitionTool:
     """Detect the client behind ``path`` and wrap its ``t8n``."""
-    tool: TransitionTool = TransitionTool.from_binary_path(binary_path=path)
+    with client_environment(env or {}):
+        tool: TransitionTool = TransitionTool.from_binary_path(
+            binary_path=path
+        )
+    setattr(tool, _CLIENT_ENV, dict(env or {}))
     return tool
 
 
-def build_tools(clients: Dict[str, Path]) -> Dict[str, TransitionTool]:
+def build_tools(
+    clients: Dict[str, Path],
+    envs: Optional[Mapping[str, Mapping[str, str]]] = None,
+) -> Dict[str, TransitionTool]:
     """Build the reference tool plus one tool per named client binary."""
     tools: Dict[str, TransitionTool] = {
         REFERENCE: ExecutionSpecsTransitionTool()
     }
     for name, path in clients.items():
-        tools[name] = build_client_tool(path)
+        tools[name] = build_client_tool(path, (envs or {}).get(name))
     return tools
 
 
@@ -385,12 +402,15 @@ _WORKER: Dict[str, Any] = {}
 
 
 def _init_worker(
-    fork_name: str, clients: Dict[str, str], tiered: bool
+    fork_name: str,
+    clients: Dict[str, str],
+    tiered: bool,
+    envs: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> None:
     """Build the per-process tools for the differential pool."""
     _WORKER["fork"] = _fork_by_name(fork_name)
     _WORKER["tools"] = build_tools(
-        {name: Path(path) for name, path in clients.items()}
+        {name: Path(path) for name, path in clients.items()}, envs
     )
     _WORKER["tiered"] = tiered
 
@@ -419,6 +439,7 @@ def differential_fuzz(
     baseline_seeds: int = 0,
     manifest_path: Optional[Path] = None,
     tiered: bool = False,
+    client_env: Optional[Mapping[str, Mapping[str, str]]] = None,
 ) -> DifferentialReport:
     """
     Fuzz ``fork`` across ``seeds``, comparing EELS against every client.
@@ -435,7 +456,8 @@ def differential_fuzz(
     from .baseline import BASELINE_SEED_START, check_baseline
     from .run_manifest import collect_manifest
 
-    tools = build_tools(clients)
+    envs = {name: dict(env) for name, env in (client_env or {}).items()}
+    tools = build_tools(clients, envs)
     report = DifferentialReport(
         fork=fork.name(),
         generator_version=GENERATOR_VERSION,
@@ -462,6 +484,7 @@ def differential_fuzz(
                 fork.name(),
                 {name: str(path) for name, path in clients.items()},
                 tiered,
+                envs,
             ),
         ) as executor:
             outcomes = list(executor.map(_detect_in_worker, seeds))

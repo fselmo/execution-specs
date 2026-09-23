@@ -24,7 +24,6 @@ from .differential_cli import (
     load_config_or_fail,
     name_clients,
     resolve_campaign,
-    resolve_campaign_clients,
 )
 from .distill_cli import distill
 from .fuzz_cli import fuzz as run
@@ -200,6 +199,7 @@ def campaign(
             for n in campaign_config.clients
             if (env := config.client(n).contrast_env) is not None
         },
+        client_env={n: dict(r.env) for n, r in resolved.items() if r.env},
         producer=producer,
         producer_name=producer_name or "producer",
         fixture_format=campaign_config.fixture_format,
@@ -282,9 +282,8 @@ def replay(
     """
     config = load_config_or_fail(config_path)
     campaign = campaign_or_fail(config, campaign_name)
-    clients = (
-        resolve_campaign_clients(config, campaign.clients) if campaign else {}
-    )
+    resolved = resolve_campaign(config, campaign.clients) if campaign else {}
+    clients = {name: r.binary for name, r in resolved.items()}
     clients.update(name_clients(client_paths))
     if not clients:
         raise click.UsageError(
@@ -292,7 +291,9 @@ def replay(
         )
 
     case = load_case(case_path)
-    tools = build_tools(clients)
+    tools = build_tools(
+        clients, {n: r.env for n, r in resolved.items() if r.env}
+    )
     results, errors, rejections, allocs = run_tools(tools, case, case.fork)
     errors = {**errors, **rejections}
     divergence_list = compare_results(results) if results else []

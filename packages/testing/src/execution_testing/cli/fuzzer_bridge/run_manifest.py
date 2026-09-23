@@ -39,6 +39,10 @@ class RunManifest:
     sources: Dict[str, str] = field(default_factory=dict)
     """Where each client binary came from: a path, or `build@<base commit>`
     plus `+series:<hash>` when a patch series was applied on it."""
+    client_env: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    """Per client, the environment its toolchain ran under -- a `JAVA_HOME`
+    or `DOTNET_ROOT` that would otherwise live only in the shell that
+    launched the run."""
     fixture_format: str = "blockchain_test"
     """The one format the run wrote. A verdict is a statement about a
     client's import path or its newPayload path, which are different code,

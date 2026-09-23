@@ -10,9 +10,10 @@ already there and a run can always say which commit it compared against.
 import hashlib
 import os
 import subprocess
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from execution_testing.client_clis import FixtureConsumerTool, TransitionTool
 
@@ -46,11 +47,33 @@ class NotBuiltError(Exception):
 
 @dataclass
 class ResolvedClient:
-    """A client ready to run: its binary and where it came from."""
+    """A client ready to run: its binary, where it came from, its env."""
 
     name: str
     binary: Path
     source: str
+    env: Mapping[str, str] = field(default_factory=dict)
+
+
+@contextmanager
+def client_environment(env: Mapping[str, str]) -> Iterator[None]:
+    """
+    Layer a client's environment on this process's for the duration.
+
+    For code that launches the client without taking an environment --
+    EEST's tool detection runs `--version` itself. Restored on exit, so
+    one client's `JAVA_HOME` never leaks into the next client's run.
+    """
+    saved = {key: os.environ.get(key) for key in env}
+    os.environ.update(env)
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 class PatchOutsideRunnerError(Exception):
@@ -101,6 +124,7 @@ def ensure_built(
     *,
     update: bool = False,
     build_missing: bool = True,
+    env: Optional[Mapping[str, str]] = None,
 ) -> Tuple[Path, str]:
     """
     Return the built artifact for ``build`` and the commit it came from.
@@ -158,6 +182,7 @@ def ensure_built(
             shell=True,
             cwd=repo_dir,
             check=True,
+            env={**os.environ, **(env or {})},
         )
     return out, build_id
 
@@ -208,17 +233,23 @@ def resolve_client(
         path = client.path.expanduser()
         if not path.is_file():
             raise FileNotFoundError(f"client {client.name!r}: {path}")
-        return ResolvedClient(client.name, path, "path")
+        return ResolvedClient(client.name, path, "path", dict(client.env))
     assert client.build is not None
     binary, build_id = ensure_built(
-        client.name, client.build, update=update, build_missing=build_missing
+        client.name,
+        client.build,
+        update=update,
+        build_missing=build_missing,
+        env=client.env,
     )
     commit, _, series = build_id.partition("+")
     source = f"build@{commit[:12]}" + (f"+series:{series}" if series else "")
-    return ResolvedClient(client.name, binary, source)
+    return ResolvedClient(client.name, binary, source, dict(client.env))
 
 
-def binary_version(binary: Path) -> str:
+def binary_version(
+    binary: Path, env: Optional[Mapping[str, str]] = None
+) -> str:
     """
     First version line of ``binary``, detected as a fixture runner or a
     t8n -- a client may be either, and `fuzz campaign` only needs the former.
@@ -226,8 +257,9 @@ def binary_version(binary: Path) -> str:
     failure: Exception = RuntimeError("no detection attempted")
     for tool_class in (FixtureConsumerTool, TransitionTool):
         try:
-            tool = tool_class.from_binary_path(binary_path=binary)
-            return tool.version().splitlines()[0]
+            with client_environment(env or {}):
+                tool = tool_class.from_binary_path(binary_path=binary)
+                return tool.version().splitlines()[0]
         except Exception as exc:  # noqa: BLE001 - try the other role
             failure = exc
     raise RuntimeError(
@@ -243,7 +275,7 @@ def client_status(client: ClientConfig, *, update: bool = False) -> str:
     """
     try:
         resolved = resolve_client(client, update=update, build_missing=update)
-        version = binary_version(resolved.binary)
+        version = binary_version(resolved.binary, resolved.env)
         return f"{resolved.source:<18} {resolved.binary}  {version}"
     except NotBuiltError:
         return "not built: run `fuzz clients --update`"

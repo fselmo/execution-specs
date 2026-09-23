@@ -163,7 +163,7 @@ def _fake_tools(monkeypatch: Any, behaviour: Dict[str, Any]) -> None:
     monkeypatch.setattr(
         cli_module,
         "build_tools",
-        lambda _clients: {name: name for name in behaviour},
+        lambda _clients, _envs=None: {name: name for name in behaviour},
     )
     monkeypatch.setattr(differential, "_prepare", lambda case, _fork: case)
     monkeypatch.setattr(
