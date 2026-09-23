@@ -19,6 +19,7 @@ from ..fuzzer_bridge.campaign import (
     shard_path,
 )
 from ..fuzzer_bridge.generator import GENERATOR_VERSION
+from ..fuzzer_bridge.runners import RUNNER_ERROR_PREFIX
 
 
 def test_normalize_error_strips_hashes_and_numbers() -> None:
@@ -416,8 +417,60 @@ def test_each_named_contrast_is_its_own_witness(
     }
     assert contrast_clients == {"erigon:serial"}
     report = (tmp_path / "out" / "report.md").read_text()
-    assert "| erigon:hints-off | 6 |" in report
-    assert "| erigon:serial | 6 |" in report
+    assert "| erigon:hints-off | 6 | 0 |" in report
+    assert "| erigon:serial | 6 | 0 |" in report
+
+
+class _SilentRunner(_FakeRunner):
+    """A contrast run that never reports: every verdict a runner error."""
+
+    def run_file(self, _path: Path, fixture_names: Any) -> Dict[str, Verdict]:
+        return {
+            name: Verdict(False, f"{RUNNER_ERROR_PREFIX}no result")
+            for name in fixture_names
+        }
+
+
+class _GoesSilentRunner(_FakeRunner):
+    """A primary run whose environment contrast never reports."""
+
+    def with_env(self, env: Any) -> "_FakeRunner":
+        return _SilentRunner(
+            self.name, self.failing, None, self.flags, {**self.env, **env}
+        )
+
+
+def test_a_contrast_run_that_never_reports_is_counted(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A lane that compares nothing must say so: erigon's contrast once lost
+    every verdict to its parser and the report showed no row at all.
+    """
+    from ..fuzzer_bridge.config import ContrastRun
+
+    failing = {"geth": lambda _s: False, "erigon": lambda _s: False}
+
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        runner=lambda name, flags: (
+            _GoesSilentRunner(name, failing[name], None, flags)
+            if name == "erigon"
+            else _FakeRunner(name, failing[name], None, flags)
+        ),
+        contrasts={"erigon": {"serial": ContrastRun(env={"X": "1"})}},
+        count=6,
+        batch=3,
+    )
+    assert state.contrast["erigon:serial"] == {
+        "compared": 0,
+        "mismatches": 0,
+        "not_compared": 6,
+    }
+    report = (tmp_path / "out" / "report.md").read_text()
+    assert "| erigon:serial | 0 | 6 |" in report
 
 
 def test_a_client_disagreeing_with_itself_is_a_contrast_mismatch(
@@ -462,7 +515,7 @@ def test_a_client_disagreeing_with_itself_is_a_contrast_mismatch(
     verdicts = json.loads((bundle / "verdicts.json").read_text())
     assert set(verdicts) == {"nethermind", "nethermind (contrast)"}
     report = (tmp_path / "out" / "report.md").read_text()
-    assert "| nethermind:contrast | 6 | 2 | 3 | 3 |" in report
+    assert "| nethermind:contrast | 6 | 0 | 2 | 3 | 3 |" in report
     assert "| contrast mismatches (client vs itself) | 3 |" in report
 
 
