@@ -268,6 +268,30 @@ def _rarest(occurrences: Dict[Any, int], sample: int) -> Optional[str]:
     return f"{item[0]} {item[1]} at {count}/{sample}"
 
 
+def _bal_items(observation: Any, seed: int) -> Set[Any]:
+    """
+    The witnessed BAL cells one baseline case reached.
+
+    A recorder call with no derived reason is the runtime witness saying
+    the static walk missed a caller, and a baseline is exactly where that
+    has to stop the run: gating a space that is known to be incomplete
+    would freeze the omission into the constants.
+    """
+    from execution_testing.cli.fuzzer_bridge.bal_reach import witness_kind
+
+    if observation is None:
+        return set()
+    if observation.unattributed:
+        raise StaleGateBaselineError(
+            f"seed {seed}: recorder calls with no derived reason "
+            f"{dict(observation.unattributed)}; the BAL derivation missed "
+            "a caller. Fix the derivation before re-baselining."
+        )
+    return {
+        ("bal", cell) for cell in observation.cells if witness_kind(cell[0])
+    }
+
+
 def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
     """
     Measure per-seed signatures and greedy-cover a fresh baseline.
@@ -277,6 +301,7 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
     enumerated fork space). Run over the full baseline range (400) when
     re-baselining after a GENERATOR_VERSION bump.
     """
+    from execution_testing.cli.fuzzer_bridge.bal_reach import observer_spec
     from execution_testing.cli.fuzzer_bridge.campaign import fill_case
     from execution_testing.cli.fuzzer_bridge.generator import (
         GENERATOR_VERSION,
@@ -303,9 +328,11 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
 
     eels = ExecutionSpecsTransitionTool()
     eels.compute_signature = True
+    eels.bal_reach = observer_spec(fork)
     per_seed: Dict[int, Set[Any]] = {}
     for seed in seeds:
         eels.last_signature = None
+        eels.last_bal_observation = None
         try:
             fill_case(generate_fuzzer_output(fork, seed), fork, eels)
         except Exception:  # noqa: BLE001 - unfillable seeds are skipped
@@ -317,6 +344,7 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
         items |= {
             ("frame", cell) for cell in signature.frames if cell in enumerated
         }
+        items |= _bal_items(eels.last_bal_observation, seed)
         per_seed[seed] = items
 
     uncovered = set().union(*per_seed.values()) if per_seed else set()
@@ -341,6 +369,12 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
         "seeds": sorted(chosen),
         "events": sorted(t[1] for t in targets if t[0] == "event"),
         "frames": sorted(t[1] for t in targets if t[0] == "frame"),
+        "bal_cells": sorted(t[1] for t in targets if t[0] == "bal"),
+        "bal_occurrences": {
+            "|".join(item[1]): count
+            for item, count in sorted(occurrences.items())
+            if item[0] == "bal"
+        },
         "required_seeds": required_gate_seeds(occurrences, len(per_seed)),
         "rarest": _rarest(occurrences, len(per_seed)),
     }

@@ -30,6 +30,10 @@ from typing import (
     Tuple,
 )
 
+from execution_testing.evm_tools.t8n.evm_trace.bal_observer import (
+    BalReachSpec,
+    group_outcome,
+)
 from execution_testing.forks import Fork
 
 Reason = str
@@ -299,15 +303,19 @@ def outcomes(fork: Fork) -> FrozenSet[Outcome]:
         for name, cls in inspect.getmembers(module, inspect.isclass)
         if cls.__module__ == module.__name__ and name != "ExceptionalHalt"
     }
-    grouped = {"success"}
-    for name in names:
-        if name == "Revert":
-            grouped.add("revert")
-        elif "OutOfGas" in name:
-            grouped.add("out_of_gas")
-        else:
-            grouped.add("exceptional_halt")
-    return frozenset(grouped)
+    # The observer resolves outcomes with the same function, so the space
+    # and what is observed against it cannot disagree about a grouping.
+    return frozenset({group_outcome(None)} | {group_outcome(n) for n in names})
+
+
+def observer_spec(fork: Fork) -> BalReachSpec:
+    """What the runtime observer needs from the derivation."""
+    return BalReachSpec(
+        package=_fork_package(fork),
+        reasons=frozenset(entry_reasons(fork)),
+        recorders=recorders(fork),
+        fanout=_kind_fanout(_module_asts(_fork_package(fork))),
+    )
 
 
 REASON_WITNESSES: Mapping[str, str] = {

@@ -585,6 +585,82 @@ def bal_space_record(fork: "Fork") -> Dict[str, Any]:
     }
 
 
+def bal_observation_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
+    """
+    One reach-log record of what running the spec showed against the
+    derived BAL space.
+
+    The runtime half of the cross-check. `unattributed` is the count that
+    matters most: a recorder call whose first frame outside the tracker is
+    not a derived reason is a caller the static walk missed, and it must
+    be zero before the space is trusted. `closed_by_state` records how
+    often the frame-state fallback settled an outcome, so the fallback is
+    a number in the log rather than a silent default.
+    """
+    from collections import Counter
+    from datetime import datetime, timezone
+
+    from execution_testing.cli.fuzzer_bridge.bal_reach import (
+        bal_reach_space,
+        entry_reasons,
+        observer_spec,
+    )
+    from execution_testing.cli.fuzzer_bridge.campaign import fill_case
+    from execution_testing.cli.fuzzer_bridge.generator import (
+        GENERATOR_VERSION,
+        generate_fuzzer_output,
+    )
+    from execution_testing.cli.mutation.reach_log import eels_commit
+    from execution_testing.client_clis.clis.execution_specs import (
+        ExecutionSpecsTransitionTool,
+    )
+
+    eels = ExecutionSpecsTransitionTool()
+    eels.bal_reach = observer_spec(fork)
+    tracker = NoveltyTracker()
+    unattributed: Counter = Counter()
+    calls = closed_by_state = unresolved = filled = 0
+    for seed in seeds:
+        eels.last_bal_observation = None
+        try:
+            fill_case(generate_fuzzer_output(fork, seed), fork, eels)
+        except Exception:  # noqa: BLE001 - unfillable seeds observe nothing
+            continue
+        observation = eels.last_bal_observation
+        if observation is None:
+            continue
+        filled += 1
+        tracker.observe_bal(observation.cells, observation.aliases)
+        unattributed.update(observation.unattributed)
+        calls += observation.calls
+        closed_by_state += observation.closed_by_state
+        unresolved += observation.unresolved
+    cells, pairs = bal_reach_space(fork)
+    dark_cells = tracker.unreached_bal_cells(fork)
+    dark_pairs = tracker.unreached_bal_aliases(fork)
+    reached_reasons = {cell[0] for cell in set(cells) - set(dark_cells)}
+    return {
+        "kind": "bal-observed",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "eels_commit": eels_commit(),
+        "fork": fork.name(),
+        "generator_version": GENERATOR_VERSION,
+        "seeds": [seeds[0], seeds[-1]],
+        "filled": filled,
+        "recorder_calls": calls,
+        "unattributed": dict(unattributed),
+        "closed_by_state": closed_by_state,
+        "unresolved": unresolved,
+        "cells": len(cells),
+        "cells_reached": len(cells) - len(dark_cells),
+        "alias_pairs": len(pairs),
+        "alias_pairs_reached": len(pairs) - len(dark_pairs),
+        "reasons_never_observed": sorted(
+            set(entry_reasons(fork)) - reached_reasons
+        ),
+    }
+
+
 def render_bal_space(record: Dict[str, Any]) -> str:
     """Render one BAL-space record as the line a shape is measured against."""
     return (
