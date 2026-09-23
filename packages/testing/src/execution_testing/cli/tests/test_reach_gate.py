@@ -8,11 +8,14 @@ from execution_testing.cli.fuzzer_bridge import reach_gate
 from execution_testing.cli.fuzzer_bridge.generator import GENERATOR_VERSION
 from execution_testing.cli.fuzzer_bridge.reach_gate import (
     BASELINE_GENERATOR_VERSION,
+    GATE_BAL_CELLS,
     GATE_EVENTS,
     GATE_FRAMES,
     StaleGateBaselineError,
+    bal_gate_floor,
     check_reach_gate,
     compute_gate_baseline,
+    required_gate_seeds,
 )
 from execution_testing.forks import Amsterdam
 
@@ -106,3 +109,22 @@ def test_a_target_never_seen_does_not_set_the_window() -> None:
     assert required_gate_seeds({("frame", "x"): 0}, 400) == 400
     mixed = required_gate_seeds({("frame", "x"): 0, ("frame", "y"): 4}, 400)
     assert mixed == required_gate_seeds({("frame", "y"): 4}, 400)
+
+
+def test_gate_detects_a_dark_bal_cell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A gated BAL cell that stops being reached fails like any target."""
+    dark = ("vm.instructions.storage.sload", "storage_read", "never")
+    monkeypatch.setattr(reach_gate, "GATE_BAL_CELLS", GATE_BAL_CELLS | {dark})
+    missing = check_reach_gate(Amsterdam)
+    assert missing == ["bal vm.instructions.storage.sload storage_read never"]
+
+
+def test_the_bal_floor_is_the_window_turned_around() -> None:
+    """
+    A cell gated at the floor is one the window samples within the miss
+    bound, and one below it is not -- so gating never widens the window.
+    """
+    window, sample = 2094, 5000
+    floor = bal_gate_floor(window, sample)
+    assert required_gate_seeds({"cell": floor}, sample) <= window
+    assert required_gate_seeds({"cell": floor - 1}, sample) > window
