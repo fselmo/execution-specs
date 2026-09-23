@@ -9,7 +9,7 @@ from execution_testing.forks import get_forks
 
 from .baseline import StaleClientError
 from .campaign import CampaignOptions, run_campaign
-from .clients import client_status
+from .clients import client_status, verify_client
 from .corpus import load_case
 from .differential import (
     _COMPARED_FIELDS,
@@ -48,6 +48,18 @@ def fuzz() -> None:
     "--update, which would otherwise re-resolve every branch-ref client.",
 )
 @click.option(
+    "--campaign",
+    "campaign_name",
+    default=None,
+    help="Limit to the clients a campaign names, its producer included.",
+)
+@click.option(
+    "--verify",
+    is_flag=True,
+    help="Exit non-zero unless every selected client resolves to a binary "
+    "that answers --version. Never builds.",
+)
+@click.option(
     "--config",
     "config_path",
     type=click.Path(path_type=Path, dir_okay=False),
@@ -55,7 +67,11 @@ def fuzz() -> None:
     help="fuzz.yaml to read (default: nearest one in parent directories).",
 )
 def clients(
-    update: bool, only: Sequence[str], config_path: Optional[Path]
+    update: bool,
+    only: Sequence[str],
+    campaign_name: Optional[str],
+    verify: bool,
+    config_path: Optional[Path],
 ) -> None:
     """
     Show each configured client: source, binary, and version.
@@ -67,6 +83,10 @@ def clients(
     that premise without anyone choosing it -- erigon's block-access-list
     fix reached its devnet branch the day before the campaign that found
     the bug. So an update names its clients.
+
+    `--verify` turns the same report into a gate: it exits non-zero unless
+    every selected client resolves to a binary that answers, which is the
+    check to run against `--campaign NAME` before a long run.
     """
     config = load_config_or_fail(config_path)
     if not config.clients:
@@ -87,7 +107,41 @@ def clients(
             "their current heads. Pass --client for each one you mean to "
             "rebuild."
         )
-    selected = [c for c in config.clients if not only or c.name in only]
+    campaign = campaign_or_fail(config, campaign_name)
+    wanted = set(only)
+    if campaign is not None:
+        wanted |= set(campaign.clients)
+        if campaign.producer:
+            wanted.add(campaign.producer)
+    selected = [c for c in config.clients if not wanted or c.name in wanted]
+    if campaign is not None:
+        missing = sorted(wanted - {c.name for c in config.clients})
+        if missing:
+            raise click.ClickException(
+                f"campaign {campaign_name!r} names undeclared client(s): "
+                f"{', '.join(missing)}"
+            )
+    if verify:
+        if update:
+            raise click.UsageError(
+                "--verify reports the pool as it stands and never builds; "
+                "run it after --update, not with it."
+            )
+        unusable = []
+        for client in selected:
+            ok, detail = verify_client(client)
+            click.echo(
+                f"{client.name:<14} {'ok  ' if ok else 'FAIL'} {detail}"
+            )
+            if not ok:
+                unusable.append(client.name)
+        if unusable:
+            raise click.ClickException(
+                f"{len(unusable)} of {len(selected)} client(s) cannot run: "
+                f"{', '.join(unusable)}"
+            )
+        click.echo(f"{len(selected)} client(s) verified")
+        return
     for client in selected:
         click.echo(f"{client.name:<14} {client_status(client, update=update)}")
 
