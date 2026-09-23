@@ -238,3 +238,22 @@ def test_series_paths_resolve_relative_to_the_config_file(
     assert build is not None
     assert build.patches == [(tmp_path / "patches" / "0001-x.patch").resolve()]
     assert build.patch_paths == ("cmd/evm/", "tests/")
+
+
+def test_the_unnamed_contrast_name_is_reserved(tmp_path: Path) -> None:
+    """`contrast` already names the contrast_flags/contrast_env run."""
+    from ..fuzzer_bridge.config import ClientConfig
+
+    client = ClientConfig(
+        name="erigon",
+        path=tmp_path / "evm",
+        contrasts={"serial": {"env": {"EXEC3_WORKERS": "1"}}},
+    )
+    assert client.contrasts["serial"].env == {"EXEC3_WORKERS": "1"}
+    assert client.contrasts["serial"].flags is None
+    with pytest.raises(ValueError, match="`contrast` is the run"):
+        ClientConfig(
+            name="erigon",
+            path=tmp_path / "evm",
+            contrasts={"contrast": {"env": {}}},
+        )

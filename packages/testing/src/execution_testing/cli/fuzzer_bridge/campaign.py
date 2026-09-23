@@ -64,6 +64,7 @@ from execution_testing.specs.invariants import (
 )
 
 from .baseline import StaleClientError
+from .config import ContrastRun
 from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
 from .differential import _fork_by_name, is_tool_rejection
@@ -202,6 +203,31 @@ def classify(verdicts: Mapping[str, Verdict]) -> str:
     return "divergence"
 
 
+def contrast_lanes(
+    options: "CampaignOptions",
+) -> Dict[str, Tuple[str, ContrastRun]]:
+    """
+    Every contrast run of the campaign, by `<client>:<run>` label.
+
+    The unnamed run from `contrast_flags`/`contrast_env` is `contrast`,
+    so its signatures keep the `<client>:contrast` name they always had.
+    """
+    lanes: Dict[str, Tuple[str, ContrastRun]] = {}
+    for name in set(options.contrast_flags) | set(options.contrast_env):
+        flags = options.contrast_flags.get(name)
+        lanes[f"{name}:contrast"] = (
+            name,
+            ContrastRun(
+                flags=None if flags is None else list(flags),
+                env=dict(options.contrast_env.get(name, {})),
+            ),
+        )
+    for name, runs in options.contrasts.items():
+        for run_name, run in runs.items():
+            lanes[f"{name}:{run_name}"] = (name, run)
+    return lanes
+
+
 def contrast_excluded(primary: Verdict, contrast: Verdict) -> bool:
     """
     Whether a client's two runs cannot be compared to each other.
@@ -319,7 +345,10 @@ class CampaignState:
                 runner_errors=data.get("runner_errors", {}),
                 by_tx_type=data.get("by_tx_type", {}),
                 by_event=data.get("by_event", {}),
-                contrast=data.get("contrast", {}),
+                contrast={
+                    (k if ":" in k else f"{k}:contrast"): v
+                    for k, v in data.get("contrast", {}).items()
+                },
                 signatures=signatures,
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
@@ -519,15 +548,16 @@ def render_report(
     if state.contrast:
         lines += [
             "",
-            "## Same client, two flag sets",
+            "## Same client, run another way",
             "",
-            "The primary run is the client's vote above; the contrast run "
-            "is the same binary under `contrast_flags`. A fixture the two "
-            "judge differently is the client disagreeing with itself, a "
-            "finding that needs no other witness. Compared counts only "
-            "fixtures neither run refused.",
+            "The primary run is the client's vote above; each contrast "
+            "run is the same binary under one declared change of flags or "
+            "environment, named `<client>:<run>`. A fixture the two judge "
+            "differently is the client disagreeing with itself, a finding "
+            "that needs no other witness. Compared counts only fixtures "
+            "neither run refused.",
             "",
-            "| client | compared | primary failed | contrast failed | "
+            "| client run | compared | primary failed | contrast failed | "
             "mismatches |",
             "| --- | --- | --- | --- | --- |",
         ]
@@ -1087,6 +1117,11 @@ class CampaignOptions:
     client_env: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     """Per client, the environment its runner always runs under; a
     contrast's `contrast_env` is layered on top of it."""
+    contrasts: Mapping[str, Mapping[str, ContrastRun]] = field(
+        default_factory=dict
+    )
+    """Per client, further contrast runs by name; `contrast_lanes` joins
+    them with the unnamed one."""
     producer: Optional[Path] = None
     """A transition tool that fills instead of EELS; see `escalate`."""
     producer_name: str = "producer"
@@ -1221,16 +1256,16 @@ def run_campaign(
         )
         for name, path in options.clients.items()
     }
-    contrast_runners = {}
-    for name in set(options.contrast_flags) | set(options.contrast_env):
+    contrast_runners: Dict[str, Tuple[str, FixtureRunner]] = {}
+    for lane, (name, run) in contrast_lanes(options).items():
         if name not in runners:
             continue
         variant = runners[name]
-        if name in options.contrast_flags:
-            variant = variant.with_flags(options.contrast_flags[name])
-        if name in options.contrast_env:
-            variant = variant.with_env(options.contrast_env[name])
-        contrast_runners[name] = variant
+        if run.flags is not None:
+            variant = variant.with_flags(run.flags)
+        if run.env:
+            variant = variant.with_env(run.env)
+        contrast_runners[lane] = (name, variant)
     versions = {"eels": _eels_commit()}
     versions.update(
         {name: runner.version() for name, runner in runners.items()}
@@ -1394,13 +1429,13 @@ def run_campaign(
                         for name, runner in runners.items()
                     }
                     contrast_futures = {
-                        name: tp.submit(_timed_run, runner, batch_file, names)
-                        for name, runner in contrast_runners.items()
+                        lane: tp.submit(_timed_run, runner, batch_file, names)
+                        for lane, (_, runner) in contrast_runners.items()
                     }
                     timed = {name: f.result() for name, f in futures.items()}
                     contrast_results = {
-                        name: f.result()[0]
-                        for name, f in contrast_futures.items()
+                        lane: f.result()[0]
+                        for lane, f in contrast_futures.items()
                     }
                 results = {
                     name: verdicts for name, (verdicts, _) in timed.items()
@@ -1509,12 +1544,13 @@ def run_campaign(
                                 tally[key] = tally.get(key, 0) + 1
                     seed = _seed_of(fixture_name)
                     events = case_events.get(fixture_name, [])
-                    for name, other in contrast_results.items():
+                    for lane, other in contrast_results.items():
+                        name = contrast_runners[lane][0]
                         primary = results[name][fixture_name]
                         if contrast_excluded(primary, other[fixture_name]):
                             continue
                         tally = state.contrast.setdefault(
-                            name, {"compared": 0, "mismatches": 0}
+                            lane, {"compared": 0, "mismatches": 0}
                         )
                         tally["compared"] += 1
                         # Per-mode counts: a divergence in one mode and a
@@ -1537,7 +1573,7 @@ def run_campaign(
                         state.counts["contrast-mismatch"] = (
                             state.counts.get("contrast-mismatch", 0) + 1
                         )
-                        signature = (f"{name}:contrast", reason)
+                        signature = (lane, reason)
                         known = is_known(signature, options.known)
                         bundle = corpus_dir / signature_id(signature)
                         new = state.record_signature(
@@ -1561,7 +1597,9 @@ def run_campaign(
                                 shard_fixtures[fixture_name],
                                 {
                                     name: primary,
-                                    f"{name} (contrast)": other[fixture_name],
+                                    f"{name} ({lane[len(name) + 1 :]})": other[
+                                        fixture_name
+                                    ],
                                 },
                                 runners,
                                 focus_client=None,
