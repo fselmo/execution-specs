@@ -142,8 +142,8 @@ def test_with_flags_keeps_the_binary_and_kind() -> None:
 
 def test_with_env_layers_overrides_on_the_parent_environment() -> None:
     """
-    Erigon selects its execution path with `IGNORE_BAL`, not argv, so a
-    contrast that only varies flags cannot reach it. The override has to
+    Erigon's contrasts are environment variables, not argv, so a contrast
+    that only varies flags cannot reach them. The override has to
     sit on top of the inherited environment, not replace it, or the
     binary loses PATH and HOME.
     """
@@ -159,8 +159,8 @@ def test_with_env_layers_overrides_on_the_parent_environment() -> None:
 
 def test_a_contrast_can_vary_flags_and_env_together() -> None:
     """
-    The two knobs compose; erigon sizes its parallel path as well as
-    selecting it.
+    The two knobs compose: a contrast can vary a flag and erigon's worker
+    count at once.
     """
     runner = FixtureRunner("erigon", Path("/bin/evm"), "ErigonFixtureConsumer")
     other = runner.with_flags(["--x"]).with_env(

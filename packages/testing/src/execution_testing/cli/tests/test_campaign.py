@@ -217,7 +217,7 @@ def _campaign(
         ),
     )
     if contrast and contrast_via_env:
-        kw["contrast_env"] = {n: {"IGNORE_BAL": "true"} for n in contrast}
+        kw["contrast_env"] = {n: {"EXEC3_WORKERS": "1"} for n in contrast}
     elif contrast:
         kw["contrast_flags"] = {n: ["--contrast"] for n in contrast}
     monkeypatch.setattr(campaign_module, "_eels_commit", lambda: "abc123")
@@ -329,7 +329,7 @@ def test_a_contrast_declared_only_by_environment_still_runs(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     """
-    Erigon selects its execution path with `IGNORE_BAL`, not argv. A
+    Erigon's path contrast is `EXEC3_WORKERS`, not argv. A
     client declaring `contrast_env` and no `contrast_flags` must still
     get a contrast run, or its half of the panel has no self-witness.
     """
