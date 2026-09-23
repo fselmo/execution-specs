@@ -197,3 +197,28 @@ def test_the_tracker_reports_the_whole_space_before_any_case() -> None:
         cells=[("vm.instructions.storage.sload", "storage_read", "success")]
     )
     assert len(tracker.unreached_bal_cells(Amsterdam)) == len(cells) - 1
+
+
+def test_the_space_record_is_trendable_and_starts_at_zero_reached() -> None:
+    """
+    The baseline the first BAL shapes are measured against, written before
+    they exist. `cells_reached` is explicitly zero rather than absent, so
+    the first non-zero entry is visibly the observation source landing and
+    not a change in what the field means.
+    """
+    import json
+
+    from ..fuzzer_bridge.signature_baseline import (
+        bal_space_record,
+        render_bal_space,
+    )
+
+    record = bal_space_record(Amsterdam)
+    cells, pairs = bal_reach_space(Amsterdam)
+    assert record["kind"] == "bal-space"
+    assert record["cells"] == len(cells)
+    assert record["alias_pairs"] == len(pairs)
+    assert record["cells_reached"] == 0
+    assert record["generator_version"] and record["eels_commit"]
+    json.dumps(record)  # one reach-log line
+    assert "reasons" in render_bal_space(record)
