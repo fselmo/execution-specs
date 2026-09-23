@@ -221,6 +221,9 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "call_kind": Counter(),
         "contract_storage": Counter(),
         "coinbase": Counter(),
+        "withdrawals": Counter(),
+        "withdrawal_recipient": Counter(),
+        "withdrawal_amount": Counter(),
     }
 
     for seed in seeds:
@@ -250,6 +253,31 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
             tally["coinbase"]["precompile"] += 1
         else:
             tally["coinbase"]["fixed"] += 1
+        system = {
+            int.from_bytes(bytes(a), "big") for a in fork.system_contracts()
+        }
+        tally["withdrawals"]["present" if case.withdrawals else "absent"] += 1
+        for withdrawal in case.withdrawals:
+            recipient = int.from_bytes(bytes(withdrawal.address), "big")
+            if recipient == coinbase:
+                kind = "coinbase"
+            elif recipient in system:
+                kind = "system_contract"
+            elif recipient in keyed:
+                kind = "sender"
+            elif recipient in contracts:
+                kind = "code"
+            elif recipient in precompiles:
+                kind = "precompile"
+            elif recipient not in alloc:
+                kind = "nonexistent"
+            else:
+                raise ValueError(
+                    f"unclassified withdrawal recipient {recipient:#x}"
+                )
+            tally["withdrawal_recipient"][kind] += 1
+            amount = "zero" if int(withdrawal.amount) == 0 else "nonzero"
+            tally["withdrawal_amount"][amount] += 1
         for tx in case.transactions:
             target = (
                 int.from_bytes(bytes(tx.to), "big")
@@ -333,6 +361,16 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "call_gas": ("forwarded", "bounded"),
     "contract_storage": ("seeded", "empty"),
     "coinbase": ("fixed", "sender", "contract", "precompile"),
+    "withdrawals": ("present", "absent"),
+    "withdrawal_recipient": (
+        "nonexistent",
+        "precompile",
+        "coinbase",
+        "sender",
+        "code",
+        "system_contract",
+    ),
+    "withdrawal_amount": ("zero", "nonzero"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""
