@@ -11,12 +11,13 @@ can be attributed.
 """
 
 import json
+import os
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Dict, Iterable, Sequence, Tuple
+from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple
 
 from execution_testing.client_clis import FixtureConsumerTool
 
@@ -153,6 +154,11 @@ class FixtureRunner:
     binary: Path
     kind: str
     flags: Tuple[str, ...] = ()
+    env: Dict[str, str] = field(default_factory=dict)
+    """Environment overrides layered on the parent environment. Some
+    clients take their knobs this way rather than on argv -- erigon gates
+    its staged sync with `IGNORE_BAL` -- so a contrast run that only
+    varies argv cannot reach that half of them."""
     timeout: float = 1800.0
     _last_error: str = ""
 
@@ -173,10 +179,21 @@ class FixtureRunner:
         """The same binary driven with a different flag set."""
         return replace(self, flags=tuple(flags), _last_error="")
 
+    def with_env(self, env: Mapping[str, str]) -> "FixtureRunner":
+        """The same binary driven with extra environment overrides."""
+        return replace(self, env={**self.env, **dict(env)}, _last_error="")
+
+    def _environ(self) -> Dict[str, str]:
+        """The parent environment with this runner's overrides on top."""
+        return {**os.environ, **self.env}
+
     def version(self) -> str:
         """The runner's `--version` line."""
         proc = subprocess.run(
-            [str(self.binary), "--version"], capture_output=True, text=True
+            [str(self.binary), "--version"],
+            capture_output=True,
+            text=True,
+            env=self._environ(),
         )
         return (proc.stdout or proc.stderr).strip().splitlines()[0]
 
@@ -184,7 +201,11 @@ class FixtureRunner:
         command = [str(self.binary), *args]
         try:
             return subprocess.run(
-                command, capture_output=True, text=True, timeout=self.timeout
+                command,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                env=self._environ(),
             )
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(

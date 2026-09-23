@@ -21,6 +21,11 @@ clients:
       binary: nethtest
     runner_flags: [--parallelExecution, "true"]
     contrast_flags: [--parallelExecution, "false"]
+  - name: erigon
+    path: /opt/erigon/evm
+    contrast_env:
+      IGNORE_BAL: "true"
+      EXEC3_WORKERS: "4"
 campaigns:
   amsterdam:
     fork: Amsterdam
@@ -35,7 +40,7 @@ def test_loads_clients_and_campaigns(tmp_path: Path) -> None:
     cfg_path = tmp_path / "fuzz.yaml"
     cfg_path.write_text(YAML)
     cfg = load_fuzz_config(cfg_path)
-    assert [c.name for c in cfg.clients] == ["geth", "nethermind"]
+    assert [c.name for c in cfg.clients] == ["geth", "nethermind", "erigon"]
     assert cfg.client("geth").path == Path("/opt/geth/evm")
     build = cfg.client("nethermind").build
     assert build is not None
@@ -45,6 +50,15 @@ def test_loads_clients_and_campaigns(tmp_path: Path) -> None:
     assert nethermind.contrast_flags == ["--parallelExecution", "false"]
     assert cfg.client("geth").runner_flags == []
     assert cfg.client("geth").contrast_flags is None
+    # Erigon's knobs are environment variables, not argv; a client may
+    # declare a contrast with env alone.
+    erigon = cfg.client("erigon")
+    assert erigon.contrast_flags is None
+    assert erigon.contrast_env == {
+        "IGNORE_BAL": "true",
+        "EXEC3_WORKERS": "4",
+    }
+    assert cfg.client("geth").contrast_env is None
     campaign = cfg.campaigns["amsterdam"]
     assert campaign.fork == "Amsterdam"
     assert campaign.count == 50

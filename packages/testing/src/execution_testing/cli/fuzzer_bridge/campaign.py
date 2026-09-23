@@ -1033,6 +1033,9 @@ class CampaignOptions:
     contrast_flags: Mapping[str, Sequence[str]] = field(default_factory=dict)
     """Per client, a second flag set the same binary is also run with;
     see `contrast_mismatch`."""
+    contrast_env: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    """Per client, environment overrides for that second run. A client
+    may appear here, in `contrast_flags`, or in both."""
     producer: Optional[Path] = None
     """A transition tool that fills instead of EELS; see `escalate`."""
     producer_name: str = "producer"
@@ -1155,11 +1158,16 @@ def run_campaign(
         )
         for name, path in options.clients.items()
     }
-    contrast_runners = {
-        name: runners[name].with_flags(flags)
-        for name, flags in options.contrast_flags.items()
-        if name in runners
-    }
+    contrast_runners = {}
+    for name in set(options.contrast_flags) | set(options.contrast_env):
+        if name not in runners:
+            continue
+        variant = runners[name]
+        if name in options.contrast_flags:
+            variant = variant.with_flags(options.contrast_flags[name])
+        if name in options.contrast_env:
+            variant = variant.with_env(options.contrast_env[name])
+        contrast_runners[name] = variant
     versions = {"eels": _eels_commit()}
     versions.update(
         {name: runner.version() for name, runner in runners.items()}

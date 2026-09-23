@@ -195,6 +195,11 @@ def campaign(
             for n in campaign_config.clients
             if (flags := config.client(n).contrast_flags) is not None
         },
+        contrast_env={
+            n: env
+            for n in campaign_config.clients
+            if (env := config.client(n).contrast_env) is not None
+        },
         producer=producer,
         producer_name=producer_name or "producer",
         sources=sources,
@@ -209,9 +214,14 @@ def campaign(
         f"-> {options.output} "
         f"(batch {batch}, {options.fill_workers} fill workers)"
     )
-    for n, contrast in options.contrast_flags.items():
+    contrasted = set(options.contrast_flags) | set(options.contrast_env)
+    for n in sorted(contrasted):
+        knobs = list(options.contrast_flags.get(n, ()))
+        knobs += [
+            f"{k}={v}" for k, v in options.contrast_env.get(n, {}).items()
+        ]
         click.echo(
-            f"  {n} also runs under {' '.join(contrast)}; a fixture it "
+            f"  {n} also runs under {' '.join(knobs)}; a fixture it "
             "judges differently there is a contrast-mismatch"
         )
     try:
