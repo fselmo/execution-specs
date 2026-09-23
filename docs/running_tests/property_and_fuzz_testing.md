@@ -300,7 +300,10 @@ uv run fuzz campaign devnet --hours 8 --fill-workers 24
 
 A client entry can carry `runner_flags`, passed to its fixture runner on
 every run, and `contrast_flags`, a second flag set the same binary is also
-run with on every shard. The primary run is the client's vote in the panel;
+run with on every shard. Where a client's knob is not argv, `contrast_env`
+carries the same witness as environment overrides layered on the parent
+environment; a client may declare either or both, and one declaring
+neither has no contrast run. The primary run is the client's vote in the panel;
 a fixture the two runs judge differently is a `contrast-mismatch` — the
 client disagreeing with itself, a finding that needs neither the spec nor
 another client. The lane this exists for is a client's BAL parallel
@@ -312,6 +315,9 @@ clients:
     build: {recipe: nethermind, ref: glamsterdam-devnet-8}
     runner_flags: [--parallelExecution, "true"]     # the vote: the node's default path
     contrast_flags: [--parallelExecution, "false"]  # the witness: the same client, serial
+  - name: erigon
+    build: {recipe: erigon, ref: glamsterdam-devnet-8}
+    contrast_env: {IGNORE_BAL: "true"}               # erigon's knob is the environment
 ```
 
 The report counts mismatches per client and records each distinct one as a
@@ -424,19 +430,32 @@ with 40/40 verdicts both ways and a corrupted delivered list rejected in
 both. Its flag is honoured only once the list is attached, which is why
 the unpatched runner's `--parallelExecution` was inert.
 
-The same holds, by construction rather than by probe, for the other three
-at their pins: erigon's `IGNORE_BAL` gates staged sync, which its
-`blockrunner.go` never imports; nethermind honours `--parallelExecution`
+Erigon is the exception, and the claim that stood here was wrong: it takes
+the parallel path by default and always has. Probed with
+`TRACE_BAL_FEED=true`, 500 of 500 blocks report BAL-FEED, and 500 of 500
+report BAL-MISSING under `IGNORE_BAL=true`; `NewBlockAccessListSidecar` is
+present at the devnet-8 head too. Erigon's roles are inverted relative to
+geth's: parallel is its real default and its vote in the panel, and
+sequential (`IGNORE_BAL=true`) is the contrast, which is why its entry
+declares `contrast_env` rather than `contrast_flags`.
+
+The same holds, by construction rather than by probe, for the other two
+at their pins: nethermind honours `--parallelExecution`
 but `BlockAccessListManager.PrepareForProcessing` needs a list that
 `Ethereum.Test.Base` never assigns on the blocktest lane, so the flag is
 inert; besu's reference-test schedule passes
 `isParallelTxProcessingEnabled=false`, so its parallel processor is never
-built. **No campaign to date has exercised the parallel path on any
-client**: every BAL-consumption verdict so far is a sequential-path
-verdict. Each client's contrast therefore needs its own series -- attach
-the list (geth, erigon, nethermind) or unlock the processor (besu) -- and
-until a client's series exists its `contrast_flags` compare the sequential
-path with itself.
+built. **Three of the four have never had their parallel path exercised by
+a campaign**; erigon's verdicts have been parallel-path throughout. Those
+three each need their own series -- attach the list (geth, nethermind) or
+unlock the processor (besu) -- and until a client's series exists its
+contrast compares the sequential path with itself.
+
+What that corrects, rather than weakens: the `dbf21974` finding -- all 46
+hits and both reductions -- was a parallel-path bug found on the parallel
+path, not a sequential-path artefact; and the 245k erigon-d11 cases were
+parallel-path coverage, so that fix is confirmed on the path that mattered,
+bounded below 1-in-82,000.
 
 The fixtures write every quantity zero-padded to whole bytes (`"0x00"`,
 `"0x03e8"`), headers included, and geth's blocktest accepts that in headers
