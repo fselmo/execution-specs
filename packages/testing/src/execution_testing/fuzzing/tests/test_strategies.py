@@ -380,3 +380,32 @@ def test_walk_action_bytecode_is_deterministic() -> None:
     a = bytes(fuzzed_bytecode(random.Random(11), call_targets=TARGETS))
     b = bytes(fuzzed_bytecode(random.Random(11), call_targets=TARGETS))
     assert a == b
+
+
+def test_a_generated_case_cannot_reach_blockhash_with_a_short_history() -> (
+    None
+):
+    """
+    Generated code can read any block in the BLOCKHASH window, so an
+    environment missing any of them is refused with the blocks named;
+    the helper's environment carries all of them.
+    """
+    import pytest
+
+    from execution_testing.fuzzing import (
+        blockhash_history,
+        fuzz_environment,
+        require_blockhash_history,
+    )
+    from execution_testing.test_types import Environment
+
+    with pytest.raises(ValueError, match=r"blocks \[0\]"):
+        require_blockhash_history(Environment())
+    with pytest.raises(ValueError, match=r"blocks \[44, 45, 46\]\.\.\."):
+        require_blockhash_history(
+            Environment(number=300, block_hashes={299: 1})
+        )
+    require_blockhash_history(fuzz_environment())
+    deep = fuzz_environment(number=1000)
+    assert sorted(int(n) for n in deep.block_hashes) == list(range(744, 1000))
+    assert len(blockhash_history(1)) == 1
