@@ -799,3 +799,24 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
         "required_seeds": required_gate_seeds(gated, len(per_seed)),
         "rarest": _rarest(gated, len(per_seed)),
     }
+
+
+def gate_baseline_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
+    """
+    One reach-log record of a gate baseline, to append on re-baselining.
+
+    The module's constants are copied from it, and the gate tests check
+    them against the latest one, so the constants stay reconstructible
+    from the tracked log rather than from a file that lived in /tmp.
+    """
+    from datetime import datetime, timezone
+
+    from execution_testing.cli.mutation.reach_log import eels_commit
+
+    return {
+        "kind": "gate-baseline",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "eels_commit": eels_commit(),
+        "window_seeds": len(seeds),
+        **compute_gate_baseline(fork, seeds),
+    }
