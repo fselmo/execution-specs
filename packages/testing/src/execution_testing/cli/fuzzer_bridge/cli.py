@@ -299,6 +299,8 @@ def campaign(
             max_producer_disagreement_rate=(
                 health.max_producer_disagreement_rate
             ),
+            parallel_lanes=tuple(health.parallel_lanes),
+            parallel_drop_tolerance=health.parallel_drop_tolerance,
         ),
     )
     if producer is not None:

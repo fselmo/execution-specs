@@ -106,6 +106,11 @@ def test_report_shows_fill_error_rate(tmp_path: Path) -> None:
     assert "10.0% of 100 candidates" in text
 
 
+def _hash(seed: int) -> str:
+    """The block hash the fake pool gives seed ``seed``'s one block."""
+    return f"0x{seed:064x}"
+
+
 class _FakePool:
     """Synchronous stand-in pool: fills a slice of trivial fixtures."""
 
@@ -119,7 +124,18 @@ class _FakePool:
         from concurrent.futures import Future
 
         seeds, fixtures_dir = args
-        fixtures = {f"seed_{s}": {"blocks": [], "seed": s} for s in seeds}
+        fixtures = {
+            f"seed_{s}": {
+                "blocks": [
+                    {
+                        "blockHeader": {"number": "0x1", "hash": _hash(s)},
+                        "blockAccessList": [],
+                    }
+                ],
+                "seed": s,
+            }
+            for s in seeds
+        }
         path = shard_path(Path(fixtures_dir), seeds)
         path.write_text(json.dumps(fixtures))
         future: Any = Future()
@@ -1992,3 +2008,119 @@ def test_a_retry_on_a_block_meant_to_be_invalid_does_not_alert() -> None:
         ("besu", "BAL-RETRY block=1 exception=X"),
         ("besu", "FUZZ-PAR-DECISION block=2 hash=0xbb decision=sequential"),
     ]
+
+
+class _DecidingRunner(_FakeRunner):
+    """
+    Prints a `FUZZ-PAR-DECISION` line per block it judges, parallel where
+    `decide(seed)` says so, silent where it returns None, plus one line
+    for a block no fixture has.
+    """
+
+    decide: Any = staticmethod(lambda _seed: True)
+
+    def run_file(self, path: Path, fixture_names: Any) -> Dict[str, Verdict]:
+        names = list(fixture_names)
+        lines = []
+        for name in names:
+            seed = int(name.split("_")[1])
+            choice = type(self).decide(seed)
+            if choice is None:
+                continue
+            decision = "parallel" if choice else "sequential"
+            lines.append(
+                f"FUZZ-PAR-DECISION block=1 hash={_hash(seed)} "
+                f"decision={decision} reason=test"
+            )
+        lines.append(
+            f"FUZZ-PAR-DECISION block=9 hash=0x{'ff' * 32} "
+            "decision=parallel reason=stray"
+        )
+        self.last_stderr = "\n".join(lines) + "\n"
+        return super().run_file(path, names)
+
+
+def _deciding_campaign(
+    tmp_path: Path, monkeypatch: Any, decide: Any, **kw: Any
+) -> Any:
+    from ..fuzzer_bridge.health import HealthPolicy
+
+    monkeypatch.setattr(_DecidingRunner, "decide", staticmethod(decide))
+    failing = {"geth": lambda _s: False, "nethermind": lambda _s: False}
+    return _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        runner=lambda name, flags: (
+            _DecidingRunner(name, failing[name], None, flags)
+            if name == "nethermind"
+            else _FakeRunner(name, failing[name], None, flags)
+        ),
+        batch=20,
+        baseline=False,
+        health=HealthPolicy(window=20, parallel_lanes=("nethermind",)),
+        **kw,
+    )
+
+
+def test_parallel_decisions_are_joined_counted_and_baselined(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Each decision line is joined to its block by hash; a lane's decided
+    fraction is its parallel decisions over the BAL-carrying blocks, a
+    line for no block is unmatched, and the segment's first batch sets
+    the baseline. A decision line is not a masked failure: it neither
+    alerts nor keeps the batch.
+    """
+    from ..fuzzer_bridge import campaign as campaign_module
+
+    sent: List[str] = []
+    monkeypatch.setattr(campaign_module, "send_alert", sent.append)
+    state = _deciding_campaign(
+        tmp_path, monkeypatch, lambda seed: seed % 4 != 0, count=40
+    )
+    assert state.parallel["nethermind"] == {
+        "bal_blocks": 40,
+        "decisions": 40,
+        "parallel": 30,
+        "unmatched": 2,
+    }
+    assert state.segments[-1]["parallel_baseline"] == {"nethermind": [15, 20]}
+    assert state.status == "done" and sent == []
+    assert list((tmp_path / "out" / "fixtures").iterdir()) == []
+
+
+def test_a_parallel_lane_falling_below_its_baseline_pauses(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Every block ran in parallel on the segment's opening batch; afterwards
+    none does. The drop is far beyond sampling, so the campaign pauses and
+    names the lane.
+    """
+    state = _deciding_campaign(
+        tmp_path, monkeypatch, lambda seed: seed < 20, count=100
+    )
+    assert state.status == "paused"
+    assert "parallel decisions on nethermind fell" in state.status_reason
+    assert state.health["parallel"]["nethermind"]["baseline"] == 1.0
+
+
+def test_a_lane_without_a_baseline_cannot_pause(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A lane silent on the segment's opening batch has no baseline, so
+    however its fraction moves later it cannot pause, and says so.
+    """
+    state = _deciding_campaign(
+        tmp_path,
+        monkeypatch,
+        lambda seed: None if seed < 20 else False,
+        count=60,
+    )
+    assert state.status == "done"
+    assert state.segments[-1]["parallel_baseline"] == {}
+    note = state.health["parallel"]["nethermind"]["note"]
+    assert note == "no baseline for this segment: cannot pause"

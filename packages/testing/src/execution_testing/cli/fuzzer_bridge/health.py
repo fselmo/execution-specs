@@ -39,6 +39,12 @@ class HealthPolicy:
     too little to trust."""
     max_producer_disagreement_rate: float = 0.01
     """Share of cases the producer may fill differently from the spec."""
+    parallel_lanes: Tuple[str, ...] = ()
+    """Lanes whose client runs the parallel path as its primary: each
+    one's decided fraction is held to its segment's baseline."""
+    parallel_drop_tolerance: float = 0.0
+    """Proportional drop the decided fraction may take before the binomial
+    test is even asked; 0 leaves the test alone to decide."""
 
 
 def batch_sample(
@@ -54,6 +60,13 @@ def batch_sample(
         "contrast_compared": {
             lane: count - before["contrast_compared"].get(lane, 0)
             for lane, count in after["contrast_compared"].items()
+        },
+        "parallel": {
+            lane: [
+                counts[0] - before["parallel"].get(lane, [0, 0])[0],
+                counts[1] - before["parallel"].get(lane, [0, 0])[1],
+            ]
+            for lane, counts in after["parallel"].items()
         },
     }
 
@@ -76,6 +89,10 @@ def snapshot(state: Any, policy: HealthPolicy) -> Dict[str, Any]:
             lane: tally.get("compared", 0)
             for lane, tally in state.contrast.items()
         },
+        "parallel": {
+            lane: [tally.get("parallel", 0), tally.get("bal_blocks", 0)]
+            for lane, tally in state.parallel.items()
+        },
     }
 
 
@@ -96,6 +113,7 @@ def evaluate(
     policy: HealthPolicy,
     lanes: List[str],
     runners: int,
+    parallel_baseline: Optional[Mapping[str, List[int]]] = None,
 ) -> Tuple[Dict[str, Any], List[str]]:
     """
     The window's rates and every band they fall outside.
@@ -156,6 +174,60 @@ def evaluate(
             f"contrast lane(s) {', '.join(silent)} compared nothing in "
             f"the last {cases} cases"
         )
+    rates["parallel"], dropped = _parallel_checks(
+        window, policy, parallel_baseline or {}
+    )
+    problems += dropped
+    return rates, problems
+
+
+def _parallel_checks(
+    window: List[Dict[str, Any]],
+    policy: HealthPolicy,
+    baseline: Mapping[str, List[int]],
+) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Each parallel-primary lane's decided fraction against its baseline.
+
+    The same binomial test the version-bump guard uses: a drop pauses only
+    when it is further than sampling explains. A lane with no baseline is
+    reported and cannot pause.
+    """
+    from .density import significant_drops
+
+    rates: Dict[str, Any] = {}
+    problems = []
+    for lane in policy.parallel_lanes:
+        parallel = sum(
+            s.get("parallel", {}).get(lane, [0, 0])[0] for s in window
+        )
+        blocks = sum(
+            s.get("parallel", {}).get(lane, [0, 0])[1] for s in window
+        )
+        entry: Dict[str, Any] = {
+            "parallel": parallel,
+            "bal_blocks": blocks,
+            "fraction": parallel / blocks if blocks else None,
+        }
+        base = baseline.get(lane)
+        if not base or not base[1]:
+            entry["baseline"] = None
+            entry["note"] = "no baseline for this segment: cannot pause"
+        else:
+            entry["baseline"] = base[0] / base[1]
+            if blocks:
+                drops = significant_drops(
+                    {lane: base[0]},
+                    {lane: parallel},
+                    base[1],
+                    blocks,
+                    tolerance=policy.parallel_drop_tolerance,
+                )
+                if drops:
+                    problems.append(
+                        f"parallel decisions on {lane} fell: {drops[0]}"
+                    )
+        rates[lane] = entry
     return rates, problems
 
 

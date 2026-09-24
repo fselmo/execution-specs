@@ -120,6 +120,7 @@ def status_view(output: Path) -> Dict[str, Any]:
             )
         },
         "contrast": state.get("contrast", {}),
+        "parallel": state.get("parallel", {}),
         "findings": [
             {
                 "digest": digest,

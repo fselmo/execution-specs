@@ -50,6 +50,7 @@
 <h2>Health</h2><div class="card" id="checks"></div>
 <h2>Clients</h2><div class="card" id="clients"></div>
 <h2>Contrast lanes</h2><div class="card" id="contrast"></div>
+<h2>Parallel decisions</h2><div class="card" id="parallel"></div>
 <h2>Findings</h2><div class="card" id="findings"></div>
 <div id="updated"></div>
 <script nonce="{{NONCE}}">
@@ -116,6 +117,15 @@ function render(s) {
     row(name, c.failures + " failed, " + c.refused + " refused, " + c.runner_errors + " runner errors", c.runner_errors > 0)));
   fill("contrast", Object.entries(s.contrast || {}).map(([lane, c]) =>
     row(lane, (c.compared || 0) + " compared, " + (c.mismatches || 0) + " mismatches", !c.compared)));
+  const guarded = (s.health || {}).parallel || {};
+  fill("parallel", Object.entries(s.parallel || {}).map(([lane, p]) => {
+    const g = guarded[lane];
+    const fraction = p.bal_blocks ? p.parallel / p.bal_blocks : null;
+    let text = p.parallel + " / " + p.bal_blocks + " BAL blocks (" + pct(fraction) + ")";
+    if (p.unmatched) text += ", " + p.unmatched + " unmatched";
+    if (g) text += g.baseline === null ? "; no baseline for this segment: cannot pause" : "; baseline " + pct(g.baseline) + ", window " + pct(g.fraction);
+    return row(lane, text, g && g.baseline !== null && g.fraction !== null && g.fraction < g.baseline);
+  }));
   fill("findings", (s.findings || []).map((f) => {
     const node = el("div", "finding");
     node.append(el("div", "", f.digest + "  " + f.client + (f.known ? "  (known)" : "") + (f.triage ? "  (" + f.triage + ")" : "")));

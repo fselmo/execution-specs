@@ -347,6 +347,9 @@ class CampaignState:
     last; see `health.batch_sample`."""
     health: Dict[str, Any] = field(default_factory=dict)
     """The latest window's rates, for the report and the status page."""
+    parallel: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    """Per lane, BAL-carrying blocks judged and how many it decided to run
+    in parallel, from the series' `FUZZ-PAR-DECISION` lines."""
     timing: Dict[str, float] = field(default_factory=dict)
     """Seconds the loop spent, summed over batches: waiting for a fill,
     judging (runners working), and processing afterwards. Runners sit
@@ -383,6 +386,39 @@ class CampaignState:
         )
         self.segment = segment
         return True
+
+    def record_parallel(
+        self, decided: Mapping[str, Mapping[str, int]]
+    ) -> None:
+        """
+        Add a batch's parallel decisions to the totals, and set the open
+        segment's baseline from the first batch it judges.
+
+        The baseline is measured on the segment's own binaries and
+        generated cases, so a later drop against it is the lane changing,
+        not the comparison.
+        """
+        for lane, tally in decided.items():
+            total = self.parallel.setdefault(
+                lane,
+                {
+                    "bal_blocks": 0,
+                    "decisions": 0,
+                    "parallel": 0,
+                    "unmatched": 0,
+                },
+            )
+            for key, value in tally.items():
+                total[key] = total.get(key, 0) + value
+        if self.segments and "parallel_baseline" not in self.segments[-1]:
+            # Only a lane that printed decisions has a baseline: one whose
+            # binary lacks the print would otherwise get a baseline of
+            # zero, which nothing can fall below.
+            self.segments[-1]["parallel_baseline"] = {
+                lane: [tally["parallel"], tally["bal_blocks"]]
+                for lane, tally in decided.items()
+                if tally["decisions"]
+            }
 
     def record_timing(
         self, fill_wait: float, judging: float, processing: float
@@ -456,6 +492,7 @@ class CampaignState:
                 segments=data.get("segments", []),
                 health=data.get("health", {}),
                 timing=data.get("timing", {}),
+                parallel=data.get("parallel", {}),
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
             return state
@@ -490,6 +527,7 @@ class CampaignState:
                     "segments": self.segments,
                     "health": self.health,
                     "timing": self.timing,
+                    "parallel": self.parallel,
                     # Written for readers of the file, the status page
                     # among them, so none has to derive it.
                     "summary": {
@@ -1058,6 +1096,77 @@ def _invalid_blocks(
             if block_hash:
                 hashes.add(block_hash.lower())
     return numbers, hashes
+
+
+def _bal_block_hashes(
+    fixtures: Mapping[str, Any],
+) -> Tuple[Set[str], Set[str]]:
+    """Hashes of the batch's blocks with a block access list, and of all."""
+    carrying: Set[str] = set()
+    every: Set[str] = set()
+    for fixture in fixtures.values():
+        for block in fixture.get("blocks", []):
+            header = block.get("blockHeader") or block.get(
+                "rlp_decoded", {}
+            ).get("blockHeader", {})
+            block_hash = str(header.get("hash", "")).lower()
+            if not block_hash:
+                continue
+            every.add(block_hash)
+            if "blockAccessList" in block:
+                carrying.add(block_hash)
+        for payload in fixture.get("engineNewPayloads", []):
+            params = payload.get("params", [{}])[0]
+            block_hash = str(params.get("blockHash", "")).lower()
+            if not block_hash:
+                continue
+            every.add(block_hash)
+            if "blockAccessList" in params:
+                carrying.add(block_hash)
+    return carrying, every
+
+
+def parallel_decisions(
+    lines: Sequence[Tuple[str, str]],
+    fixtures: Mapping[str, Any],
+    lanes: Sequence[str] = (),
+) -> Dict[str, Dict[str, int]]:
+    """
+    Per lane, the batch's BAL-carrying blocks and how many it decided to
+    run in parallel.
+
+    Lines are joined to blocks on the hash. Every BAL-carrying block counts
+    against every lane that printed a decision or is in ``lanes``, so a
+    lane that decided nothing, or printed nothing, reads as a fraction of
+    zero rather than dropping out. A line whose hash no block in the batch
+    has is counted as unmatched.
+    """
+    carrying, every = _bal_block_hashes(fixtures)
+    tallies: Dict[str, Dict[str, int]] = {
+        lane: {
+            "bal_blocks": len(carrying),
+            "decisions": 0,
+            "parallel": 0,
+            "unmatched": 0,
+        }
+        for lane in {*lanes, *(lane for lane, _ in lines)}
+    }
+    seen: Dict[str, Set[str]] = {lane: set() for lane in tallies}
+    for lane, line in lines:
+        fields = dict(_DECISION_FIELDS.findall(line))
+        block_hash = fields.get("hash", "").lower()
+        if block_hash not in every:
+            tallies[lane]["unmatched"] += 1
+            continue
+        if block_hash in carrying and block_hash not in seen[lane]:
+            seen[lane].add(block_hash)
+            tallies[lane]["decisions"] += 1
+            if fields.get("decision") == "parallel":
+                tallies[lane]["parallel"] += 1
+    return tallies
+
+
+_DECISION_FIELDS = re.compile(r"\b(block|hash|decision|reason)=(\S+)")
 
 
 def expected_valid_lines(
@@ -1926,6 +2035,27 @@ def run_campaign(
                         for lane, r in {**timed, **contrast_timed}.items()
                     }
                 )
+                batch_fixtures = json.loads(batch_file.read_text())
+                decisions = [
+                    (lane, line)
+                    for lane, line in tagged
+                    if line.startswith(PAR_DECISION_TAG)
+                ]
+                tagged = [
+                    (lane, line)
+                    for lane, line in tagged
+                    if not line.startswith(PAR_DECISION_TAG)
+                ]
+                decided = parallel_decisions(
+                    decisions,
+                    batch_fixtures,
+                    lanes=[
+                        lane
+                        for lane in options.health.parallel_lanes
+                        if lane in timed or lane in contrast_timed
+                    ],
+                )
+                state.record_parallel(decided)
                 if tagged:
                     # The batch is kept so each line can be traced to its
                     # fixture; the tag names the block, not the test.
@@ -1945,9 +2075,7 @@ def run_campaign(
                     # no digest to be new. On a block meant to be invalid
                     # (fixtures that are not generated carry some) the
                     # retry is correct, and it only counts.
-                    masked = expected_valid_lines(
-                        tagged, json.loads(batch_file.read_text())
-                    )
+                    masked = expected_valid_lines(tagged, batch_fixtures)
                     if masked:
                         failure = send_alert(
                             masked_failure_alert(output.name, seeds, masked)
@@ -2221,6 +2349,11 @@ def run_campaign(
                 options.health,
                 lanes=sorted(contrast_runners),
                 runners=len(runners),
+                parallel_baseline=(
+                    state.segments[-1].get("parallel_baseline")
+                    if state.segments
+                    else None
+                ),
             )
             found_new = new_findings(state, seen)
             if found_new:
@@ -2289,10 +2422,18 @@ def run_campaign(
     return state
 
 
-STDERR_TAGS = ("BAL-RETRY", "BAL-FALLBACK")
+MASKED_TAGS = ("BAL-RETRY", "BAL-FALLBACK")
 """Line prefixes the parallel-path series print to stderr where a verdict
 cannot show them: nethermind's sequential retry and besu's fallback. A tag
 on a valid fixture is a parallel-path failure the verdict masked."""
+
+PAR_DECISION_TAG = "FUZZ-PAR-DECISION"
+"""One line per block a client imports, printed by the campaign series:
+`FUZZ-PAR-DECISION block=<n> hash=<hex> decision=parallel|sequential
+reason=<code>`. It says whether the block went down the parallel path at
+all, which a verdict cannot."""
+
+STDERR_TAGS = (*MASKED_TAGS, PAR_DECISION_TAG)
 
 
 def tagged_stderr_lines(stderr: Mapping[str, str]) -> List[Tuple[str, str]]:
