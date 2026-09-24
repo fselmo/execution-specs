@@ -1,9 +1,6 @@
 # Snapshot of the server's fuzz.yaml (gitignored there), 2026-09-23.
 # Committed under another name so the laptop can read and merge it;
 # `fuzz ... --config fuzz.server.yaml` uses it as is, patch paths included.
-# Named for the machine, not the harness: the box also runs Hive, and
-# "hive" here would read as a Hive configuration.
-
 clients:
   # Detection campaigns track the devnet branch head on purpose.
   - name: geth
@@ -12,16 +9,19 @@ clients:
     build: {recipe: erigon, ref: glamsterdam-devnet-8}
   - name: besu
     build: {recipe: besu, ref: glamsterdam-devnet-8}
+    env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
+          PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
   - name: nethermind
     build: {recipe: nethermind, ref: glamsterdam-devnet-8}
+    env: {DOTNET_ROOT: /home/fselmo/.dotnet,
+          PATH: "/home/fselmo/.dotnet:/usr/local/go/bin:/usr/bin:/bin"}
 
   # Gate clients are pinned by full 40-char SHA: the marker becomes
   # ref-<sha> and is immutable. Abbreviated SHAs fail to fetch.
+  # Pre-fix erigon. Like besu-gate, the binary the `erigon` entry built at
+  # this commit -- the one amsterdam-blind recorded (3.7.0-dev-1880a8e3).
   - name: erigon-gate
-    build:
-      recipe: erigon
-      repo: erigontech/erigon
-      ref: 1880a8e319aef66cbd752515e4c55bd08fd83394
+    path: ~/.cache/eels-fuzz/erigon/1880a8e319aef66cbd752515e4c55bd08fd83394/evm
   # Pre-fix besu, the campaign's positive control. Points at the binary the
   # `besu` entry already built at this commit -- the cache is commit-keyed,
   # so a rebuild onto a newer head leaves it in place. A build entry here
@@ -29,6 +29,8 @@ clients:
   # Rebuild it properly if the cache is ever pruned.
   - name: besu-gate
     path: ~/.cache/eels-fuzz/besu/eea3174daed416bb092b122389759765e240b53f/evmtool
+    env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
+          PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
   # Pre-fix parent of 7150854c (PR 12965); verified 0 occurrences of
   # Eip8037_nested_exceptional_halts_burn_spilled_state_gas.
   - name: nethermind-gate
@@ -36,6 +38,8 @@ clients:
       recipe: nethermind
       repo: NethermindEth/nethermind
       ref: 436332584f6f5d93ea95fbab0905de940c91e07c
+    env: {DOTNET_ROOT: /home/fselmo/.dotnet,
+          PATH: "/home/fselmo/.dotnet:/usr/local/go/bin:/usr/bin:/bin"}
 
   # Producer: evmone's t8n fills batches; EELS adjudicates only what the
   # panel disagrees on. Pinned by full SHA -- the Amsterdam t8n commit.
@@ -58,9 +62,13 @@ clients:
   - name: besu-d11
     build: {recipe: besu, repo: besu-eth/besu,
             ref: 028f9d7391b1a85885a87d6c6f931bad7610da8c}
+    env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
+          PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
   - name: nethermind-d11
     build: {recipe: nethermind, repo: NethermindEth/nethermind,
             ref: 0aacb82fa8da8999ce0e68d85a8cb15202f36094}
+    env: {DOTNET_ROOT: /home/fselmo/.dotnet,
+          PATH: "/home/fselmo/.dotnet:/usr/local/go/bin:/usr/bin:/bin"}
 
   # Parallel-path panel. Each entry's runner takes the BAL parallel path
   # and its contrast is the same binary sequential, so a mismatch is one
@@ -99,6 +107,8 @@ clients:
         - ethereum/referencetests/
         - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
     contrast_flags: [--bal.sequential]
+    env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
+          PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
   - name: nethermind-par
     build:
       recipe: nethermind
@@ -114,6 +124,8 @@ clients:
         - src/Nethermind/Nethermind.Consensus/Processing/BranchProcessor.cs
     runner_flags: [--parallelExecution, "true"]
     contrast_flags: [--parallelExecution, "false"]
+    env: {DOTNET_ROOT: /home/fselmo/.dotnet,
+          PATH: "/home/fselmo/.dotnet:/usr/local/go/bin:/usr/bin:/bin"}
 
 campaigns:
   smoke:
@@ -183,4 +195,32 @@ campaigns:
     clients: [geth-par, erigon-par, besu-par, nethermind-par]
     producer: evmone-producer
     seed_start: 210000
+    known: []
+  # Erigon's arm on its own, both named contrasts, through the campaign:
+  # the check that each lane compares cases rather than dropping them.
+  erigon-contrast:
+    fork: Amsterdam
+    clients: [geth-par, erigon-par]
+    producer: evmone-producer
+    seed_start: 2015500
+    known: []
+  # v16 control rate on control-rate-v15's seed block and panel.
+  control-rate-v16:
+    fork: Amsterdam
+    clients: [geth-d11, besu-gate]
+    producer: evmone-producer
+    seed_start: 210000
+    known: []
+  # withdrawal-zero-untouched through the blocktest lane: EELS fills (clean,
+  # then with the shape applied) and each client's failures are its kills.
+  # The t8n oracle cannot reach nethermind, erigon or besu at these pins.
+  wzu-clean:
+    fork: Amsterdam
+    clients: [geth, erigon, besu, nethermind]
+    seed_start: 0
+    known: []
+  wzu-mutant:
+    fork: Amsterdam
+    clients: [geth, erigon, besu, nethermind]
+    seed_start: 0
     known: []
