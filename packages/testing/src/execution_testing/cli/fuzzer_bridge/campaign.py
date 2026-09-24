@@ -1005,6 +1005,7 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
     for seed in seeds:
         case_started = time.perf_counter()
         _FILL["eels"].reset_opcode_count()
+        _FILL["eels"].bal_witnesses = []
         if hasattr(_FILL["eels"], "last_signature"):
             _FILL["eels"].last_signature = None
         seen: List[Any] = []
@@ -1032,8 +1033,7 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
             case_events[f"seed_{seed}"] = _case_events(_FILL["eels"])
             if seen:
                 violating[seed] = [v.invariant for v in seen]
-            witness = getattr(_FILL["eels"], "last_bal_witness", None)
-            if witness is not None:
+            for witness in getattr(_FILL["eels"], "bal_witnesses", []):
                 widest = max(widest, bracket_width(witness))
         case_ms.append((seed, (time.perf_counter() - case_started) * 1000))
     seconds = time.perf_counter() - started

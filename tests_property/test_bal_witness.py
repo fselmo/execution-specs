@@ -35,20 +35,27 @@ SEEDS = range(9000, 9010)
 
 @pytest.fixture(scope="module")
 def runs() -> List[Tuple[int, BalWitness, List[Dict[str, Any]]]]:
-    """Fill a few generated cases, keeping each one's witness and blocks."""
+    """
+    Fill a few generated cases, one entry per block: that block's witness
+    and that block alone. A case can span several blocks, each with its
+    own list, and checking the last block's witness against all of them
+    reported the earlier blocks' accesses as invented.
+    """
     collected: List[Tuple[int, BalWitness, List[Dict[str, Any]]]] = []
     for seed in SEEDS:
         eels = ExecutionSpecsTransitionTool()
         eels.compute_bal_witness = True
-        eels.last_bal_witness = None
         try:
             fixture = fill_case(
                 generate_fuzzer_output(Amsterdam, seed), Amsterdam, eels
             )
         except Exception:  # noqa: BLE001 - an unfillable case is not the subject
             continue
-        assert eels.last_bal_witness is not None
-        collected.append((seed, eels.last_bal_witness, fixture["blocks"]))
+        assert len(eels.bal_witnesses) == len(fixture["blocks"]), seed
+        for witness, block in zip(
+            eels.bal_witnesses, fixture["blocks"], strict=True
+        ):
+            collected.append((seed, witness, [block]))
     assert collected, "no case filled; the rest of this module proves nothing"
     return collected
 
