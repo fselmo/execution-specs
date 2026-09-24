@@ -25,8 +25,9 @@ from execution_testing.forks import Amsterdam
 def test_gate_baseline_matches_the_generator_version() -> None:
     """A generator bump must re-baseline the gate, never skip it."""
     assert GENERATOR_VERSION == BASELINE_GENERATOR_VERSION, (
-        "GENERATOR_VERSION bumped: re-baseline the reach gate with "
-        "compute_gate_baseline(fork, range(400)) and update reach_gate.py"
+        "GENERATOR_VERSION bumped: append "
+        "gate_baseline_record(fork, range(5000)) to reach_log.jsonl and "
+        "copy its constants into reach_gate.py"
     )
 
 
@@ -37,6 +38,47 @@ def _reach_log() -> Path:
         if candidate.exists():
             return candidate
     raise FileNotFoundError("reach_log.jsonl not found above the tests")
+
+
+def test_every_target_the_baseline_saw_is_gated_or_listed() -> None:
+    """
+    The constants match the latest gate-baseline record for this version,
+    and nothing it observed is left out: every event and frame is gated
+    (the window is sized to cover the rarest, so none falls below it),
+    and every BAL cell is either gated or listed below the window with
+    its count. `later-block-code` fired from v17 to v19 without being
+    gated, because nothing required it.
+    """
+    import json
+
+    records = [
+        json.loads(line)
+        for line in _reach_log().read_text().splitlines()
+        if '"gate-baseline"' in line
+    ]
+    found = [
+        r
+        for r in records
+        if r["generator_version"] == BASELINE_GENERATOR_VERSION
+    ]
+    assert found, (
+        f"no v{BASELINE_GENERATOR_VERSION} gate-baseline record: append "
+        "`reach_gate.gate_baseline_record(fork, range(5000))` to "
+        "reach_log.jsonl and copy its constants into reach_gate.py"
+    )
+    record = found[-1]
+    assert set(record["events"]) - GATE_EVENTS == set()
+    frames = {tuple(cell) for cell in record["frames"]}
+    assert frames - GATE_FRAMES == set()
+    assert {tuple(c) for c in record["bal_cells"]} == set(
+        reach_gate.GATE_BAL_CELLS
+    )
+    listed = {
+        tuple(cell.split("|")): count
+        for cell, count in record["bal_below_window"].items()
+    }
+    assert listed == reach_gate.BAL_CELLS_BELOW_WINDOW
+    assert tuple(record["seeds"]) == reach_gate.GATE_SEEDS
 
 
 def test_a_generator_version_ships_with_its_rate_records() -> None:
