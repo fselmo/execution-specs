@@ -209,5 +209,6 @@ def test_the_restore_touches_exactly_the_write_collections() -> None:
         "account_writes",
         "storage_writes",
         "code_writes",
+        "storage_clears",
         "transient_storage",
     }

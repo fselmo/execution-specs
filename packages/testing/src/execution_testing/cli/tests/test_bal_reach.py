@@ -422,6 +422,7 @@ def test_a_destroy_with_nothing_pending_is_not_a_storage_read() -> None:
             storage_reads=set(),
             account_reads=set(),
             account_writes={},
+            storage_clears=set(),
         )
 
     _, nothing = observer.observe_call(
