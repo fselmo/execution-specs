@@ -1525,3 +1525,41 @@ def test_a_stop_signal_finishes_the_batch_saves_state_and_resumes(
     )
     assert resumed.next_seed == 6 and resumed.counts["agreed"] == 6
     assert resumed.status == "done"
+
+
+def test_a_control_gone_quiet_pauses_the_campaign(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    The positive control never fires, so once the window is full the
+    control rate is below its band: the campaign pauses after that batch
+    with the reason in its state, instead of counting on. A resumed run
+    starts a fresh window.
+    """
+    from ..fuzzer_bridge.health import HealthPolicy
+
+    policy = HealthPolicy(
+        window=3, control_client="geth", control_band=(0.5, 1.0)
+    )
+    quiet = {"geth": lambda _s: False, "erigon": lambda _s: False}
+    state = _campaign(
+        tmp_path, monkeypatch, quiet, batch=3, baseline=False, health=policy
+    )
+    assert state.next_seed == 3
+    assert state.status == "paused"
+    assert "control geth at 0.00%" in state.status_reason
+    saved = json.loads((tmp_path / "out" / "state.json").read_text())
+    assert saved["status"] == "paused" and saved["health"]["checking"]
+
+    firing = {"geth": lambda _s: True, "erigon": lambda _s: False}
+    resumed = _campaign(
+        tmp_path,
+        monkeypatch,
+        firing,
+        batch=3,
+        count=9,
+        baseline=False,
+        health=policy,
+    )
+    assert resumed.next_seed == 9 and resumed.status == "done"
+    assert resumed.health["control_rate"] == 1.0

@@ -29,6 +29,7 @@ from .differential_cli import (
 )
 from .distill_cli import distill
 from .fuzz_cli import fuzz as run
+from .health import HealthPolicy
 
 
 @click.group()
@@ -242,6 +243,7 @@ def campaign(
         producer = producer_client.binary
         sources[f"producer ({producer_name})"] = producer_client.source
     output = output or Path("campaigns") / name
+    health = campaign_config.health
     if resume and not (output / "state.json").is_file():
         raise click.UsageError(
             f"--continue: {output} holds no campaign state to resume"
@@ -284,6 +286,16 @@ def campaign(
         producer_name=producer_name or "producer",
         fixture_format=campaign_config.fixture_format,
         sources=sources,
+        health=HealthPolicy(
+            window=health.window,
+            control_client=health.control.client if health.control else None,
+            control_reason=health.control.reason if health.control else None,
+            control_band=health.control_band,
+            max_runner_error_rate=health.max_runner_error_rate,
+            max_producer_disagreement_rate=(
+                health.max_producer_disagreement_rate
+            ),
+        ),
     )
     if producer is not None:
         click.echo(

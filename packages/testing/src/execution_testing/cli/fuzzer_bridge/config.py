@@ -217,6 +217,24 @@ class KnownSignature(BaseModel):
     """Restrict the match to one client; any client when omitted."""
 
 
+class HealthConfig(BaseModel):
+    """The bands a running campaign is held to; see `health.HealthPolicy`."""
+
+    window: int = 2000
+    control: Optional[KnownSignature] = None
+    """The positive control: a client and the reason its known bug
+    fails with. Its `client` is required."""
+    control_band: Tuple[float, float] = (0.0, 1.0)
+    max_runner_error_rate: float = 0.001
+    max_producer_disagreement_rate: float = 0.01
+
+    @model_validator(mode="after")
+    def _control_names_a_client(self) -> "HealthConfig":
+        if self.control is not None and self.control.client is None:
+            raise ValueError("health.control needs a client")
+        return self
+
+
 class CampaignConfig(BaseModel):
     """A named differential run: fork, clients, and size."""
 
@@ -240,6 +258,9 @@ class CampaignConfig(BaseModel):
     read: `blockchain_test` for the import lane, `blockchain_test_engine`
     for the newPayload lane, which is the route by which nethermind's
     engine loader reaches its parallel processor on our own fixtures."""
+    health: HealthConfig = Field(default_factory=HealthConfig)
+    """Bands checked after every batch; one out of band pauses the run.
+    The alert webhook is never configured here: see `FUZZ_ALERT_URL`."""
 
 
 class FuzzConfig(BaseModel):

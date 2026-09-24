@@ -69,6 +69,10 @@ from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
 from .differential import _fork_by_name, is_tool_rejection
 from .generator import GENERATOR_VERSION, generate_fuzzer_output
+from .health import HealthPolicy, batch_sample, send_alert
+from .health import evaluate as evaluate_health
+from .health import snapshot as health_snapshot
+from .health import trim as trim_window
 from .measured_gas import measuring_filler, resolve_measured_gas
 from .models import FuzzerOutput
 from .reproducer import client_judge, write_reproducer
@@ -331,6 +335,11 @@ class CampaignState:
     status_reason: str = ""
     """Why it is not running, in one line; empty while it is."""
     status_at: float = 0.0
+    health_window: List[Dict[str, Any]] = field(default_factory=list)
+    """Per-batch samples the health checks are measured over, newest
+    last; see `health.batch_sample`."""
+    health: Dict[str, Any] = field(default_factory=dict)
+    """The latest window's rates, for the report and the status page."""
     signatures_reset: bool = field(default=False, compare=False)
 
     def set_status(self, status: str, reason: str = "") -> None:
@@ -365,6 +374,8 @@ class CampaignState:
                 status=data.get("status", "running"),
                 status_reason=data.get("status_reason", ""),
                 status_at=data.get("status_at", 0.0),
+                health_window=data.get("health_window", []),
+                health=data.get("health", {}),
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
             return state
@@ -390,6 +401,8 @@ class CampaignState:
                     "status": self.status,
                     "status_reason": self.status_reason,
                     "status_at": self.status_at,
+                    "health_window": self.health_window,
+                    "health": self.health,
                 },
                 indent=1,
             )
@@ -507,6 +520,9 @@ def render_report(
         "",
         "| | |",
         "| --- | --- |",
+        f"| status | {state.status}"
+        + (f": {state.status_reason}" if state.status_reason else "")
+        + " |",
         f"| cases | {cases} (next seed {state.next_seed}) |",
         f"| elapsed | {elapsed_seconds / 3600:.2f} h ({rate:.1f} cases/s) |",
         f"| agreed | {state.counts.get('agreed', 0)} |",
@@ -1232,6 +1248,7 @@ class CampaignOptions:
 
     sources: Mapping[str, str] = field(default_factory=dict)
     """Per client, where its binary came from, for the manifest."""
+    health: HealthPolicy = field(default_factory=HealthPolicy)
 
 
 def _seed_of(fixture_name: str) -> int:
@@ -1447,9 +1464,13 @@ def run_campaign(
         write_report()
         return state
 
+    # A resumed run is judged afresh: a window carried over from before a
+    # pause would pause it again before it judged anything.
     state.set_status("running")
+    state.health_window = []
     state.save()
     unjudged: List[range] = []
+    pause_reason: Optional[str] = None
     with (
         graceful_stop(echo) as stop_request,
         _fill_pool(
@@ -1482,7 +1503,7 @@ def run_campaign(
             return True
 
         while True:
-            if stop_request.signal_name is not None:
+            if stop_request.signal_name is not None or pause_reason:
                 # Batches already filling are not judged; the next run
                 # starts at `state.next_seed` and fills them again.
                 for seeds, future in pending:
@@ -1499,6 +1520,7 @@ def run_campaign(
                     pending.pop()
             seeds, future = pending.popleft()
             slice_result = future.result()
+            before = health_snapshot(state, options.health)
             names: List[str] = slice_result["names"]
             fill_errors = slice_result["errors"]
             state.counts["fill_error"] = state.counts.get(
@@ -1820,6 +1842,33 @@ def run_campaign(
                     )
 
             state.next_seed = seeds.stop
+            state.health_window = trim_window(
+                [
+                    *state.health_window,
+                    batch_sample(
+                        before,
+                        health_snapshot(state, options.health),
+                        len(names),
+                    ),
+                ],
+                options.health.window,
+            )
+            state.health, problems = evaluate_health(
+                state.health_window,
+                options.health,
+                lanes=sorted(contrast_runners),
+                runners=len(runners),
+            )
+            if problems:
+                pause_reason = "; ".join(problems)
+                state.set_status("paused", pause_reason)
+                echo(f"paused: {pause_reason}")
+                failure = send_alert(
+                    f"campaign {output.name} paused at seed "
+                    f"{seeds.stop - 1}: {pause_reason}",
+                )
+                if failure:
+                    echo(f"alert not sent: {failure}")
             state.save()
             write_report()
             fill_batches += 1
@@ -1842,7 +1891,12 @@ def run_campaign(
             )
     for seeds in unjudged:
         shard_path(fixtures_dir, list(seeds)).unlink(missing_ok=True)
-    if stop_request.signal_name is not None:
+    if pause_reason:
+        echo(
+            f"paused: state saved at next seed {state.next_seed}; look, "
+            "then resume with --continue"
+        )
+    elif stop_request.signal_name is not None:
         state.set_status(
             "stopped",
             f"{stop_request.signal_name} after seed {state.next_seed - 1}",
