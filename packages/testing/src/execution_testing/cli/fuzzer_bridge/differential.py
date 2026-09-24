@@ -19,7 +19,7 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from execution_testing.client_clis import LazyAlloc, TransitionTool
 from execution_testing.client_clis.cli_types import Result
@@ -29,6 +29,7 @@ from execution_testing.client_clis.clis.execution_specs import (
 from execution_testing.forks import Fork, get_forks
 from execution_testing.specs.blockchain import (
     BlockchainTest,
+    apply_new_parent,
     environment_from_parent_header,
 )
 from execution_testing.test_types import Alloc, Environment
@@ -142,18 +143,28 @@ def _prepare(case: FuzzerOutput, fork: Fork) -> Prepared:
 
 def _transition(
     t8n: TransitionTool, prepared: Prepared
-) -> Tuple[Result, Optional[Alloc]]:
-    """Run the prepared single-block transition through ``t8n``."""
+) -> Tuple[List[Result], Optional[Alloc]]:
+    """
+    Run every block of the prepared case through ``t8n``, in order.
+
+    Each tool builds on its own previous block -- its own post-state and
+    its own header -- the way a client imports a chain. Every block's
+    result is returned rather than the last: a block access list is
+    per block and leaves no trace in the state, so a divergence in the
+    first block's list is invisible in anything the last block reports.
+    """
     test, env, pre = prepared
-    built = test.generate_block_data(
-        t8n=t8n, block=test.blocks[0], previous_env=env, previous_alloc=pre
-    )
-    alloc = (
-        built.alloc.materialize()
-        if isinstance(built.alloc, LazyAlloc)
-        else built.alloc
-    )
-    return built.result, alloc
+    alloc: "Alloc | LazyAlloc" = pre
+    results: List[Result] = []
+    for block in test.blocks:
+        built = test.generate_block_data(
+            t8n=t8n, block=block, previous_env=env, previous_alloc=alloc
+        )
+        results.append(built.result)
+        alloc = built.alloc
+        env = apply_new_parent(built.env, built.header)
+    final = alloc.materialize() if isinstance(alloc, LazyAlloc) else alloc
+    return results, final
 
 
 def _minority(values: Dict[str, str]) -> List[str]:
@@ -175,8 +186,44 @@ def _minority(values: Dict[str, str]) -> List[str]:
     return sorted(name for name, value in values.items() if value != majority)
 
 
-def compare_results(results: Dict[str, Result]) -> List[FieldDivergence]:
-    """Return every field on which the given tool results disagree."""
+def as_chain(result: "Result | Sequence[Result]") -> List[Result]:
+    """One tool's results, one per block, whether it ran one or several."""
+    if isinstance(result, (list, tuple)):
+        return list(result)
+    return [result]  # type: ignore[list-item]
+
+
+def block_prefix(index: int) -> str:
+    """
+    How a field of the ``index``-th block is named in a divergence.
+
+    The first block keeps the bare field name, so a single-block case
+    reads, and keys its signatures, exactly as before multi-block cases.
+    """
+    return "" if index == 0 else f"block{index + 1}."
+
+
+def compare_results(
+    results: "Mapping[str, Result | Sequence[Result]]",
+) -> List[FieldDivergence]:
+    """Return every field, in every block, on which the tools disagree."""
+    chains = {tool: as_chain(result) for tool, result in results.items()}
+    lengths = {tool: str(len(chain)) for tool, chain in chains.items()}
+    divergences: List[FieldDivergence] = []
+    if len(set(lengths.values())) > 1:
+        divergences.append(
+            FieldDivergence("blocks", lengths, _minority(lengths))
+        )
+    for index in range(min(map(len, chains.values()), default=0)):
+        block = {tool: chain[index] for tool, chain in chains.items()}
+        divergences += _compare_block(block, block_prefix(index))
+    return divergences
+
+
+def _compare_block(
+    results: Dict[str, Result], prefix: str
+) -> List[FieldDivergence]:
+    """Every field of one block on which the tools disagree."""
     divergences: List[FieldDivergence] = []
     for name in _COMPARED_FIELDS:
         values = {
@@ -186,7 +233,7 @@ def compare_results(results: Dict[str, Result]) -> List[FieldDivergence]:
         }
         if len(values) == len(results) and len(set(values.values())) > 1:
             divergences.append(
-                FieldDivergence(name, values, _minority(values))
+                FieldDivergence(prefix + name, values, _minority(values))
             )
 
     rejected = {
@@ -196,14 +243,14 @@ def compare_results(results: Dict[str, Result]) -> List[FieldDivergence]:
     if len(set(rejected.values())) > 1:
         divergences.append(
             FieldDivergence(
-                "rejected_transactions", rejected, _minority(rejected)
+                prefix + "rejected_transactions", rejected, _minority(rejected)
             )
         )
     return divergences
 
 
 ToolRuns = Tuple[
-    Dict[str, Result], Dict[str, str], Dict[str, str], Dict[str, Alloc]
+    Dict[str, List[Result]], Dict[str, str], Dict[str, str], Dict[str, Alloc]
 ]
 
 TOOL_REJECTION_PATTERNS = ("unable to validate",)
@@ -233,7 +280,7 @@ def run_tools(
     post-state each tool produced.
     """
     prepared = _prepare(case, fork)
-    results: Dict[str, Result] = {}
+    results: Dict[str, List[Result]] = {}
     errors: Dict[str, str] = {}
     rejections: Dict[str, str] = {}
     allocs: Dict[str, Alloc] = {}
@@ -271,7 +318,9 @@ def post_state_diff(
     return diffs
 
 
-def _agree(results: Dict[str, Result], errors: Dict[str, str]) -> bool:
+def _agree(
+    results: "Mapping[str, Result | Sequence[Result]]", errors: Dict[str, str]
+) -> bool:
     """Whether a set of tool runs is unanimous (all fail, or none differ)."""
     if errors:
         return not results

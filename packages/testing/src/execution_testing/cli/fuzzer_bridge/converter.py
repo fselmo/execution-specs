@@ -13,7 +13,7 @@ Key Responsibilities:
    BEFORE model_post_init
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from execution_testing.base_types import Account, Address, Hash, HexNumber
 from execution_testing.forks import Fork
@@ -26,6 +26,7 @@ from execution_testing.test_types import (
     Withdrawal,
 )
 from execution_testing.test_types.account_types import EOA
+from execution_testing.test_types.utils import keccak256
 
 from .models import (
     FuzzerAccountInput,
@@ -175,7 +176,7 @@ def create_sender_eoa_map(
 def blockchain_test_from_fuzzer(
     fuzzer_output: FuzzerOutput,
     fork: Fork,
-    num_blocks: int = 1,
+    num_blocks: Optional[int] = None,
     block_strategy: str = "distribute",
     block_time: int = 12,
 ) -> BlockchainTest:
@@ -192,7 +193,8 @@ def blockchain_test_from_fuzzer(
     Args:
         fuzzer_output: Parsed and validated fuzzer output (DTO)
         fork: Fork to use for the test
-        num_blocks: Number of blocks to generate
+        num_blocks: Number of blocks to generate; the case's own
+                    `block_count` when not given
         block_strategy: How to distribute transactions across blocks
                        - "distribute": Split evenly maintaining
                          nonce order
@@ -249,6 +251,14 @@ def blockchain_test_from_fuzzer(
     ).set_fork_requirements(fork)
 
     # Step 5: Distribute transactions across blocks
+    assignment = None
+    if num_blocks is None:
+        # The case says which block each transaction was drawn for, and its
+        # fees were drawn for that block's base fee, so it is honoured
+        # rather than re-split.
+        num_blocks = fuzzer_output.block_count
+        block_strategy = "assigned"
+        assignment = [tx.block for tx in fuzzer_output.transactions]
     blocks = _distribute_transactions_to_blocks(
         eest_transactions,
         num_blocks,
@@ -256,6 +266,7 @@ def blockchain_test_from_fuzzer(
         block_time,
         env,
         fuzzer_output.parent_beacon_block_root,
+        assignment=assignment,
         withdrawals=[
             Withdrawal(
                 index=w.index,
@@ -275,6 +286,11 @@ def blockchain_test_from_fuzzer(
         genesis_environment=genesis_env,
         chain_id=fuzzer_output.chain_id,
     )
+
+
+BLOCKHASH_WINDOW = 256
+"""How many recent blocks BLOCKHASH can return, the opcode's own window;
+EIP-2935 serves more through its contract but leaves the opcode's alone."""
 
 
 def state_test_from_fuzzer(
@@ -304,11 +320,21 @@ def state_test_from_fuzzer(
         fuzzer_tx, sender_eoa=sender_eoa_map[fuzzer_tx.from_]
     )
     env = fuzzer_output.env
+    number = 1
+    # A state test has no chain behind it, so the hashes BLOCKHASH can read
+    # come from the state-test convention every runner shares -- keccak256
+    # of the block number in decimal -- as EEST's own recency test uses.
+    # Without them EELS indexes an empty list on any in-window read.
+    block_hashes = {
+        n: keccak256(str(n).encode())
+        for n in range(max(0, number - BLOCKHASH_WINDOW), number)
+    }
     block_env = Environment(
         fee_recipient=env.fee_recipient,
         difficulty=0,
         gas_limit=int(env.gas_limit),
-        number=1,
+        number=number,
+        block_hashes=block_hashes,
         timestamp=env.timestamp,
         prev_randao=env.prev_randao or Hash(0),
         base_fee_per_gas=env.base_fee_per_gas
@@ -335,6 +361,7 @@ def _distribute_transactions_to_blocks(
     block_time: int,
     base_env: Environment,
     parent_beacon_block_root: Hash | None,
+    assignment: List[int] | None = None,
     withdrawals: List[Withdrawal] | None = None,
 ) -> list[Block]:
     """
@@ -343,17 +370,36 @@ def _distribute_transactions_to_blocks(
     Args:
         transactions: List of EEST Transaction objects (ready for execution)
         num_blocks: Number of blocks to create
-        strategy: Distribution strategy ("distribute" or "first-block")
+        strategy: Distribution strategy ("assigned", "distribute" or
+                  "first-block")
         block_time: Seconds between blocks
         base_env: Base environment for first block
         parent_beacon_block_root: Beacon root (only for first block)
+        assignment: The block of each transaction, for "assigned"
         withdrawals: Withdrawals for the last block, if any
 
     Returns:
         List of Block objects
 
     """
-    if strategy == "first-block":
+    if strategy == "assigned":
+        if assignment is None or len(assignment) != len(transactions):
+            raise ValueError("the assigned strategy needs one block per tx")
+        if assignment != sorted(assignment) or not all(
+            0 <= block < num_blocks for block in assignment
+        ):
+            # Out of order would put a sender's later nonce in an earlier
+            # block than its earlier one.
+            raise ValueError(f"block assignment {assignment} is not in order")
+        tx_distribution = [
+            [
+                tx
+                for tx, block in zip(transactions, assignment, strict=True)
+                if block == i
+            ]
+            for i in range(num_blocks)
+        ]
+    elif strategy == "first-block":
         # All transactions in first block, rest empty
         tx_distribution = [transactions] + [[] for _ in range(num_blocks - 1)]
     elif strategy == "distribute":

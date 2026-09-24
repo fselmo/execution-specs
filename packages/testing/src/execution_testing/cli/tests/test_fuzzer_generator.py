@@ -166,12 +166,13 @@ def test_generated_cases_reach_creation_and_the_gas_cap() -> None:
 
 
 def test_transactions_fit_the_block_gas_limit() -> None:
-    """The sum of transaction gas limits never exceeds the block's."""
+    """Each block's transaction gas limits sum to at most its own limit."""
     for seed in range(60):
         out = generate_fuzzer_output(Osaka, seed)
-        assert sum(int(tx.gas) for tx in out.transactions) <= int(
-            out.env.gas_limit
-        )
+        for block in range(out.block_count):
+            assert sum(
+                int(tx.gas) for tx in out.transactions if tx.block == block
+            ) <= int(out.env.gas_limit), (seed, block)
         assert out.transactions
 
 

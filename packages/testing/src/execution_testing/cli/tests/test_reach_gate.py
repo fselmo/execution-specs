@@ -49,7 +49,10 @@ def test_a_generator_version_ships_with_its_rate_records() -> None:
     """
     import json
 
-    from execution_testing.cli.fuzzer_bridge.density import significant_drops
+    from execution_testing.cli.fuzzer_bridge.density import (
+        block_step_drops,
+        significant_drops,
+    )
 
     records = [
         json.loads(line) for line in _reach_log().read_text().splitlines()
@@ -89,6 +92,33 @@ def test_a_generator_version_ships_with_its_rate_records() -> None:
         )
         == []
     )
+
+    # Per-block execution: every block the generator draws must run user
+    # code, and a later block's opcodes per case must not drop. One gas
+    # budget spent in draw order once left later blocks starved, and a
+    # growing block count would do it again.
+    blocks = current.get("block_code")
+    assert blocks, f"v{GENERATOR_VERSION} event-rates lacks block_code"
+    dark = [n for n, b in blocks.items() if b["cases"] and not b["code"]]
+    assert dark == [], f"blocks drawn but never running code: {dark}"
+    assert block_step_drops(previous.get("block_code", {}), blocks) == []
+
+
+def test_a_starved_later_block_is_a_regression() -> None:
+    """
+    The slice-2 starvation in miniature: block 2 still runs code in most
+    cases, so a presence count barely moves, but it runs far fewer opcodes
+    per case. The same numbers read the other way, or a block that only
+    changed how often it is drawn, are not drops.
+    """
+    from execution_testing.cli.fuzzer_bridge.density import block_step_drops
+
+    fair = {"2": {"steps": [3000, 800, 0, 1500, 2200] * 40}}
+    starved = {"2": {"steps": [700, 200, 0, 300, 500] * 40}}
+    fewer_draws = {"2": {"steps": [3000, 800, 0, 1500, 2200] * 8}}
+    assert block_step_drops(fair, starved)
+    assert block_step_drops(starved, fair) == []
+    assert block_step_drops(fair, fewer_draws) == []
 
 
 def test_a_rare_event_s_noise_is_not_a_regression() -> None:

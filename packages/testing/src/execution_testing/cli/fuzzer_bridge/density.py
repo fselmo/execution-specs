@@ -32,7 +32,7 @@ Coverage proves reach. Density finds bugs. Both need a guard.
 """
 
 from collections import Counter
-from math import comb
+from math import comb, erfc, sqrt
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -225,7 +225,11 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "withdrawals": Counter(),
         "withdrawal_recipient": Counter(),
         "withdrawal_amount": Counter(),
+        "block_count": Counter(),
+        "blockhash_read": Counter(),
+        "blockhash_depth": Counter(),
     }
+    reads = _blockhash_signatures()
 
     for seed in seeds:
         case = generate_fuzzer_output(fork, seed)
@@ -279,6 +283,19 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
             tally["withdrawal_recipient"][kind] += 1
             amount = "zero" if int(withdrawal.amount) == 0 else "nonzero"
             tally["withdrawal_amount"][amount] += 1
+        tally["block_count"][
+            "one" if case.block_count == 1 else "several"
+        ] += 1
+        codes = [bytes(account.code) for account in case.accounts.values()]
+        depths = {
+            kind
+            for kind, signatures in reads.items()
+            for signature in signatures
+            if any(signature in code for code in codes)
+        }
+        tally["blockhash_read"]["present" if depths else "absent"] += 1
+        for kind in depths:
+            tally["blockhash_depth"][kind] += 1
         for tx in case.transactions:
             target = (
                 int.from_bytes(bytes(tx.to), "big")
@@ -331,6 +348,32 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     }
 
 
+def _blockhash_signatures() -> Dict[str, Tuple[bytes, ...]]:
+    """
+    The bytes of each BLOCKHASH read the generator can emit, by kind.
+
+    Produced by the emitter itself, up to the store, so a change in how
+    the motif is encoded changes what is looked for instead of silently
+    matching nothing.
+    """
+    from execution_testing.fuzzing.strategies import BLOCKHASH_DEPTHS
+    from execution_testing.vm import Opcodes as Op
+
+    kinds: Dict[str, List[bytes]] = {}
+    for depth in set(BLOCKHASH_DEPTHS):
+        if depth == 0:
+            kind = "current"
+        elif depth == 1:
+            kind = "parent"
+        elif depth <= 256:
+            kind = "in_case"
+        else:
+            kind = "out_of_window"
+        read = bytes(Op.BLOCKHASH(Op.SUB(Op.NUMBER, depth)))
+        kinds.setdefault(kind, []).append(read)
+    return {kind: tuple(reads) for kind, reads in kinds.items()}
+
+
 def axis_collapse_warnings(
     coverage: Dict[str, Dict[str, float]],
     floor: float = AXIS_FLOOR,
@@ -372,6 +415,9 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
         "system_contract",
     ),
     "withdrawal_amount": ("zero", "nonzero"),
+    "block_count": ("one", "several"),
+    "blockhash_read": ("present", "absent"),
+    "blockhash_depth": ("parent", "in_case", "current", "out_of_window"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""
@@ -446,6 +492,72 @@ def significant_drops(
             drops.append(
                 f"{name} {before}/{previous_seeds} -> "
                 f"{after}/{current_seeds} (p={chance:.1e})"
+            )
+    return drops
+
+
+def rank_sum_lower(before: List[int], after: List[int]) -> float:
+    """
+    One-sided p-value that ``after`` tends lower than ``before``.
+
+    The Mann-Whitney rank-sum under its normal approximation, corrected
+    for ties: most cases put zero or a handful of opcodes in a block, so
+    ties are the rule. It compares where the samples sit, not their
+    means, so one case running a million opcodes cannot carry it.
+    """
+    pooled = sorted([(v, 0) for v in before] + [(v, 1) for v in after])
+    n = len(pooled)
+    rank_after = 0.0
+    tie_term = 0
+    i = 0
+    while i < n:
+        j = i
+        while j < n and pooled[j][0] == pooled[i][0]:
+            j += 1
+        rank = (i + j + 1) / 2
+        rank_after += rank * sum(1 for _, side in pooled[i:j] if side)
+        tie_term += (j - i) ** 3 - (j - i)
+        i = j
+    n1, n2 = len(before), len(after)
+    u = rank_after - n2 * (n2 + 1) / 2
+    variance = n1 * n2 / 12 * ((n + 1) - tie_term / (n * (n - 1)))
+    if variance <= 0:
+        return 1.0
+    z = (u - n1 * n2 / 2) / sqrt(variance)
+    return erfc(-z / sqrt(2)) / 2
+
+
+def block_step_drops(
+    previous: Dict[str, Dict[str, Any]],
+    current: Dict[str, Dict[str, Any]],
+    tolerance: float = REGRESSION_TOLERANCE,
+    alpha: float = REGRESSION_ALPHA,
+) -> List[str]:
+    """
+    Later blocks whose per-case opcode counts fell between versions.
+
+    A drop counts when the mean per case falls further than ``tolerance``
+    *and* the rank-sum says the cases sit lower than sampling explains,
+    the same two conditions `significant_drops` puts on event counts.
+    Each block is measured only over the cases that drew it, so drawing a
+    block more or less often is not read as starving it.
+    """
+    drops = []
+    for number, before in sorted(previous.items()):
+        after = current.get(number)
+        if int(number) < 2 or not after or not before.get("steps"):
+            continue
+        mean_before = sum(before["steps"]) / len(before["steps"])
+        mean_after = sum(after["steps"]) / len(after["steps"])
+        if mean_before <= 0:
+            continue
+        if (mean_before - mean_after) / mean_before <= tolerance:
+            continue
+        chance = rank_sum_lower(before["steps"], after["steps"])
+        if chance < alpha:
+            drops.append(
+                f"block {number} opcodes per case {mean_before:.0f} -> "
+                f"{mean_after:.0f} (p={chance:.1e})"
             )
     return drops
 

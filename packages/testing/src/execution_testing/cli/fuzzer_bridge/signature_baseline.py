@@ -462,15 +462,18 @@ def signature_baseline(fork: "Fork", seeds: range) -> BaselineReport:
     )
 
 
-def event_rates(fork: "Fork", seeds: range) -> Dict[str, Dict[str, int]]:
+def _rates_and_blocks(
+    fork: "Fork", seeds: range
+) -> Tuple[Dict[str, Dict[str, int]], Dict[str, Dict[str, Any]]]:
     """
-    Per-event firing rate over a seed range: first-firing seed + count.
+    Fill each seed once and return its event rates and block execution.
 
-    The reach gate proves a capability exists; it is structurally blind
-    to one quietly becoming rare -- its chosen seeds still fire, and a
-    re-baseline will hunt for seeds that fire even a nearly-unreachable
-    event. This is the trend a human reads to catch that: append a
-    record per GENERATOR_VERSION bump and compare the counts.
+    The second map is keyed by block number: how many cases drew that
+    block, in how many a user transaction ran code there, how many
+    transactions ran code there, and the opcodes they ran in each case.
+    The per-case list is what a version comparison needs: the total is
+    heavy-tailed, and whether a later block runs code at all barely moved
+    when one budget for the whole case starved the later blocks.
     """
     from execution_testing.cli.fuzzer_bridge.campaign import fill_case
     from execution_testing.cli.fuzzer_bridge.generator import (
@@ -483,10 +486,12 @@ def event_rates(fork: "Fork", seeds: range) -> Dict[str, Dict[str, int]]:
     eels = ExecutionSpecsTransitionTool()
     eels.compute_signature = True
     rates: Dict[str, Dict[str, int]] = {}
+    blocks: Dict[str, Dict[str, Any]] = {}
     for seed in seeds:
         eels.last_signature = None
+        case = generate_fuzzer_output(fork, seed)
         try:
-            fill_case(generate_fuzzer_output(fork, seed), fork, eels)
+            fill_case(case, fork, eels)
         except Exception:  # noqa: BLE001 - unfillable is data
             continue
         signature = eels.last_signature
@@ -495,7 +500,30 @@ def event_rates(fork: "Fork", seeds: range) -> Dict[str, Dict[str, int]]:
         for event in signature.events:
             entry = rates.setdefault(event, {"first": seed, "count": 0})
             entry["count"] += 1
-    return rates
+        ran = {n: (txs, steps) for n, txs, steps in signature.block_steps}
+        for number in range(1, case.block_count + 1):
+            block = blocks.setdefault(
+                str(number), {"cases": 0, "code": 0, "txs": 0, "steps": []}
+            )
+            txs, steps = ran.get(number, (0, 0))
+            block["cases"] += 1
+            block["code"] += txs > 0
+            block["txs"] += txs
+            block["steps"].append(steps)
+    return rates, blocks
+
+
+def event_rates(fork: "Fork", seeds: range) -> Dict[str, Dict[str, int]]:
+    """
+    Per-event firing rate over a seed range: first-firing seed + count.
+
+    The reach gate proves a capability exists; it is structurally blind
+    to one quietly becoming rare -- its chosen seeds still fire, and a
+    re-baseline will hunt for seeds that fire even a nearly-unreachable
+    event. This is the trend a human reads to catch that: append a
+    record per GENERATOR_VERSION bump and compare the counts.
+    """
+    return _rates_and_blocks(fork, seeds)[0]
 
 
 RATE_FLOOR_FRACTION = 0.01
@@ -526,7 +554,7 @@ def event_rate_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
     )
     from execution_testing.cli.mutation.reach_log import eels_commit
 
-    record = {
+    record: Dict[str, Any] = {
         "kind": "event-rates",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "eels_commit": eels_commit(),
@@ -534,8 +562,8 @@ def event_rate_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
         "generator_version": GENERATOR_VERSION,
         "seeds": len(seeds),
         "rate_floor_fraction": RATE_FLOOR_FRACTION,
-        "rates": event_rates(fork, seeds),
     }
+    record["rates"], record["block_code"] = _rates_and_blocks(fork, seeds)
     record["below_floor"] = rate_floor_warnings(record)
     return record
 

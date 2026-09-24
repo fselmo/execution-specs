@@ -43,25 +43,23 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 16
+BASELINE_GENERATOR_VERSION = 17
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    197,
-    236,
-    255,
-    272,
-    285,
-    669,
-    1095,
-    1167,
-    2109,
-    3128,
-    3742,
-    4624,
-    4816,
+    312,
+    494,
+    505,
+    776,
+    783,
+    871,
+    3037,
+    3550,
+    3930,
+    4598,
+    4777,
 )
-"""Greedy cover over a 5000-seed baseline at v16: together these fire
+"""Greedy cover over a 5000-seed baseline at v17: together these fire
 every target below.
 
 Re-baseline over at least `GATE_BASELINE_SEEDS`, which is measured
@@ -73,9 +71,10 @@ reports its own sampling as a regression: at 400 seeds this map lost
 GATE_BASELINE_SEEDS = 2400
 """Baseline window, from the rarest gated cell's measured rate.
 
-`(3, "halt", "OutOfBoundsRead")` occurs 10 times in 5000 cases at v16,
-a rate of 0.0020, which needs 2303 seeds to clear a 1% miss probability
-(11 in 5000 and 2094 at v15; 14 in 6000 and 1977 at v14). Recheck it
+`(3, "halt", "StackOverflowError")` occurs 10 times in 5000 cases at
+v17, a rate of 0.0020, which needs 2303 seeds to clear a 1% miss
+probability (`OutOfBoundsRead` at depth 3: 10 in 5000 and 2303 at v16,
+11 in 5000 and 2094 at v15; 14 in 6000 and 1977 at v14). Recheck it
 with `required_gate_seeds` whenever a motif is added; the number moving
 is the signal. A 2000-seed probe of v15 put the rarest cell at 2/2000
 and asked for 4606; the small sample, not the generator, was what
@@ -190,9 +189,6 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "touched_account",
             "success",
         ),
-        ("fork.process_transaction", "nonce_change", "success"),
-        ("fork.process_transaction", "storage_read", "success"),
-        ("fork.process_transaction", "touched_account", "success"),
         ("fork.process_withdrawals", "balance_change", "success"),
         ("fork.process_withdrawals", "touched_account", "success"),
         ("fork.update_sender_state", "balance_change", "exceptional_halt"),
@@ -301,15 +297,11 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "touched_account",
             "out_of_gas",
         ),
+        ("vm.instructions.environment.balance", "touched_account", "revert"),
         ("vm.instructions.environment.balance", "touched_account", "success"),
         (
             "vm.instructions.environment.extcodecopy",
             "touched_account",
-            "exceptional_halt",
-        ),
-        (
-            "vm.instructions.environment.extcodecopy",
-            "touched_account",
             "out_of_gas",
         ),
         (
@@ -321,11 +313,6 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "vm.instructions.environment.extcodehash",
             "touched_account",
             "out_of_gas",
-        ),
-        (
-            "vm.instructions.environment.extcodehash",
-            "touched_account",
-            "success",
         ),
         (
             "vm.instructions.environment.extcodesize",
@@ -404,6 +391,7 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "exceptional_halt",
         ),
         ("vm.instructions.system.create", "touched_account", "out_of_gas"),
+        ("vm.instructions.system.create", "touched_account", "success"),
         (
             "vm.instructions.system.delegatecall",
             "touched_account",
@@ -500,41 +488,52 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
         ("vm.interpreter.process_create", "touched_account", "success"),
     }
 )
-"""BAL cells the baseline window samples reliably: 137 of the
-147 reached over 5000 seeds at v16, each seen at least
+"""BAL cells the baseline window samples reliably: 134 of the
+147 reached over 5000 seeds at v17, each seen at least
 `bal_gate_floor` = 10 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
 
 BAL_CELLS_BELOW_WINDOW: Dict[Tuple[str, str, str], int] = {
-    ("fork.process_transaction", "code_change", "success"): 2,
+    ("fork.process_transaction", "code_change", "success"): 1,
+    ("fork.process_transaction", "nonce_change", "success"): 9,
+    ("fork.process_transaction", "storage_read", "success"): 9,
+    ("fork.process_transaction", "touched_account", "success"): 9,
+    (
+        "vm.instructions.environment.extcodecopy",
+        "touched_account",
+        "exceptional_halt",
+    ): 7,
     (
         "vm.instructions.environment.extcodecopy",
         "touched_account",
         "revert",
-    ): 3,
-    (
-        "vm.instructions.environment.extcodesize",
-        "touched_account",
-        "revert",
-    ): 4,
-    (
-        "vm.instructions.system.selfdestruct",
-        "touched_account",
-        "out_of_gas",
-    ): 4,
+    ): 1,
     (
         "vm.instructions.environment.extcodecopy",
         "touched_account",
         "success",
-    ): 7,
+    ): 3,
     (
         "vm.instructions.environment.extcodehash",
         "touched_account",
         "revert",
-    ): 7,
+    ): 3,
+    (
+        "vm.instructions.environment.extcodehash",
+        "touched_account",
+        "success",
+    ): 9,
+    (
+        "vm.instructions.environment.extcodesize",
+        "touched_account",
+        "revert",
+    ): 9,
+    ("vm.instructions.system.create", "touched_account", "revert"): 5,
+    (
+        "vm.instructions.system.selfdestruct",
+        "touched_account",
+        "out_of_gas",
+    ): 3,
     ("vm.interpreter.process_create", "code_change", "success"): 7,
-    ("vm.instructions.environment.balance", "touched_account", "revert"): 8,
-    ("vm.instructions.system.create", "touched_account", "revert"): 8,
-    ("vm.instructions.system.create", "touched_account", "success"): 9,
 }
 """Reached in the 5000-seed baseline but fewer than `bal_gate_floor` times,
 with their occurrence counts. Listed so they stay visible rather than gated:

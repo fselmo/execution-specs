@@ -90,6 +90,7 @@ class WalkWeights:
     initcode_ef_prefix: float = 0.01
     stack_bomb: float = 0.005
     bad_jump: float = 0.005
+    blockhash_read: float = 0.02
     # Share of message calls that recurse into the current contract
     # rather than a pool address. Self-calls are the cheapest route to
     # deep frames, so this is drawn explicitly instead of falling out of
@@ -194,6 +195,16 @@ class ValueDomains:
     recipient without changing it, which the access list must still
     record -- the entry most easily dropped."""
     max_withdrawals: int = 4
+    block_count_shares: Tuple[Tuple[int, float], ...] = (
+        (1, 0.6),
+        (2, 0.25),
+        (3, 0.15),
+    )
+    """How many blocks a case spans. Every block writes its parent's hash
+    into the EIP-2935 history contract and has a block access list of its
+    own, so a second block is where a hash the case itself produced can be
+    read back, and where a list is built on state a previous list already
+    changed."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays

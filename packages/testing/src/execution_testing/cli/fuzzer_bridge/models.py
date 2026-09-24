@@ -103,6 +103,9 @@ class FuzzerTransactionInput(BaseModel):
     max_fee_per_blob_gas: HexNumber | None = Field(
         None, alias="maxFeePerBlobGas"
     )
+    block: int = 0
+    """Which of the case's blocks the transaction goes in, decided when it
+    is drawn so its fee can be drawn for that block's base fee."""
     authorization_list: List[FuzzerAuthorizationInput] | None = Field(
         None, alias="authorizationList"
     )
@@ -140,3 +143,7 @@ class FuzzerOutput(CamelModel):
     env: Environment
     parent_beacon_block_root: Hash | None = None
     withdrawals: List[FuzzerWithdrawalInput] = Field(default_factory=list)
+    block_count: int = 1
+    """How many blocks the case's transactions are spread across, in nonce
+    order; withdrawals go on the last. Part of the case, so a seed
+    reproduces its chain and not just its transactions."""

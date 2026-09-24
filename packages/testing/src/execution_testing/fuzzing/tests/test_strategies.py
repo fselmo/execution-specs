@@ -1,6 +1,7 @@
 """Tests for the shared fuzzing input strategies."""
 
 import random
+from typing import Any
 
 import pytest
 
@@ -165,10 +166,30 @@ def test_call_family_injected_when_targets_supplied() -> None:
     assert seen == set(CALL_FAMILY)
 
 
+def _structured_only() -> Any:
+    """
+    Domains whose walk emits no raw bytes.
+
+    The raw-byte action draws arbitrary instructions, CALL-family ones
+    included, on purpose. The claims below are about the walk's structured
+    actions, and they held for these seeds only by luck until an extra draw
+    per op moved seed 7 onto a raw DELEGATECALL.
+    """
+    from dataclasses import replace
+
+    from ..domains import GENERIC_DOMAINS
+
+    return replace(
+        GENERIC_DOMAINS, walk=replace(GENERIC_DOMAINS.walk, raw_byte=0.0)
+    )
+
+
 def test_no_message_calls_without_targets_or_precompiles() -> None:
-    """A bare body never calls out."""
+    """A bare body's structured actions never call out."""
     for seed in range(20):
-        code = bytes(fuzzed_bytecode(random.Random(seed)))
+        code = bytes(
+            fuzzed_bytecode(random.Random(seed), domains=_structured_only())
+        )
         assert not any(_has_opcode(code, op) for op in CALL_FAMILY)
 
 
@@ -288,7 +309,13 @@ def test_palette_reaches_new_opcode_families() -> None:
 def test_no_shapes_without_targets() -> None:
     """A bare body still carries no message calls and no CREATE2 template."""
     for seed in range(20):
-        ops = _instructions(bytes(fuzzed_bytecode(random.Random(seed))))
+        ops = _instructions(
+            bytes(
+                fuzzed_bytecode(
+                    random.Random(seed), domains=_structured_only()
+                )
+            )
+        )
         assert not any(op in ops for op in (0xF1, 0xF2, 0xF4, 0xFA))
 
 

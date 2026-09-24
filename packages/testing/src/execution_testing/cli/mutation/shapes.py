@@ -280,4 +280,43 @@ SHAPES: Dict[str, Shape] = {
         ),
         models_client_bug=False,
     ),
+    "blockhash-from-history": Shape(
+        name="blockhash-from-history",
+        description=(
+            "REACH PROBE, NOT A CLIENT MODEL. BLOCKHASH is also served by "
+            "reading the EIP-2935 history contract's storage, the route a "
+            "client may take instead of its header list, adding a storage "
+            "read the spec never makes. Each block writes its parent's hash "
+            "into that contract first, and a slot written in the block is a "
+            "change rather than a read, so reading the parent's slot adds "
+            "nothing. Only a read two or more blocks back, from the second "
+            "block of a case on, touches a slot the block did not write -- "
+            "which makes this visible only in a chain."
+        ),
+        edits=(
+            Edit(
+                module=f"{_AMSTERDAM}/vm/instructions/block.py",
+                find=(
+                    "    else:\n"
+                    "        current_block_hash = "
+                    "evm.block_env.block_hashes[\n"
+                ),
+                replace=(
+                    "    else:\n"
+                    "        from ...fork import HISTORY_STORAGE_ADDRESS\n"
+                    "        from ...state_tracker import get_storage\n"
+                    "\n"
+                    "        get_storage(\n"
+                    "            evm.tx_env.state,\n"
+                    "            HISTORY_STORAGE_ADDRESS,\n"
+                    "            U256(block_number % Uint(8191))"
+                    ".to_be_bytes32(),\n"
+                    "        )\n"
+                    "        current_block_hash = "
+                    "evm.block_env.block_hashes[\n"
+                ),
+            ),
+        ),
+        models_client_bug=False,
+    ),
 }
