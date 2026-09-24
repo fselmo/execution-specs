@@ -27,6 +27,7 @@ from execution_testing.client_clis.clis.execution_specs import (
     ExecutionSpecsTransitionTool,
 )
 from execution_testing.forks import Fork, get_forks
+from execution_testing.fuzzing import ValueDomains
 from execution_testing.specs.blockchain import (
     BlockchainTest,
     apply_new_parent,
@@ -38,7 +39,7 @@ from .clients import client_environment
 from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
 from .generator import GENERATOR_VERSION, generate_fuzzer_output
-from .measured_gas import fixture_filler, resolve_measured_gas
+from .measured_gas import measuring_filler, resolve_measured_gas
 from .models import FuzzerOutput
 
 REFERENCE = "eels"
@@ -146,17 +147,13 @@ def _resolve(
     case: FuzzerOutput, fork: Fork, tools: Dict[str, Any]
 ) -> FuzzerOutput:
     """
-    Set the case's measured gas limits with the reference tool.
+    Set the case's measured gas limits once, with EELS, for every tool.
 
     Every tool then runs the case the reference measured; a tool never
-    derives its own limits. Without a reference, a case that needs them
-    is refused at conversion.
+    derives its own limits.
     """
-    if REFERENCE not in tools:
-        return case
-    return resolve_measured_gas(
-        case, fork, fixture_filler(fork, tools[REFERENCE])
-    )
+    del tools
+    return resolve_measured_gas(case, fork, measuring_filler(fork))
 
 
 def _transition(
@@ -473,6 +470,7 @@ def _init_worker(
     clients: Dict[str, str],
     tiered: bool,
     envs: Optional[Dict[str, Dict[str, str]]] = None,
+    domains: Optional[ValueDomains] = None,
 ) -> None:
     """Build the per-process tools for the differential pool."""
     _WORKER["fork"] = _fork_by_name(fork_name)
@@ -480,6 +478,7 @@ def _init_worker(
         {name: Path(path) for name, path in clients.items()}, envs
     )
     _WORKER["tiered"] = tiered
+    _WORKER["domains"] = domains
 
 
 def _detect_in_worker(seed: int) -> CaseOutcome:
@@ -487,7 +486,7 @@ def _detect_in_worker(seed: int) -> CaseOutcome:
     fork = _WORKER["fork"]
     outcome = evaluate_case(
         _WORKER["tools"],
-        generate_fuzzer_output(fork, seed),
+        generate_fuzzer_output(fork, seed, domains=_WORKER["domains"]),
         fork,
         tiered=_WORKER["tiered"],
     )
@@ -507,6 +506,7 @@ def differential_fuzz(
     manifest_path: Optional[Path] = None,
     tiered: bool = False,
     client_env: Optional[Mapping[str, Mapping[str, str]]] = None,
+    domains: Optional[ValueDomains] = None,
 ) -> DifferentialReport:
     """
     Fuzz ``fork`` across ``seeds``, comparing EELS against every client.
@@ -518,7 +518,9 @@ def differential_fuzz(
     tools once). Output order is deterministic regardless of worker count.
     Divergent cases are saved to ``corpus_dir``, minimized when requested
     (minimization runs in the main process). ``tiered`` lets unanimous
-    clients skip the reference (see ``evaluate_case``).
+    clients skip the reference (see ``evaluate_case``). ``domains``
+    replaces the fork's default weights for every generated case: the
+    hook a control goes through, never an edit of the defaults.
     """
     from .baseline import BASELINE_SEED_START, check_baseline
     from .run_manifest import collect_manifest
@@ -552,6 +554,7 @@ def differential_fuzz(
                 {name: str(path) for name, path in clients.items()},
                 tiered,
                 envs,
+                domains,
             ),
         ) as executor:
             outcomes = list(executor.map(_detect_in_worker, seeds))
@@ -559,7 +562,10 @@ def differential_fuzz(
         outcomes = []
         for seed in seeds:
             outcome = evaluate_case(
-                tools, generate_fuzzer_output(fork, seed), fork, tiered=tiered
+                tools,
+                generate_fuzzer_output(fork, seed, domains=domains),
+                fork,
+                tiered=tiered,
             )
             outcome.seed = seed
             outcomes.append(outcome)
@@ -568,7 +574,9 @@ def differential_fuzz(
         if outcome.diverged:
             report.diverged += 1
             if corpus_dir is not None:
-                case = generate_fuzzer_output(fork, outcome.seed)
+                case = generate_fuzzer_output(
+                    fork, outcome.seed, domains=domains
+                )
                 signature = divergence_signature(outcome)
                 if minimize_cases:
                     case = minimize(

@@ -343,6 +343,43 @@ SHAPES: Dict[str, Shape] = {
         ),
         models_client_bug=False,
     ),
+    "failed-tx-rolls-back-shared-entries": Shape(
+        name="failed-tx-rolls-back-shared-entries",
+        description=(
+            "REACH PROBE, NOT A CLIENT MODEL. A failed transaction's "
+            "rollback overreaches into the block access list: every account "
+            "it touched, other than its sender and the coinbase, loses the "
+            "entries earlier transactions made for it. Visible only when a "
+            "failed transaction touches an account an earlier transaction in "
+            "the block changed, which a helper touching only itself never "
+            "does. No client is known to have had this defect."
+        ),
+        edits=(
+            Edit(
+                module=f"{_AMSTERDAM}/fork.py",
+                find=(
+                    "    incorporate_tx_into_block(\n"
+                    "        tx_env.state, "
+                    "block_env.block_access_list_builder\n"
+                ),
+                replace=(
+                    "    if tx_output.error is not None:\n"
+                    "        for touched in tx_env.state.account_reads:\n"
+                    "            if touched not in (\n"
+                    "                tx_env.origin, block_env.coinbase\n"
+                    "            ):\n"
+                    "                block_env.block_access_list_builder"
+                    ".accounts.pop(\n"
+                    "                    touched, None\n"
+                    "                )\n"
+                    "    incorporate_tx_into_block(\n"
+                    "        tx_env.state, "
+                    "block_env.block_access_list_builder\n"
+                ),
+            ),
+        ),
+        models_client_bug=False,
+    ),
     "blockhash-from-history": Shape(
         name="blockhash-from-history",
         description=(

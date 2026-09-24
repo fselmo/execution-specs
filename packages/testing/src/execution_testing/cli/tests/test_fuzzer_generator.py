@@ -11,6 +11,7 @@ from ..fuzzer_bridge.generator import (
     GENERATOR_VERSION,
     INTERLEAVER_ADDRESS,
     SPILLER_ADDRESS,
+    TOUCHER_ADDRESS,
     generate_fuzzer_output,
 )
 from ..fuzzer_bridge.models import FuzzerOutput
@@ -57,6 +58,7 @@ def test_generated_shape() -> None:
             Address(SPILLER_ADDRESS),
             Address(INTERLEAVER_ADDRESS),
             Address(FAILER_ADDRESS),
+            Address(TOUCHER_ADDRESS),
         )
     ]
     assert len(senders) <= 2

@@ -32,6 +32,27 @@ from .models import FuzzerOutput
 Filler = Callable[[FuzzerOutput], Dict[str, Any]]
 """Fill a resolved case into a blockchain fixture's JSON."""
 
+_MEASURING: Dict[str, Any] = {}
+
+
+def measuring_filler(fork: Fork) -> Filler:
+    """
+    A filler on a plain EELS tool of its own, for measuring.
+
+    The measuring fill is not the case: it runs an owned transaction on
+    ample gas. Run on a lane's own tool it would feed that tool's per-case
+    observers -- signature events, BAL witnesses, reach cells -- with a
+    run the case never makes, so it gets a tool with none switched on.
+    """
+    from execution_testing.client_clis.clis.execution_specs import (
+        ExecutionSpecsTransitionTool,
+    )
+
+    tool = _MEASURING.get("eels")
+    if tool is None:
+        tool = _MEASURING["eels"] = ExecutionSpecsTransitionTool()
+    return fixture_filler(fork, tool)
+
 
 def fixture_filler(fork: Fork, t8n: Any) -> Filler:
     """A filler for a lane that holds a transition tool but no fill."""
