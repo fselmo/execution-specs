@@ -1,0 +1,184 @@
+# Snapshot of the hive box's fuzz.yaml (gitignored there), 2026-09-23.
+# Committed under another name so the laptop can read and merge it;
+# `fuzz ... --config fuzz.hive.yaml` uses it as is, patch paths included.
+
+clients:
+  # Detection campaigns track the devnet branch head on purpose.
+  - name: geth
+    build: {recipe: geth, ref: glamsterdam-devnet-8}
+  - name: erigon
+    build: {recipe: erigon, ref: glamsterdam-devnet-8}
+  - name: besu
+    build: {recipe: besu, ref: glamsterdam-devnet-8}
+  - name: nethermind
+    build: {recipe: nethermind, ref: glamsterdam-devnet-8}
+
+  # Gate clients are pinned by full 40-char SHA: the marker becomes
+  # ref-<sha> and is immutable. Abbreviated SHAs fail to fetch.
+  - name: erigon-gate
+    build:
+      recipe: erigon
+      repo: erigontech/erigon
+      ref: 1880a8e319aef66cbd752515e4c55bd08fd83394
+  # Pre-fix besu, the campaign's positive control. Points at the binary the
+  # `besu` entry already built at this commit -- the cache is commit-keyed,
+  # so a rebuild onto a newer head leaves it in place. A build entry here
+  # would re-clone besu and re-run gradle for a byte-identical artifact.
+  # Rebuild it properly if the cache is ever pruned.
+  - name: besu-gate
+    path: ~/.cache/eels-fuzz/besu/eea3174daed416bb092b122389759765e240b53f/evmtool
+  # Pre-fix parent of 7150854c (PR 12965); verified 0 occurrences of
+  # Eip8037_nested_exceptional_halts_burn_spilled_state_gas.
+  - name: nethermind-gate
+    build:
+      recipe: nethermind
+      repo: NethermindEth/nethermind
+      ref: 436332584f6f5d93ea95fbab0905de940c91e07c
+
+  # Producer: evmone's t8n fills batches; EELS adjudicates only what the
+  # panel disagrees on. Pinned by full SHA -- the Amsterdam t8n commit.
+  - name: evmone-producer
+    build:
+      recipe: evmone-t8n
+      repo: ethereum/evmone
+      ref: a46647255cff7cb0f1a0d92f0101f5b3456e0e5e
+
+  # devnet-11 panel. The devnet tracks client mainlines, not a
+  # glamsterdam-devnet-11 branch -- no such branch exists on any client.
+  # Pinned to the heads resolved 2026-09-22; mainline moves, so a rerun
+  # is a different panel unless these SHAs are kept.
+  - name: geth-d11
+    build: {recipe: geth, repo: ethereum/go-ethereum,
+            ref: 5b5c9d06810f8dfcc092e8d1c35b34c11fa9b8fe}
+  - name: erigon-d11
+    build: {recipe: erigon, repo: erigontech/erigon,
+            ref: f099f0161ade159a442bde9328acf35e9e3b5742}
+  - name: besu-d11
+    build: {recipe: besu, repo: besu-eth/besu,
+            ref: 028f9d7391b1a85885a87d6c6f931bad7610da8c}
+  - name: nethermind-d11
+    build: {recipe: nethermind, repo: NethermindEth/nethermind,
+            ref: 0aacb82fa8da8999ce0e68d85a8cb15202f36094}
+
+  # Parallel-path panel. Each entry's runner takes the BAL parallel path
+  # and its contrast is the same binary sequential, so a mismatch is one
+  # client disagreeing with itself across paths -- no spec, no peer.
+  # Bases are the devnet-8 heads the series were cut against; a series
+  # that stops applying means upstream touched the runner.
+  - name: geth-par
+    build:
+      recipe: geth
+      ref: glamsterdam-devnet-8
+      patches:
+        - patches/geth/0001-cmd-evm-add-bal.sequential-to-blocktest.patch
+        - patches/geth/0002-tests-attach-a-fixture-s-block-access-list-to-the-bl.patch
+    contrast_flags: [--bal.sequential]
+  # Erigon needs no series: it feeds the BAL by default, so the vote is
+  # already the parallel path and only the contrasts have to be asked for.
+  # They are different questions: IGNORE_BAL drops the BAL's scheduling
+  # hints while the executor stays parallel; EXEC3_WORKERS=1 is serial.
+  - name: erigon-par
+    build: {recipe: erigon, ref: glamsterdam-devnet-8}
+    contrasts:
+      hints-off: {env: {IGNORE_BAL: "true"}}
+      serial: {env: {EXEC3_WORKERS: "1"}}
+  - name: besu-par
+    build:
+      recipe: besu
+      ref: glamsterdam-devnet-8
+      patches:
+        - patches/besu/0001-referencetests-let-a-caller-ask-for-the-parallel-blo.patch
+        - patches/besu/0002-evmtool-run-block-test-on-the-parallel-path-on-the-f.patch
+        - patches/besu/0003-core-print-the-parallel-processor-s-sequential-fallb.patch
+      # 0003 prints the fallback in ethereum/core, a client file; it is
+      # admitted by name, beside the recipe's runner paths.
+      patch_paths:
+        - ethereum/evmtool/
+        - ethereum/referencetests/
+        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
+    contrast_flags: [--bal.sequential]
+  - name: nethermind-par
+    build:
+      recipe: nethermind
+      ref: glamsterdam-devnet-8
+      patches:
+        - patches/nethermind/0001-Ethereum.Test.Base-attach-a-fixture-s-block-access-l.patch
+        - patches/nethermind/0002-Consensus-print-the-sequential-retry-of-a-parallel-B.patch
+      # 0002 prints the retry in Nethermind.Consensus, a client file; it is
+      # admitted by name, beside the recipe's runner paths.
+      patch_paths:
+        - src/Nethermind/Nethermind.Test.Runner/
+        - src/Nethermind/Ethereum.Test.Base/
+        - src/Nethermind/Nethermind.Consensus/Processing/BranchProcessor.cs
+    runner_flags: [--parallelExecution, "true"]
+    contrast_flags: [--parallelExecution, "false"]
+
+campaigns:
+  smoke:
+    fork: Amsterdam
+    clients: [geth, erigon, besu, nethermind]
+  amsterdam-blind:
+    fork: Amsterdam
+    clients: [geth, erigon, besu, nethermind]
+    seed_start: 210000
+    known: []
+  v12-smoke:
+    fork: Amsterdam
+    clients: [geth, erigon, besu, nethermind]
+    seed_start: 900000
+    known: []
+  nethermind-calibration:
+    fork: Amsterdam
+    clients: [geth, nethermind, nethermind-gate]
+    seed_start: 910000
+    known: []
+  v13-calibration:
+    fork: Amsterdam
+    clients: [geth, nethermind, nethermind-gate]
+    seed_start: 1000000
+    known: []
+  discovery-producer:
+    fork: Amsterdam
+    # The four discovery entries are the result; besu-gate is a positive
+    # control. Its known digest 2d29706a fires at ~6% all night, so a
+    # silent loop cannot be mistaken for clean devnet heads.
+    clients: [geth, erigon, besu, nethermind, besu-gate]
+    producer: evmone-producer
+    seed_start: 2000000
+    known: []
+  devnet11:
+    fork: Amsterdam
+    clients: [geth-d11, erigon-d11, besu-d11, nethermind-d11, besu-gate]
+    producer: evmone-producer
+    seed_start: 3000000
+    known: []
+  # Second shard of the same panel on a disjoint seed range. The runner
+  # stage is not pipelined, so one campaign leaves ~9 of 16 cores idle;
+  # a second fills them. Seeds start far enough above devnet11's range
+  # that nine hours of drift cannot overlap.
+  devnet11-b:
+    fork: Amsterdam
+    clients: [geth-d11, erigon-d11, besu-d11, nethermind-d11, besu-gate]
+    producer: evmone-producer
+    seed_start: 5000000
+    known: []
+  # Same seed block v11 scored 6.10% on, so the generator step is the
+  # only variable. geth-d11 is present so a besu-gate failure is a
+  # divergence rather than an all-fail.
+  control-rate-v15:
+    fork: Amsterdam
+    clients: [geth-d11, besu-gate]
+    producer: evmone-producer
+    seed_start: 210000
+    known: []
+
+  # The seed range amsterdam-blind found the erigon BAL signature in
+  # (dbf21974, 47 hits from 211542). Every client votes on its parallel
+  # path, so a finding that only the parallel path has is visible as the
+  # client disagreeing with itself rather than only as a divergence.
+  parallel-contrast:
+    fork: Amsterdam
+    clients: [geth-par, erigon-par, besu-par, nethermind-par]
+    producer: evmone-producer
+    seed_start: 210000
+    known: []
