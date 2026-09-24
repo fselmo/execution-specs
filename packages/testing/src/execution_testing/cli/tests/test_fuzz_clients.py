@@ -175,6 +175,32 @@ def test_status_reports_version_or_error(
     assert missing.startswith("error:")
 
 
+def test_verify_runs_the_version_check_under_the_client_env(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    The gate for a missing toolchain has to use the declared one: run
+    without the client's env, besu and nethermind fail from any shell that
+    does not export JAVA_HOME or DOTNET_ROOT, whatever fuzz.yaml says.
+    """
+    from ..fuzzer_bridge.clients import verify_client
+
+    exe = tmp_path / "evmtool"
+    exe.write_text("")
+    seen: list = []
+
+    def version(_path: Path, env: Any = None) -> str:
+        seen.append(env)
+        return "Besu evm 1"
+
+    monkeypatch.setattr(clients_module, "binary_version", version)
+    ok, detail = verify_client(
+        ClientConfig(name="besu", path=exe, env={"JAVA_HOME": "/jdk"})
+    )
+    assert ok and "Besu evm 1" in detail
+    assert seen == [{"JAVA_HOME": "/jdk"}]
+
+
 def test_clients_command_lists_each_client(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
