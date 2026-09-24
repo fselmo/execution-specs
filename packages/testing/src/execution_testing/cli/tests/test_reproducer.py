@@ -103,6 +103,30 @@ def test_narrowing_table_records_each_judgement(monkeypatch: Any) -> None:
     assert "  as found" in text and "diverges" in text
 
 
+def test_a_traced_rule_opens_the_comment(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Once someone has traced a divergence to the change behind it, the
+    reproducer names it first; the narrowing table follows unchanged.
+    """
+    from ..fuzzer_bridge import reproducer as mod
+
+    monkeypatch.setattr(mod, "fill_state_test", lambda *_: {"_info": {}})
+    kept = write_reproducer(
+        tmp_path,
+        _single_tx_case(),
+        Amsterdam,
+        None,
+        lambda _f: True,
+        rule="Rule: #3478.",
+    )
+    assert kept is not None
+    comment = json.loads(kept.read_text())["reproducer"]["_info"]["comment"]
+    first, second, *_ = comment.splitlines()
+    assert (first, second.startswith("Narrowing:")) == ("Rule: #3478.", True)
+
+
 def test_reproducer_is_written_only_when_the_client_still_fails_it(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
