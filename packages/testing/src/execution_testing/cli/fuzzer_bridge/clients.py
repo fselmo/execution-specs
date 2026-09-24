@@ -279,7 +279,7 @@ def verify_client(client: ClientConfig) -> Tuple[bool, str]:
     """
     try:
         resolved = resolve_client(client, build_missing=False)
-        version = binary_version(resolved.binary)
+        version = binary_version(resolved.binary, resolved.env)
     except Exception as exc:  # noqa: BLE001 - the reason is the answer
         return False, str(exc)
     return True, f"{resolved.source:<18} {resolved.binary}  {version}"
