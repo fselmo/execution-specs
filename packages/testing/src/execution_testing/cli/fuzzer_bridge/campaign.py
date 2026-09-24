@@ -961,6 +961,31 @@ class StopRequest:
     signal_name: Optional[str] = None
 
 
+ALERT_REASON_CHARS = 120
+"""How much of a finding's reason an alert carries. The reason is a
+client's error text, from a process fed generated input."""
+
+
+def new_findings(state: CampaignState, seen: Set[str]) -> str:
+    """
+    One line naming the signatures first seen since ``seen``; empty when
+    none is new. Known signatures only count, never alert.
+    """
+    fresh = [
+        (key, entry)
+        for key, entry in state.signatures.items()
+        if key not in seen and not entry.get("known")
+    ]
+    if not fresh:
+        return ""
+    shown = "; ".join(
+        f"{key} {entry['client']}: {entry['reason'][:ALERT_REASON_CHARS]}"
+        for key, entry in fresh[:5]
+    )
+    more = f" (+{len(fresh) - 5} more)" if len(fresh) > 5 else ""
+    return f"{len(fresh)} new finding(s): {shown}{more}"
+
+
 def segment_id(manifest: RunManifest) -> str:
     """
     Name what a segment holds fixed: fork, generator version, spec commit,
@@ -1592,6 +1617,7 @@ def run_campaign(
             seeds, future = pending.popleft()
             slice_result = future.result()
             before = health_snapshot(state, options.health)
+            seen = set(state.signatures)
             names: List[str] = slice_result["names"]
             fill_errors = slice_result["errors"]
             state.counts["fill_error"] = state.counts.get(
@@ -1933,6 +1959,14 @@ def run_campaign(
                 lanes=sorted(contrast_runners),
                 runners=len(runners),
             )
+            found_new = new_findings(state, seen)
+            if found_new:
+                failure = send_alert(
+                    f"campaign {output.name}, seeds {seeds.start}.."
+                    f"{seeds.stop - 1}: " + found_new
+                )
+                if failure:
+                    echo(f"alert not sent: {failure}")
             if problems:
                 pause_reason = "; ".join(problems)
                 state.set_status("paused", pause_reason)
