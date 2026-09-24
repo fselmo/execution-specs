@@ -503,6 +503,9 @@ def render_report(
         f"{state.counts.get('invariant_violation', 0)} |",
         f"| contrast mismatches (client vs itself) | "
         f"{state.counts.get('contrast-mismatch', 0)} |",
+        f"| parallel retries/fallbacks (BAL-RETRY, BAL-FALLBACK) | "
+        f"{state.counts.get('BAL-RETRY', 0)}, "
+        f"{state.counts.get('BAL-FALLBACK', 0)} |",
         f"| fill errors | {fill_errors} "
         f"({fill_error_rate:.1%} of {generated} candidates) |",
     ]
@@ -1478,6 +1481,29 @@ def run_campaign(
                 runner_seconds = {
                     name: seconds for name, (_, seconds) in timed.items()
                 }
+                # Read before escalation re-runs the primary runners.
+                tagged = tagged_stderr_lines(
+                    {
+                        **runners,
+                        **{
+                            lane: runner
+                            for lane, (_, runner) in contrast_runners.items()
+                        },
+                    }
+                )
+                if tagged:
+                    # The batch is kept so each line can be traced to its
+                    # fixture; the tag names the block, not the test.
+                    keep_file = True
+                    with (output / "stderr_tags.log").open("a") as log:
+                        for lane, line in tagged:
+                            log.write(f"{batch_file.name}\t{lane}\t{line}\n")
+                            tag = line.split()[0]
+                            state.counts[tag] = state.counts.get(tag, 0) + 1
+                    echo(
+                        f"  {len(tagged)} tagged stderr line(s) in "
+                        f"{batch_file.name}; see stderr_tags.log"
+                    )
 
                 shard_fixtures: Optional[Dict[str, Any]] = None
                 if spec_tool is not None:
@@ -1736,6 +1762,24 @@ def run_campaign(
             )
     write_report()
     return state
+
+
+STDERR_TAGS = ("BAL-RETRY", "BAL-FALLBACK")
+"""Line prefixes the parallel-path series print to stderr where a verdict
+cannot show them: nethermind's sequential retry and besu's fallback. A tag
+on a valid fixture is a parallel-path failure the verdict masked."""
+
+
+def tagged_stderr_lines(
+    runners: Mapping[str, FixtureRunner],
+) -> List[Tuple[str, str]]:
+    """`(lane, line)` for every tagged line the runners' last runs printed."""
+    return [
+        (lane, line.strip())
+        for lane, runner in sorted(runners.items())
+        for line in runner.last_stderr.splitlines()
+        if line.strip().startswith(STDERR_TAGS)
+    ]
 
 
 def _timed_run(

@@ -175,6 +175,9 @@ class FixtureRunner:
     argv cannot reach them."""
     timeout: float = 1800.0
     _last_error: str = ""
+    last_stderr: str = ""
+    """Standard error of the latest run: where a client prints what its
+    verdict cannot carry, such as nethermind's sequential retry."""
 
     @classmethod
     def detect(
@@ -203,11 +206,18 @@ class FixtureRunner:
 
     def with_flags(self, flags: Sequence[str]) -> "FixtureRunner":
         """The same binary driven with a different flag set."""
-        return replace(self, flags=tuple(flags), _last_error="")
+        return replace(
+            self, flags=tuple(flags), _last_error="", last_stderr=""
+        )
 
     def with_env(self, env: Mapping[str, str]) -> "FixtureRunner":
         """The same binary driven with extra environment overrides."""
-        return replace(self, env={**self.env, **dict(env)}, _last_error="")
+        return replace(
+            self,
+            env={**self.env, **dict(env)},
+            _last_error="",
+            last_stderr="",
+        )
 
     def _environ(self) -> Dict[str, str]:
         """The parent environment with this runner's overrides on top."""
@@ -226,7 +236,7 @@ class FixtureRunner:
     def _run(self, args: Sequence[str]) -> subprocess.CompletedProcess:
         command = [str(self.binary), *args]
         try:
-            return subprocess.run(
+            proc = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
@@ -234,9 +244,11 @@ class FixtureRunner:
                 env=self._environ(),
             )
         except subprocess.TimeoutExpired:
-            return subprocess.CompletedProcess(
+            proc = subprocess.CompletedProcess(
                 command, -1, "", f"timed out after {self.timeout:.0f}s"
             )
+        self.last_stderr = proc.stderr or ""
+        return proc
 
     def run_file(
         self, path: Path, fixture_names: Iterable[str]

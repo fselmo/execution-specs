@@ -163,6 +163,7 @@ class _FakeRunner:
         self.contrast = contrast
         self.flags = tuple(flags)
         self.env = dict(env or {})
+        self.last_stderr = ""
 
     def with_flags(self, flags: Any) -> "_FakeRunner":
         return _FakeRunner(self.name, self.contrast, None, flags, self.env)
@@ -438,6 +439,52 @@ class _GoesSilentRunner(_FakeRunner):
         return _SilentRunner(
             self.name, self.failing, None, self.flags, {**self.env, **env}
         )
+
+
+class _RetryingRunner(_FakeRunner):
+    """Passes everything, and prints a sequential retry on seed 4."""
+
+    def run_file(self, path: Path, fixture_names: Any) -> Dict[str, Verdict]:
+        names = list(fixture_names)
+        self.last_stderr = (
+            "BAL-RETRY block=1 "
+            "exception=InvalidBlockLevelAccessListException\n"
+            if "seed_4" in names
+            else "unrelated noise\n"
+        )
+        return super().run_file(path, names)
+
+
+def test_a_tagged_stderr_line_is_logged_counted_and_keeps_its_batch(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Nethermind's retry is invisible in its verdict, so the line it prints
+    is the only record: counted, logged with its lane and batch, and the
+    batch kept so the line can be traced to its fixture.
+    """
+    failing = {"geth": lambda _s: False, "nethermind": lambda _s: False}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        runner=lambda name, flags: (
+            _RetryingRunner(name, failing[name], None, flags)
+            if name == "nethermind"
+            else _FakeRunner(name, failing[name], None, flags)
+        ),
+        count=6,
+        batch=3,
+    )
+    assert state.counts["BAL-RETRY"] == 1
+    log = (tmp_path / "out" / "stderr_tags.log").read_text().splitlines()
+    assert len(log) == 1
+    batch, lane, line = log[0].split("\t")
+    assert lane == "nethermind" and line.startswith("BAL-RETRY block=1")
+    assert (tmp_path / "out" / "fixtures" / batch).is_file()
+    report = (tmp_path / "out" / "report.md").read_text()
+    row = "| parallel retries/fallbacks (BAL-RETRY, BAL-FALLBACK) | 1, 0 |"
+    assert row in report
 
 
 def test_a_contrast_run_that_never_reports_fails_the_campaign(
