@@ -347,6 +347,13 @@ class CampaignState:
     """The latest window's rates, for the report and the status page."""
     signatures_reset: bool = field(default=False, compare=False)
 
+    @property
+    def cases(self) -> int:
+        """Cases judged: agreed, diverged or failed by every client."""
+        return sum(
+            self.counts.get(k, 0) for k in ("agreed", "divergence", "all-fail")
+        )
+
     def enter_segment(self, segment: str) -> bool:
         """
         Make ``segment`` the one being judged; True when it is new.
@@ -414,6 +421,10 @@ class CampaignState:
 
     def save(self) -> None:
         """Persist atomically enough for a Ctrl-C: write, then rename."""
+        cases = self.cases
+        for entry in self.signatures.values():
+            # Hits per judged case, written so readers need not derive it.
+            entry["rate"] = entry["count"] / cases if cases else None
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(
             json.dumps(
@@ -436,6 +447,14 @@ class CampaignState:
                     "segment": self.segment,
                     "segments": self.segments,
                     "health": self.health,
+                    # Written for readers of the file, the status page
+                    # among them, so none has to derive it.
+                    "summary": {
+                        "cases": self.cases,
+                        "cases_per_second": self.cases
+                        / max(time.time() - self.started, 1e-9),
+                        "saved_at": time.time(),
+                    },
                 },
                 indent=1,
             )
@@ -451,6 +470,7 @@ class CampaignState:
         bundle: Optional[str],
         known: bool = False,
         events: Sequence[str] = (),
+        minimized: bool = False,
     ) -> bool:
         """
         Count a per-client signature; return True when it is new.
@@ -474,6 +494,8 @@ class CampaignState:
                 "events_necessary": sorted(events),
                 "first_segment": self.segment,
                 "segments": {self.segment: 1},
+                "first_seen": time.time(),
+                "minimized": minimized,
             }
             return True
         entry["count"] += 1
@@ -545,9 +567,7 @@ def render_report(
     elapsed_seconds: float,
 ) -> str:
     """Render the campaign report; valid at any point of the run."""
-    cases = sum(
-        state.counts.get(k, 0) for k in ("agreed", "divergence", "all-fail")
-    )
+    cases = state.cases
     rate = cases / elapsed_seconds if elapsed_seconds > 0 else 0.0
     fill_errors = state.counts.get("fill_error", 0)
     generated = cases + fill_errors
@@ -1895,6 +1915,7 @@ def run_campaign(
                             bundle=None if known else str(bundle),
                             known=known,
                             events=events,
+                            minimized=options.minimize and not known,
                         )
                         if new and not known:
                             keep_file = True

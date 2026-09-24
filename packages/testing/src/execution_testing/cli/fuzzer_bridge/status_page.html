@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Fuzz campaign</title>
+<style nonce="{{NONCE}}">
+  :root {
+    --bg: #f7f7f5; --fg: #1d1d1b; --muted: #6b6b66; --line: #e2e2dc;
+    --ok: #2f7d4f; --warn: #a15c07; --bad: #b3261e; --card: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --fg: #ecece8; --muted: #9a9a93; --line: #2c2c29;
+      --ok: #6cc28f; --warn: #e3a64a; --bad: #f08a80; --card: #1d1d1b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 12px 16px 32px; background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  #health { font-weight: 600; padding: 10px 12px; border-radius: 8px;
+    background: var(--card); border-left: 6px solid var(--muted); }
+  #health.running { border-left-color: var(--ok); }
+  #health.paused, #health.absent { border-left-color: var(--bad); }
+  #health.stopped, #health.done { border-left-color: var(--warn); }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); margin: 20px 0 6px; }
+  .card { background: var(--card); border-radius: 8px; padding: 4px 12px; }
+  .row { display: flex; justify-content: space-between; gap: 12px;
+    padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row span:first-child { color: var(--muted); }
+  .row span:last-child { text-align: right; overflow-wrap: anywhere; }
+  .out { color: var(--bad); font-weight: 600; }
+  .finding { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .finding:last-child { border-bottom: 0; }
+  .finding .reason { font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .finding .meta { color: var(--muted); font-size: 13px; }
+  #updated { color: var(--muted); font-size: 12px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div id="health">Loading...</div>
+<h2>Run</h2><div class="card" id="run"></div>
+<h2>Health</h2><div class="card" id="checks"></div>
+<h2>Clients</h2><div class="card" id="clients"></div>
+<h2>Contrast lanes</h2><div class="card" id="contrast"></div>
+<h2>Findings</h2><div class="card" id="findings"></div>
+<div id="updated"></div>
+<script nonce="{{NONCE}}">
+"use strict";
+// Every value here comes from the campaign's state, and findings carry
+// client error text from processes fed generated input: it is written
+// with textContent only, never parsed as HTML.
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = String(text);
+  return node;
+}
+function row(label, value, out) {
+  const node = el("div", "row");
+  node.append(el("span", "", label), el("span", out ? "out" : "", value));
+  return node;
+}
+function fill(id, nodes) {
+  const box = document.getElementById(id);
+  box.replaceChildren(...(nodes.length ? nodes : [row("none", "")]));
+}
+function pct(x) { return x === undefined || x === null ? "-" : (100 * x).toFixed(2) + "%"; }
+function ago(seconds) {
+  if (seconds < 90) return Math.round(seconds) + " s";
+  if (seconds < 5400) return Math.round(seconds / 60) + " min";
+  if (seconds < 172800) return (seconds / 3600).toFixed(1) + " h";
+  return (seconds / 86400).toFixed(1) + " d";
+}
+function render(s) {
+  const health = document.getElementById("health");
+  health.className = s.status;
+  health.textContent = s.status + (s.status_reason ? ": " + s.status_reason : "");
+  const summary = s.summary || {};
+  const seg = s.segment || {};
+  const run = [];
+  if (s.started) run.push(row("uptime", ago(s.served_at - s.started)));
+  run.push(row("cases", summary.cases === undefined ? "-" : summary.cases));
+  run.push(row("cases/s", summary.cases_per_second === undefined ? "-" : summary.cases_per_second.toFixed(1)));
+  run.push(row("next seed", s.next_seed));
+  if (seg.id) {
+    run.push(row("segment", seg.id + " (generator v" + seg.generator_version + ", " + seg.fork + ")"));
+    run.push(row("spec", seg.eels_commit));
+    for (const [name, digest] of Object.entries(seg.binaries || {})) {
+      run.push(row(name, (seg.sources || {})[name] || digest));
+    }
+  }
+  fill("run", run);
+  const h = s.health || {};
+  const checks = [row("window", (h.window_cases || 0) + " / " + (h.window || "-") + " cases")];
+  if (h.control_client) {
+    const band = h.control_band || [0, 1];
+    const rate = h.control_rate;
+    const out = rate !== undefined && (rate < band[0] || rate > band[1]);
+    checks.push(row("control " + h.control_client, pct(rate) + " (band " + pct(band[0]) + "-" + pct(band[1]) + ")", out));
+  }
+  if (h.runner_error_rate !== undefined) checks.push(row("runner errors", pct(h.runner_error_rate) + " (max " + pct(h.max_runner_error_rate) + ")", h.runner_error_rate > h.max_runner_error_rate));
+  if (h.producer_disagreement_rate !== undefined) checks.push(row("producer disagreement", pct(h.producer_disagreement_rate) + " (max " + pct(h.max_producer_disagreement_rate) + ")", h.producer_disagreement_rate > h.max_producer_disagreement_rate));
+  const counts = s.counts || {};
+  checks.push(row("retries / fallbacks", (counts["BAL-RETRY"] || 0) + " / " + (counts["BAL-FALLBACK"] || 0)));
+  checks.push(row("agreed / divergent / all-fail", (counts.agreed || 0) + " / " + (counts.divergence || 0) + " / " + (counts["all-fail"] || 0)));
+  fill("checks", checks);
+  fill("clients", Object.entries(s.clients || {}).map(([name, c]) =>
+    row(name, c.failures + " failed, " + c.refused + " refused, " + c.runner_errors + " runner errors", c.runner_errors > 0)));
+  fill("contrast", Object.entries(s.contrast || {}).map(([lane, c]) =>
+    row(lane, (c.compared || 0) + " compared, " + (c.mismatches || 0) + " mismatches", !c.compared)));
+  fill("findings", (s.findings || []).map((f) => {
+    const node = el("div", "finding");
+    node.append(el("div", "", f.digest + "  " + f.client + (f.known ? "  (known)" : "")));
+    node.append(el("div", "reason", f.reason));
+    const first = f.first_seen ? ago(s.served_at - f.first_seen) + " ago" : "-";
+    node.append(el("div", "meta", f.count + " hits, " + pct(f.rate) + " of cases, first " + first + " (seed " + f.first_seed + "), " + (f.minimized ? "minimized" : "not minimized")));
+    if (f.bundle) node.append(el("div", "meta", f.bundle));
+    return node;
+  }));
+  document.getElementById("updated").textContent = "updated " + new Date(s.served_at * 1000).toLocaleTimeString();
+}
+async function poll() {
+  try {
+    const response = await fetch("/status.json", { cache: "no-store" });
+    render(await response.json());
+  } catch (error) {
+    const health = document.getElementById("health");
+    health.className = "absent";
+    health.textContent = "status unreachable: " + error;
+  }
+}
+poll();
+setInterval(poll, 5000);
+</script>
+</body>
+</html>

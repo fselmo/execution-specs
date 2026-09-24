@@ -30,6 +30,8 @@ from .differential_cli import (
 from .distill_cli import distill
 from .fuzz_cli import fuzz as run
 from .health import HealthPolicy
+from .status import serve as serve_status
+from .status import status_view
 
 
 @click.group()
@@ -338,6 +340,48 @@ def campaign(
         f"done: {state.unique_findings()} unique signature(s); "
         f"report at {options.output / 'report.md'}"
     )
+
+
+@fuzz.command("status")
+@click.argument("name")
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path, file_okay=False),
+    default=None,
+    help="Campaign directory [default: campaigns/NAME].",
+)
+@click.option(
+    "--serve",
+    is_flag=True,
+    help="Serve a read-only status page on 127.0.0.1 until interrupted.",
+)
+@click.option("--port", type=int, default=8787, show_default=True)
+def status(name: str, output: Optional[Path], serve: bool, port: int) -> None:
+    """
+    Show a campaign's status: one line, or with --serve a read-only page
+    on loopback for a proxy (Tailscale) to expose. It binds 127.0.0.1
+    only, answers GET for the page and its JSON, and serves no files.
+    """
+    output = output or Path("campaigns") / name
+    view = status_view(output)
+    summary = view.get("summary", {})
+    click.echo(
+        f"{name}: {view['status']}"
+        + (f" ({view['status_reason']})" if view.get("status_reason") else "")
+        + f", {summary.get('cases', 0)} cases, "
+        f"{len(view.get('findings', []))} finding(s), "
+        f"segment {view.get('segment', {}).get('id') or '-'}"
+    )
+    if not serve:
+        return
+    server = serve_status(output, port)
+    click.echo(f"serving http://127.0.0.1:{server.server_address[1]}/")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 @fuzz.command("replay")

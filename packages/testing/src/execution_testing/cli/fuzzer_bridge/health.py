@@ -105,7 +105,16 @@ def evaluate(
     verdicts each case gets, the runner-error rate's denominator.
     """
     cases = sum(sample["cases"] for sample in window)
-    rates: Dict[str, Any] = {"window_cases": cases}
+    rates: Dict[str, Any] = {
+        "window_cases": cases,
+        "window": policy.window,
+        "control_client": policy.control_client,
+        "control_band": list(policy.control_band),
+        "max_runner_error_rate": policy.max_runner_error_rate,
+        "max_producer_disagreement_rate": (
+            policy.max_producer_disagreement_rate
+        ),
+    }
     if cases < policy.window:
         rates["checking"] = False
         return rates, []
