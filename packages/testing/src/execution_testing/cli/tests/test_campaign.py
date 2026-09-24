@@ -1949,3 +1949,46 @@ def test_batches_are_processed_in_seed_order(
         "seeds 6..7",
     ]
     assert state.next_seed == 8
+
+
+def test_a_retry_on_a_block_meant_to_be_invalid_does_not_alert() -> None:
+    """
+    Fixtures that are not generated carry deliberately invalid blocks,
+    where a retry is correct. A line naming a hash is matched on it; one
+    naming only a number is dropped when some fixture in the batch
+    expects a block at that number to be rejected.
+    """
+    from ..fuzzer_bridge.campaign import expected_valid_lines
+
+    fixtures = {
+        "import": {
+            "blocks": [
+                {"blockHeader": {"number": "0x1", "hash": "0x11"}},
+                {
+                    "expectException": "BlockException.INVALID_BAL",
+                    "rlp_decoded": {
+                        "blockHeader": {"number": "0x2", "hash": "0xAA"}
+                    },
+                },
+            ]
+        },
+        "engine": {
+            "engineNewPayloads": [
+                {
+                    "params": [{"blockNumber": "0x3", "blockHash": "0xcc"}],
+                    "validationError": "BlockException.INVALID_BAL",
+                }
+            ]
+        },
+    }
+    tagged = [
+        ("besu", "BAL-RETRY block=1 exception=X"),
+        ("besu", "BAL-RETRY block=2 exception=X"),
+        ("besu", "BAL-FALLBACK block=3"),
+        ("besu", "FUZZ-PAR-DECISION block=2 hash=0xbb decision=sequential"),
+        ("besu", "FUZZ-PAR-DECISION block=2 hash=0xaa decision=sequential"),
+    ]
+    assert expected_valid_lines(tagged, fixtures) == [
+        ("besu", "BAL-RETRY block=1 exception=X"),
+        ("besu", "FUZZ-PAR-DECISION block=2 hash=0xbb decision=sequential"),
+    ]
