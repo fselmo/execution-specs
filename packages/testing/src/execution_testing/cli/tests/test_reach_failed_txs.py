@@ -195,3 +195,24 @@ def test_every_failer_axis_keeps_all_its_values() -> None:
         if w.startswith(("failing_tx", "failer_outcome"))
     ]
     assert warnings_ == []
+
+
+def test_only_the_succeeding_failer_commits_a_storage_write() -> None:
+    """
+    The committed-write count reads the fixture's list at each
+    transaction's own index. The failer's index must carry no storage
+    change when it fails and one when the same code succeeds.
+    """
+    from ..fuzzer_bridge.signature_baseline import (
+        _indices_with_storage_changes,
+    )
+
+    code, storage = _failer("revert")
+    failed = _fill(_send_to_failer(code, storage))
+    index, _, _ = _failer_tx(failed)
+    assert index not in _indices_with_storage_changes(failed["blocks"][0])
+
+    ending = bytes(Op.REVERT(0, 0))
+    succeeded = _fill(_send_to_failer(code[: -len(ending)], storage))
+    index, _, _ = _failer_tx(succeeded)
+    assert index in _indices_with_storage_changes(succeeded["blocks"][0])

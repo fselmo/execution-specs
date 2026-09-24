@@ -462,10 +462,23 @@ def signature_baseline(fork: "Fork", seeds: range) -> BaselineReport:
     )
 
 
+def _indices_with_storage_changes(block: Dict[str, Any]) -> Set[int]:
+    """Block access indices at which the block's list changes storage."""
+    return {
+        int(change["blockAccessIndex"], 16)
+        for entry in block["blockAccessList"]
+        for slot in entry["storageChanges"]
+        for change in slot["slotChanges"]
+    }
+
+
 def _rates_and_blocks(
     fork: "Fork", seeds: range
 ) -> Tuple[
-    Dict[str, Dict[str, int]], Dict[str, Dict[str, Any]], Dict[str, int]
+    Dict[str, Dict[str, int]],
+    Dict[str, Dict[str, Any]],
+    Dict[str, int],
+    Dict[str, int],
 ]:
     """
     Fill each seed once and return its event rates and block execution.
@@ -478,7 +491,9 @@ def _rates_and_blocks(
     when one budget for the whole case starved the later blocks.
 
     The third map counts executed user transactions by how their
-    top-level frame ended.
+    top-level frame ended. The fourth counts, from the fixture rather than
+    the trace, how many transactions left a storage change in the block
+    access list at their own index: the ones whose writes survived.
     """
     from execution_testing.cli.fuzzer_bridge.campaign import fill_case
     from execution_testing.cli.fuzzer_bridge.generator import (
@@ -493,13 +508,20 @@ def _rates_and_blocks(
     rates: Dict[str, Dict[str, int]] = {}
     blocks: Dict[str, Dict[str, Any]] = {}
     outcomes: Dict[str, int] = {}
+    writes = {"txs": 0, "committed_storage": 0}
     for seed in seeds:
         eels.last_signature = None
         case = generate_fuzzer_output(fork, seed)
         try:
-            fill_case(case, fork, eels)
+            fixture = fill_case(case, fork, eels)
         except Exception:  # noqa: BLE001 - unfillable is data
             continue
+        for block in fixture["blocks"]:
+            ran = len(block["transactions"])
+            writes["txs"] += ran
+            writes["committed_storage"] += len(
+                _indices_with_storage_changes(block) & set(range(1, ran + 1))
+            )
         signature = eels.last_signature
         if signature is None:
             continue
@@ -518,7 +540,7 @@ def _rates_and_blocks(
             block["steps"].append(steps)
         for outcome, count in signature.tx_outcomes:
             outcomes[outcome] = outcomes.get(outcome, 0) + count
-    return rates, blocks, outcomes
+    return rates, blocks, outcomes, writes
 
 
 def event_rates(fork: "Fork", seeds: range) -> Dict[str, Dict[str, int]]:
@@ -575,6 +597,7 @@ def event_rate_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
         record["rates"],
         record["block_code"],
         record["tx_outcomes"],
+        record["tx_writes"],
     ) = _rates_and_blocks(fork, seeds)
     record["below_floor"] = rate_floor_warnings(record)
     return record
