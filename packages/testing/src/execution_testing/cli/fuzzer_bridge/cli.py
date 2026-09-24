@@ -254,6 +254,7 @@ def campaign(
         fork=fork,
         clients=clients,
         output=output,
+        reproduce_runs=campaign_config.reproduce_runs,
         seed_start=campaign_config.seed_start,
         hours=hours,
         count=count,

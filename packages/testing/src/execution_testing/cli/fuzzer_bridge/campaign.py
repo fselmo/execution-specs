@@ -378,6 +378,23 @@ class CampaignState:
         self.segment = segment
         return True
 
+    def record_reproduction(
+        self, key: str, reproduction: Mapping[str, List[int]]
+    ) -> None:
+        """
+        Record how often a new finding's case failed again the same way.
+
+        A finding that never reproduces is sent to `unexplained`: its one
+        failure is a fact about that run, not yet about the client.
+        """
+        entry = self.signatures[key]
+        entry["reproduction"] = dict(reproduction)
+        hits = sum(k for k, _ in reproduction.values())
+        runs = sum(n for _, n in reproduction.values())
+        entry["reproduced"] = hits / runs if runs else None
+        if runs and hits == 0:
+            entry["triage"] = "unexplained"
+
     def set_status(self, status: str, reason: str = "") -> None:
         """Record what the campaign is doing and why, with the time."""
         self.status, self.status_reason = status, reason
@@ -1004,6 +1021,53 @@ def masked_failure_alert(
     )
 
 
+def _reproduction_note(entry: Mapping[str, Any]) -> str:
+    reproduction = entry.get("reproduction")
+    if not reproduction:
+        return ""
+    solo, load = reproduction["solo"], reproduction["load"]
+    note = (
+        f" [reproduced {solo[0]}/{solo[1]} solo, "
+        f"{load[0]}/{load[1]} under load"
+    )
+    if entry.get("triage") == "unexplained":
+        note += ", unexplained"
+    return note + "]"
+
+
+REPRODUCE_LOAD = 4
+"""Concurrent runs a new finding's case is judged by under load."""
+
+
+def reproduce_failure(
+    runner: FixtureRunner,
+    fixture_name: str,
+    fixture: Mapping[str, Any],
+    reason: str,
+    runs: int,
+) -> Dict[str, List[int]]:
+    """
+    Judge one fixture again ``runs`` times alone and ``runs`` times
+    under load, counting the runs that fail with the same reason.
+
+    Solo runs go one after another; loaded runs keep `REPRODUCE_LOAD` of
+    them in flight at once, which is where a race or a resource limit
+    shows. `[reproduced, runs]` for each.
+    """
+
+    def failed_again() -> bool:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "reproduce.json"
+            path.write_text(json.dumps({fixture_name: fixture}))
+            verdict = runner.run_file(path, [fixture_name])[fixture_name]
+        return not verdict.passed and normalize_error(verdict.error) == reason
+
+    solo = sum(failed_again() for _ in range(runs))
+    with ThreadPoolExecutor(max_workers=REPRODUCE_LOAD) as pool:
+        loaded = sum(pool.map(lambda _: failed_again(), range(runs)))
+    return {"solo": [solo, runs], "load": [loaded, runs]}
+
+
 def new_findings(state: CampaignState, seen: Set[str]) -> str:
     """
     One line naming the signatures first seen since ``seen``; empty when
@@ -1018,6 +1082,7 @@ def new_findings(state: CampaignState, seen: Set[str]) -> str:
         return ""
     shown = "; ".join(
         f"{key} {entry['client']}: {entry['reason'][:ALERT_REASON_CHARS]}"
+        + _reproduction_note(entry)
         for key, entry in fresh[:5]
     )
     more = f" (+{len(fresh) - 5} more)" if len(fresh) > 5 else ""
@@ -1368,6 +1433,9 @@ class CampaignOptions:
     sources: Mapping[str, str] = field(default_factory=dict)
     """Per client, where its binary came from, for the manifest."""
     health: HealthPolicy = field(default_factory=HealthPolicy)
+    reproduce_runs: int = 5
+    """Times a new finding's case is judged again alone, and again under
+    load, on its first sighting; 0 skips it."""
 
 
 def _seed_of(fixture_name: str) -> int:
@@ -1961,6 +2029,17 @@ def run_campaign(
                                 events=events,
                                 segment=state.segment,
                             )
+                            if options.reproduce_runs:
+                                state.record_reproduction(
+                                    signature_id(signature),
+                                    reproduce_failure(
+                                        runners[client],
+                                        fixture_name,
+                                        shard_fixtures[fixture_name],
+                                        reason,
+                                        options.reproduce_runs,
+                                    ),
+                                )
 
                 if fresh_start and fill_batches == 0 and options.baseline:
                     stale = {

@@ -258,6 +258,9 @@ class CampaignConfig(BaseModel):
     read: `blockchain_test` for the import lane, `blockchain_test_engine`
     for the newPayload lane, which is the route by which nethermind's
     engine loader reaches its parallel processor on our own fixtures."""
+    reproduce_runs: int = 5
+    """Times a new finding's case is judged again alone, and again under
+    load; 0 skips it."""
     health: HealthConfig = Field(default_factory=HealthConfig)
     """Bands checked after every batch; one out of band pauses the run.
     The alert webhook is never configured here: see `FUZZ_ALERT_URL`."""

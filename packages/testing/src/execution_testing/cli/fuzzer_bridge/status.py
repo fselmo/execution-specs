@@ -131,6 +131,8 @@ def status_view(output: Path) -> Dict[str, Any]:
                 "first_seed": entry.get("first_seed"),
                 "first_segment": entry.get("first_segment"),
                 "minimized": entry.get("minimized", False),
+                "reproduction": entry.get("reproduction"),
+                "triage": entry.get("triage"),
                 "known": entry.get("known", False),
                 "bundle": entry.get("bundle"),
             }

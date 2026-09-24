@@ -1715,3 +1715,70 @@ def test_a_masked_parallel_failure_alerts_though_every_verdict_passed(
     assert state.signatures == {}
     (alert,) = sent
     assert "seeds 3..5" in alert and "nethermind BAL-RETRY x1" in alert
+
+
+class _OnceRunner(_FakeRunner):
+    """Fails seed 1 in the batch that finds it, and never again alone."""
+
+    def run_file(self, path: Path, fixture_names: Any) -> Dict[str, Verdict]:
+        names = list(fixture_names)
+        if names == ["seed_1"]:
+            return {"seed_1": Verdict(True)}
+        return super().run_file(path, names)
+
+
+class _OtherReasonRunner(_FakeRunner):
+    """Fails seed 1 again alone, but for a different reason."""
+
+    def run_file(self, path: Path, fixture_names: Any) -> Dict[str, Verdict]:
+        names = list(fixture_names)
+        if names == ["seed_1"]:
+            return {"seed_1": Verdict(False, "something else entirely")}
+        return super().run_file(path, names)
+
+
+@pytest.mark.parametrize(
+    "runner_class, reproduced, triage",
+    [
+        pytest.param(_FakeRunner, [5, 5], None, id="deterministic"),
+        pytest.param(_OnceRunner, [0, 5], "unexplained", id="once"),
+        pytest.param(_OtherReasonRunner, [0, 5], "unexplained", id="other"),
+    ],
+)
+def test_a_new_finding_is_judged_again_solo_and_under_load(
+    tmp_path: Path,
+    monkeypatch: Any,
+    runner_class: Any,
+    reproduced: List[int],
+    triage: Optional[str],
+) -> None:
+    """
+    On first sighting a finding's case is judged five times alone and
+    five times four at a time; only a failure with the same reason
+    counts. The fractions ride on the finding and its alert, and a
+    finding that never fails again is marked unexplained.
+    """
+    from ..fuzzer_bridge import campaign as campaign_module
+
+    sent: List[str] = []
+    monkeypatch.setattr(campaign_module, "send_alert", sent.append)
+    failing = {"geth": lambda _s: False, "erigon": lambda s: s == 1}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        runner=lambda name, flags: (
+            runner_class(name, failing[name], None, flags)
+            if name == "erigon"
+            else _FakeRunner(name, failing[name], None, flags)
+        ),
+        count=3,
+        batch=3,
+        baseline=False,
+    )
+    (finding,) = state.signatures.values()
+    assert finding["reproduction"] == {"solo": reproduced, "load": reproduced}
+    assert finding.get("triage") == triage
+    (alert,) = sent
+    assert f"reproduced {reproduced[0]}/5 solo" in alert
+    assert ("unexplained" in alert) == (triage == "unexplained")

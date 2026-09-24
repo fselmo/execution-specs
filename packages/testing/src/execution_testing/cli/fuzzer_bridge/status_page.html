@@ -118,10 +118,11 @@ function render(s) {
     row(lane, (c.compared || 0) + " compared, " + (c.mismatches || 0) + " mismatches", !c.compared)));
   fill("findings", (s.findings || []).map((f) => {
     const node = el("div", "finding");
-    node.append(el("div", "", f.digest + "  " + f.client + (f.known ? "  (known)" : "")));
+    node.append(el("div", "", f.digest + "  " + f.client + (f.known ? "  (known)" : "") + (f.triage ? "  (" + f.triage + ")" : "")));
     node.append(el("div", "reason", f.reason));
     const first = f.first_seen ? ago(s.served_at - f.first_seen) + " ago" : "-";
     node.append(el("div", "meta", f.count + " hits, " + pct(f.rate) + " of cases, first " + first + " (seed " + f.first_seed + "), " + (f.minimized ? "minimized" : "not minimized")));
+    if (f.reproduction) node.append(el("div", "meta", "reproduced " + f.reproduction.solo.join("/") + " solo, " + f.reproduction.load.join("/") + " under load"));
     if (f.bundle) node.append(el("div", "meta", f.bundle));
     return node;
   }));
