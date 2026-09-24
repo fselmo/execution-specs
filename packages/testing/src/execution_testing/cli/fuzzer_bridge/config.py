@@ -227,6 +227,10 @@ class HealthConfig(BaseModel):
     control_band: Tuple[float, float] = (0.0, 1.0)
     max_runner_error_rate: float = 0.001
     max_producer_disagreement_rate: float = 0.01
+    parallel_lanes: List[str] = Field(default_factory=list)
+    """Lanes running the parallel path as their primary, whose decided
+    fraction is held to the segment's baseline."""
+    parallel_drop_tolerance: float = 0.0
 
     @model_validator(mode="after")
     def _control_names_a_client(self) -> "HealthConfig":
