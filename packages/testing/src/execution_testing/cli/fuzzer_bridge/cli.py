@@ -13,6 +13,8 @@ from .clients import client_status, verify_client
 from .corpus import load_case
 from .differential import (
     _COMPARED_FIELDS,
+    as_chain,
+    block_prefix,
     build_tools,
     compare_results,
     post_state_diff,
@@ -361,26 +363,31 @@ def replay(
     divergence_list = compare_results(results) if results else []
     divergences = {d.field: d for d in divergence_list}
 
-    for field_name in (*_COMPARED_FIELDS, "rejected_transactions"):
-        divergence = divergences.get(field_name)
-        click.echo(field_name)
-        for name in tools:
-            if name in errors:
-                click.echo(f"  {name:<12} (failed)")
-                continue
-            result = results[name]
-            if field_name == "rejected_transactions":
-                value = str(
-                    sorted(int(r.index) for r in result.rejected_transactions)
-                )
-            else:
-                value = str(getattr(result, field_name, None))
-            mark = (
-                "   <- minority"
-                if divergence is not None and name in divergence.minority
-                else ""
-            )
-            click.echo(f"  {name:<12} {value}{mark}")
+    chains = {name: as_chain(result) for name, result in results.items()}
+    blocks = max((len(chain) for chain in chains.values()), default=0)
+    for index in range(blocks):
+        for field_name in (*_COMPARED_FIELDS, "rejected_transactions"):
+            key = block_prefix(index) + field_name
+            divergence = divergences.get(key)
+            click.echo(key)
+            for name in tools:
+                if name in errors or index >= len(chains.get(name, [])):
+                    click.echo(f"  {name:<12} (failed)")
+                    continue
+                result = chains[name][index]
+                if field_name == "rejected_transactions":
+                    value = str(
+                        sorted(
+                            int(r.index) for r in result.rejected_transactions
+                        )
+                    )
+                else:
+                    value = str(getattr(result, field_name, None))
+                if divergence is not None and name in divergence.minority:
+                    mark = "   <- minority"
+                else:
+                    mark = ""
+                click.echo(f"  {name:<12} {value}{mark}")
     for name, error in errors.items():
         click.echo(f"{name} failed: {error}")
     for tool, diff in post_state_diff(divergence_list, allocs).items():

@@ -17,7 +17,7 @@ divergence is already caught globally by the transition tool).
 """
 
 import random
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
 
 from execution_testing.vm import Bytecode
 from execution_testing.vm import Opcodes as Op
@@ -376,6 +376,25 @@ returns the single byte 0xEF, the EOF-reserved prefix a deploy must reject."""
 _STACK_LIMIT = 1024  # EIP-3860 era stack ceiling; the 1025th push overflows
 
 
+BLOCKHASH_DEPTHS: Tuple[int, ...] = (1, 1, 2, 3, 0, 257)
+"""How far back a BLOCKHASH read looks. One is the parent, which from a
+case's second block on is a block the case itself produced; two and
+three reach further into the case. Zero is the current block and 257 is
+one past the window: both read as zero, the near-misses."""
+
+
+def blockhash_read(depth: int, slot: int) -> Bytecode:
+    """
+    Store the hash of the block ``depth`` before this one.
+
+    The stored value is the witness: it must equal the hash the fixture
+    records for that block, or zero outside the window. A depth past the
+    chain's start underflows to a huge number, which is outside the window
+    too.
+    """
+    return Op.SSTORE(slot, Op.BLOCKHASH(Op.SUB(Op.NUMBER, depth)))
+
+
 def _returndata_overread(slot: int) -> Bytecode:
     """
     Copy one byte past the current returndata, halting the frame.
@@ -591,6 +610,10 @@ def fuzzed_bytecode(
             call_slot += 1
             terminated = True
             break
+        if rng.random() < walk.blockhash_read:
+            code += blockhash_read(rng.choice(BLOCKHASH_DEPTHS), call_slot)
+            call_slot += 1
+            continue
         if interleaver is not None and rng.random() < walk.spill_interleave:
             code += _alternating_spill_chain(
                 rng, domains, interleaver, call_slot

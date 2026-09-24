@@ -22,7 +22,7 @@ Novelty is set-union across all three layers (see the fuzzer's NoveltyTracker).
 """
 
 from dataclasses import dataclass
-from typing import FrozenSet, Optional, Set, Tuple
+from typing import Dict, FrozenSet, Optional, Set, Tuple
 
 from ethereum.trace import (
     EvmStop,
@@ -55,6 +55,7 @@ EVENT_WITNESSES = {
     "state-gas-interleave": "trace",
     "tx-state-gas": "behavioral",
     "tx-state-gas-spill": "cross-implementation",
+    "later-block-code": "behavioral",
 }
 """Every L1 tag the tracer can emit, with the witness kind that validates
 its detector -- an event registers here only with one:
@@ -214,6 +215,12 @@ class Signature:
     carries nothing. It exists so typed transactions are a reach cell
     at all. Before it they were not rare in the map; they were absent
     from it, which no rate floor or gate can see."""
+    block_steps: Tuple[Tuple[int, int, int], ...] = ()
+    """`(block number, transactions that ran code, opcodes they ran)`,
+    sorted by block.
+    Telemetry like `max_depth`, not novelty: it feeds the per-block
+    execution density. Whether a later block runs code at all did not
+    see a starved block, which still ran a little."""
 
     def is_empty(self) -> bool:
         """Return whether nothing was observed."""
@@ -232,7 +239,27 @@ def merge_signatures(a: Signature, b: Signature) -> Signature:
         max(a.max_depth, b.max_depth),
         a.interleavings | b.interleavings,
         a.tx_types | b.tx_types,
+        _sum_steps(a.block_steps, b.block_steps),
     )
+
+
+def _sum_steps(
+    a: Tuple[Tuple[int, int, int], ...], b: Tuple[Tuple[int, int, int], ...]
+) -> Tuple[Tuple[int, int, int], ...]:
+    """Add two block-step tallies block by block."""
+    total: Dict[int, Tuple[int, int]] = {}
+    for number, txs, steps in a + b:
+        before = total.get(number, (0, 0))
+        total[number] = (before[0] + txs, before[1] + steps)
+    return tuple(
+        (number, txs, steps) for number, (txs, steps) in sorted(total.items())
+    )
+
+
+def _block_number(evm: object) -> int:
+    """The number of the block this frame runs in, 0 when unknown."""
+    block_env = getattr(evm, "block_env", None)
+    return int(getattr(block_env, "number", 0))
 
 
 class SignatureTracer:
@@ -243,6 +270,8 @@ class SignatureTracer:
         self._bigrams: Set[Tuple[str, str]] = set()
         self._frames: Set[Tuple[int, str, str]] = set()
         self._events: Set[str] = set()
+        self._block_steps: Dict[int, int] = {}
+        self._block_txs: Dict[int, Set[int]] = {}
         self._max_depth = 0
         # True only between a CALL-family OpStart and the next OpStart or
         # PrecompileStart: the window in which an OutOfGasError means the
@@ -334,6 +363,18 @@ class SignatureTracer:
             self._events.add("child-state-gas-spill")
         self._fold_state_gas(evm, depth)
         if isinstance(event, OpStart):
+            if tx_index is not None:
+                number = _block_number(evm)
+                self._block_steps[number] = (
+                    self._block_steps.get(number, 0) + 1
+                )
+                self._block_txs.setdefault(number, set()).add(int(tx_index))
+            if tx_index is not None and _block_number(evm) >= 2:
+                # A user transaction ran code after the case's first block.
+                # A single gas budget spent in draw order once left later
+                # blocks nearly empty, and nothing noticed: this is the
+                # rate that says whether a chain is exercised past block 1.
+                self._events.add("later-block-code")
             name = event.op.name
             if self._prev_op is not None:
                 self._bigrams.add((self._prev_op, name))
@@ -423,4 +464,8 @@ class SignatureTracer:
             frozenset(self._bigrams),
             self._max_depth,
             frozenset(self._interleavings),
+            block_steps=tuple(
+                (number, len(self._block_txs[number]), steps)
+                for number, steps in sorted(self._block_steps.items())
+            ),
         )

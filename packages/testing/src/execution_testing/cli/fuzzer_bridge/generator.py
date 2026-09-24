@@ -48,7 +48,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 16
+GENERATOR_VERSION = 17
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -134,9 +134,7 @@ def _derive_key(rng: random.Random) -> Hash:
     return Hash((rng.randrange(1, n)).to_bytes(32, "big"))
 
 
-def _fee_market_fields(
-    rng: random.Random, domains: ValueDomains
-) -> Dict[str, Any]:
+def _fee_market_fields(rng: random.Random, base: int) -> Dict[str, Any]:
     """
     Fee-market fields bracketing the base fee.
 
@@ -147,7 +145,6 @@ def _fee_market_fields(
     transaction is invalid and would be discarded before any comparison
     could see it.
     """
-    base = domains.base_fee_per_gas
     max_fee = rng.choice((base, base + 1, 2 * base, 10 * base))
     priority = rng.choice(tuple({0, 1, max_fee - 1, max_fee}))
     return {
@@ -286,6 +283,36 @@ def _withdrawals(
     return drawn
 
 
+def _highest_base_fee(fork: Fork, domains: ValueDomains, block: int) -> int:
+    """
+    The highest base fee the ``block``-th block of a case can have.
+
+    The base fee moves between blocks with how full the parent was, so a
+    fee drawn against the first block's can be invalid by the time the
+    transaction lands in a later one -- it was, for one multi-block case
+    in five. Whether it is depends on execution, so it is derived rather
+    than drawn: every parent is assumed full, the fork's own calculator
+    gives the ceiling, and a fee at or above it is valid whatever happens
+    first. The first block keeps the exact base fee, and with it the
+    inclusion boundary the fee draw aims at.
+    """
+    calculate = fork.base_fee_per_gas_calculator()
+    base_fee = domains.base_fee_per_gas
+    for _ in range(block):
+        base_fee = calculate(
+            parent_base_fee_per_gas=base_fee,
+            parent_gas_used=domains.block_gas_limit,
+            parent_gas_limit=domains.block_gas_limit,
+        )
+    return base_fee
+
+
+def _block_count(rng: random.Random, domains: ValueDomains) -> int:
+    """How many blocks the case's transactions are spread across."""
+    counts, shares = zip(*domains.block_count_shares, strict=False)
+    return int(rng.choices(counts, weights=shares)[0])
+
+
 def generate_fuzzer_output(
     fork: Fork,
     seed: int,
@@ -421,28 +448,36 @@ def generate_fuzzer_output(
 
     transactions: List[FuzzerTransactionInput] = []
     # Transactions must fit the block, or the block itself is invalid.
-    gas_budget = domains.block_gas_limit
     tx_gas_cap = fork.transaction_gas_limit_cap() or domains.block_gas_limit
     tx_gas_choices = tuple(
         tx_gas_cap // divisor for divisor in (128, 32, 8, 1)
     )
     types, shares = zip(*domains.tx_type_shares, strict=False)
-    for _ in range(num_transactions):
+    block_count = _block_count(rng, domains)
+    # One budget per block. A single budget spent in draw order let the
+    # first block's transactions use it up, leaving later blocks nearly
+    # empty: 388 of 409 executed BLOCKHASH reads landed in the first block.
+    budgets = [domains.block_gas_limit] * block_count
+    for index in range(num_transactions):
+        block = index * block_count // num_transactions
+        base_fee = _highest_base_fee(fork, domains, block)
         sender = rng.choice(sender_addresses)
         to = Address(rng.choice(tx_targets))
         choices = tx_gas_choices
         if domains.reservoir_tx_gas and rng.random() < RESERVOIR_TX_RATE:
             choices = domains.reservoir_tx_gas + tx_gas_choices
-        affordable = [g for g in choices if g <= gas_budget]
+        affordable = [g for g in choices if g <= budgets[block]]
         for rejected in choices:
-            if rejected > gas_budget:
+            if rejected > budgets[block]:
                 DISCARDED_DRAWS["tx_gas"] = (
                     DISCARDED_DRAWS.get("tx_gas", 0) + 1
                 )
         if not affordable:
-            break
+            # This block is full; the next transaction may belong to a
+            # later one with room, so the draw goes on.
+            continue
         gas = rng.choice(affordable)
-        gas_budget -= gas
+        budgets[block] -= gas
         tx_type = rng.choices(types, weights=shares)[0]
         # Read before building authorizations: an authorization whose
         # authority is this sender advances `nonces[sender]`, and the
@@ -450,9 +485,9 @@ def generate_fuzzer_output(
         tx_nonce = nonces[sender]
         fields: Dict[str, Any] = {}
         if tx_type == 0:
-            fields["gas_price"] = HexNumber(2 * domains.base_fee_per_gas)
+            fields["gas_price"] = HexNumber(2 * base_fee)
         else:
-            fields.update(_fee_market_fields(rng, domains))
+            fields.update(_fee_market_fields(rng, base_fee))
         if tx_type == 4:
             fields["authorization_list"] = _authorizations(
                 rng,
@@ -466,6 +501,7 @@ def generate_fuzzer_output(
         transactions.append(
             FuzzerTransactionInput(
                 **{"from": sender},
+                block=block,
                 to=to,
                 gas=HexNumber(gas),
                 nonce=HexNumber(tx_nonce),
@@ -513,4 +549,5 @@ def generate_fuzzer_output(
         transactions=transactions,
         env=env,
         withdrawals=withdrawals,
+        block_count=block_count,
     )
