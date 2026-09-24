@@ -1654,3 +1654,34 @@ def test_a_new_finding_alerts_once_and_a_known_one_never(
     (alert,) = sent
     assert "seeds 0..2" in alert and "1 new finding(s)" in alert
     assert "erigon" in alert and "geth" not in alert
+
+
+def test_a_token_in_a_client_env_never_reaches_disk(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Manifests keep a toolchain path and only the names of other
+    variables: a token put in a client's `env:` by mistake is in neither
+    the run's manifest nor its segment's.
+    """
+    failing = {"besu": lambda _s: False}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        count=3,
+        batch=3,
+        client_env={
+            "besu": {"JAVA_HOME": "/opt/jdk-25", "API_TOKEN": "hunter2"}
+        },
+    )
+    out = tmp_path / "out"
+    for path in (
+        out / "manifest.json",
+        out / "segments" / f"{state.segment}.json",
+    ):
+        text = path.read_text()
+        assert "hunter2" not in text
+        assert json.loads(text)["client_env"] == {
+            "besu": {"API_TOKEN": "[redacted]", "JAVA_HOME": "/opt/jdk-25"}
+        }
