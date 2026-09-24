@@ -6,11 +6,13 @@ from execution_testing.forks import Osaka
 from ..fuzzer_bridge.corpus import minimize
 from ..fuzzer_bridge.generator import (
     AUTHORITY_ACCOUNTS,
+    BURNER_ADDRESS,
     DESTRUCTOR_ADDRESS,
     FAILER_ADDRESS,
     GENERATOR_VERSION,
     INTERLEAVER_ADDRESS,
     SPILLER_ADDRESS,
+    STATE_EXHAUSTER_ADDRESS,
     TOUCHER_ADDRESS,
     generate_fuzzer_output,
 )
@@ -59,6 +61,8 @@ def test_generated_shape() -> None:
             Address(INTERLEAVER_ADDRESS),
             Address(FAILER_ADDRESS),
             Address(TOUCHER_ADDRESS),
+            Address(STATE_EXHAUSTER_ADDRESS),
+            Address(BURNER_ADDRESS),
         )
     ]
     assert len(senders) <= 2

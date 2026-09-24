@@ -242,6 +242,15 @@ class ValueDomains:
     failure whatever the callee's code does."""
     toucher_margins: Tuple[float, ...] = (1.5, 3.0)
     """Gas for a toucher transaction as a multiple of its measured need."""
+    state_exhaust_tx_rate: float = 0.04
+    """Share of transactions sent to the state exhauster: a transaction
+    funded above the cap, so it carries a state reservoir, that empties
+    the reservoir and then runs out of gas on a state charge. At v19 that
+    was 11 of ~1,020 top-level out-of-gas halts in 400 seeds."""
+    state_exhaust_reservoir_stores: Tuple[float, ...] = (0.5, 1.0, 2.5)
+    """The reservoir, in fresh-slot stores' worth of state gas. A
+    fraction leaves one store paying partly from the reservoir and partly
+    from execution gas."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays

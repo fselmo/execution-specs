@@ -253,6 +253,36 @@ def _tally_toucher(case: Any, tally: Dict[str, Counter]) -> None:
                 tally["toucher_target"]["pool"] += 1
 
 
+def _tally_state_exhaust(
+    case: Any, fork: "Fork", tally: Dict[str, Counter]
+) -> None:
+    """
+    Count the state exhauster's presence and the reservoirs it was given.
+
+    The reservoir is what the gas limit exceeds the cap by, measured in
+    fresh-slot stores: under one leaves a store paying from both pools.
+    """
+    from execution_testing.base_types import Address
+    from execution_testing.vm import Opcodes as Op
+
+    from .generator import STATE_EXHAUSTER_ADDRESS
+
+    exhauster = Address(STATE_EXHAUSTER_ADDRESS)
+    owned = [tx for tx in case.transactions if tx.to == exhauster]
+    tally["state_exhaust_tx"]["present" if owned else "absent"] += 1
+    cap = fork.transaction_gas_limit_cap()
+    store = Op.SSTORE(key_warm=False, original_value=0, new_value=1)
+    per_store = store.state_cost(fork)
+    for tx in owned:
+        stores = (int(tx.gas) - (cap or 0)) / per_store
+        if stores < 1:
+            tally["state_exhaust_reservoir"]["under_one_store"] += 1
+        elif stores == 1:
+            tally["state_exhaust_reservoir"]["one_store"] += 1
+        else:
+            tally["state_exhaust_reservoir"]["several"] += 1
+
+
 def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     """
     Share of draws holding each value of every multi-valued input axis.
@@ -288,6 +318,8 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "toucher_tx": Counter(),
         "toucher_touch": Counter(),
         "toucher_target": Counter(),
+        "state_exhaust_tx": Counter(),
+        "state_exhaust_reservoir": Counter(),
     }
     reads = _blockhash_signatures()
 
@@ -369,6 +401,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         else:
             tally["failing_tx"]["absent"] += 1
         _tally_toucher(case, tally)
+        _tally_state_exhaust(case, fork, tally)
         for tx in case.transactions:
             target = (
                 int.from_bytes(bytes(tx.to), "big")
@@ -504,6 +537,8 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
         "value_call",
     ),
     "toucher_target": ("self", "pool", "other_tx"),
+    "state_exhaust_tx": ("present", "absent"),
+    "state_exhaust_reservoir": ("under_one_store", "one_store", "several"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""
