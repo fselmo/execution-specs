@@ -1,0 +1,43 @@
+From ae23ae3bacf4ab2144338937fd7811105a2611be Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <fselmo2@gmail.com>
+Date: Wed, 23 Sep 2026 23:30:09 +0000
+Subject: [PATCH 2/2] Consensus: print the sequential retry of a parallel BAL
+ failure
+
+BranchProcessor catches BlockAccessListSequentialRetryException and
+re-processes the block with ForceSequentialBlockAccessList, so a failure of
+the parallel path on a valid access list comes back as the sequential
+verdict and nothing records that it happened. The retry is now printed to
+stderr with a BAL-RETRY tag, the block number, and the inner exception's
+class and message: a retry on a fixture whose list is valid is the masked
+parallel-path failure a fuzzing runner has to count.
+
+Not a runner change: it touches Nethermind.Consensus, so the series admits
+this one file by name.
+---
+ .../Nethermind.Consensus/Processing/BranchProcessor.cs      | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/Nethermind/Nethermind.Consensus/Processing/BranchProcessor.cs b/src/Nethermind/Nethermind.Consensus/Processing/BranchProcessor.cs
+index 397a654534..7467e81b78 100644
+--- a/src/Nethermind/Nethermind.Consensus/Processing/BranchProcessor.cs
++++ b/src/Nethermind/Nethermind.Consensus/Processing/BranchProcessor.cs
+@@ -141,10 +141,14 @@ public class BranchProcessor(
+                 {
+                     (processedBlock, receipts) = blockProcessor.ProcessOne(suggestedBlock, blockOptions, blockTracer, spec, token);
+                 }
+-                catch (BlockProcessor.BlockAccessListSequentialRetryException) when (
++                catch (BlockProcessor.BlockAccessListSequentialRetryException retry) when (
+                     worldStateCloser is not null &&
+                     !blockOptions.ContainsFlag(ProcessingOptions.ForceSequentialBlockAccessList))
+                 {
++                    // The retry hides the parallel failure behind the sequential verdict, so it is
++                    // printed where a fuzzing runner can count it, with the class that caused it.
++                    Console.Error.WriteLine(
++                        $"BAL-RETRY block={suggestedBlock.Number} exception={retry.InnerException?.GetType().Name ?? "unknown"} message={retry.InnerException?.Message}");
+                     CancellationTokenExtensions.CancelDisposeAndClear(ref backgroundCancellation);
+                     QueueClearCaches(preWarmTask);
+                     WaitAndClear(ref preWarmTask);
+-- 
+2.47.3
+

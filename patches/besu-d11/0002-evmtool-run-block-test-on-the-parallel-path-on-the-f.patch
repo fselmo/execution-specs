@@ -1,0 +1,70 @@
+From f0d470abaa8f469654fee5a48abf09c2360df8f7 Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <fselmo2@gmail.com>
+Date: Thu, 24 Sep 2026 13:43:49 +0000
+Subject: [PATCH 2/3] evmtool: run block-test on the parallel path, on the
+ fixture's access list
+
+block-test built its schedule with parallel processing off and called the
+importBlock overload that passes Optional.empty() for the block access list,
+so the list the fixture already parses never reached the processor and
+besu judged every fixture on the sequential path. The list is now delivered
+and the parallel processor is the default, which is what a Bonsai node runs;
+--bal.sequential selects the old path, so the same binary can judge a shard
+both ways.
+
+Probed at ParallelTransactionPreprocessing.run on a 500-fixture shard:
+500 of 500 blocks took BalConcurrentTransactionProcessor, none the
+optimistic scheduler, none skipped preprocessing, none fell back; with
+--bal.sequential, 0 of 500. Verdicts 500/500 both ways. A fixture whose
+delivered list drops one account passes on the stock runner and is
+rejected here.
+---
+ .../besu/evmtool/BlockchainTestSubCommand.java | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/ethereum/evmtool/src/main/java/org/hyperledger/besu/evmtool/BlockchainTestSubCommand.java b/ethereum/evmtool/src/main/java/org/hyperledger/besu/evmtool/BlockchainTestSubCommand.java
+index 1d2b6189a6..69ed819ebd 100644
+--- a/ethereum/evmtool/src/main/java/org/hyperledger/besu/evmtool/BlockchainTestSubCommand.java
++++ b/ethereum/evmtool/src/main/java/org/hyperledger/besu/evmtool/BlockchainTestSubCommand.java
+@@ -156,6 +156,13 @@ public class BlockchainTestSubCommand implements Runnable, IExitCodeGenerator {
+       description = "Verbose logs, listing all skipped tests")
+   private final Boolean verbose = false;
+ 
++  @Option(
++      names = {"--bal.sequential"},
++      description =
++          "Process each block sequentially. Without it the parallel block processor runs, "
++              + "scheduling from the block access list the fixture delivers.")
++  private final Boolean balSequential = false;
++
+   @ParentCommand private final EvmToolCommand parentCommand;
+ 
+   // picocli does it magically
+@@ -347,7 +354,9 @@ public class BlockchainTestSubCommand implements Runnable, IExitCodeGenerator {
+     // test is validated against the wrong parameters.
+     final ProtocolSchedule schedule =
+         ReferenceTestProtocolSchedules.cached(
+-                parentCommand.getEvmConfiguration(), spec.getBlobScheduleOptions().orElse(null))
++                parentCommand.getEvmConfiguration(),
++                spec.getBlobScheduleOptions().orElse(null),
++                !balSequential)
+             .getByName(spec.getNetwork());
+ 
+     BlockTestTracerManager tracerManager = null;
+@@ -409,7 +418,12 @@ public class BlockchainTestSubCommand implements Runnable, IExitCodeGenerator {
+         final Stopwatch timer = Stopwatch.createStarted();
+ 
+         final BlockImportResult importResult =
+-            blockImporter.importBlock(context, block, validationMode, validationMode);
++            blockImporter.importBlock(
++                context,
++                block,
++                validationMode,
++                validationMode,
++                candidateBlock.getBlockAccessList());
+ 
+         timer.stop();
+ 
+-- 
+2.47.3
+
