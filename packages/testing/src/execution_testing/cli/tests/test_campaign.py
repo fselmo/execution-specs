@@ -1400,7 +1400,7 @@ def test_the_manifest_names_the_format_the_run_wrote(
     assert manifest["fixture_format"] == "blockchain_test_engine"
 
 
-def _splitting_runner(fails: Any) -> Any:
+def _splitting_runner(fails: Any, meet: Any = None) -> Any:
     """A runner whose file runs error on every fixture when `fails` says."""
     from ..fuzzer_bridge.runners import (
         RUNNER_ERROR_PREFIX,
@@ -1411,8 +1411,15 @@ def _splitting_runner(fails: Any) -> Any:
     runner = FixtureRunner("besu", Path("/bin/x"), "BesuFixtureConsumer")
     runner.runs = []  # type: ignore[attr-defined]
 
-    def run_file(_path: Path, names: Any) -> Any:
+    def run_file(path: Path, names: Any) -> Any:
         names = list(names)
+        if meet is not None and len(names) < 8:
+            # Both splits sit inside a part run at once before either
+            # reads its file, so a shared file name cannot go unnoticed.
+            meet.wait()
+        # Judge what is in the file, as a real runner does: a half another
+        # split overwrote shows up as the wrong fixtures.
+        assert sorted(json.loads(path.read_text())) == sorted(names)
         runner.runs.append(names)  # type: ignore[attr-defined]
         runner.last_stderr = f"BAL-RETRY {len(names)}\n"
         if fails(names):
@@ -1782,3 +1789,41 @@ def test_a_new_finding_is_judged_again_solo_and_under_load(
     (alert,) = sent
     assert f"reproduced {reproduced[0]}/5 solo" in alert
     assert ("unexplained" in alert) == (triage == "unexplained")
+
+
+def test_two_runners_split_the_same_batch_at_once(tmp_path: Path) -> None:
+    """
+    Every client judges the same batch file concurrently, so two splits
+    can run side by side; each must judge its own halves.
+    """
+    import threading
+
+    from ..fuzzer_bridge.campaign import judge_splitting
+
+    names = [f"seed_{i}" for i in range(8)]
+    batch = tmp_path / "batch.json"
+    batch.write_text(json.dumps({n: {} for n in names}))
+    meet = threading.Barrier(2, timeout=5)
+    runners = {
+        "a": _splitting_runner(lambda part: "seed_1" in part, meet),
+        "b": _splitting_runner(lambda part: "seed_6" in part, meet),
+    }
+    results: Dict[str, Any] = {}
+    threads = [
+        threading.Thread(
+            target=lambda k=k: results.__setitem__(
+                k, judge_splitting(runners[k], batch, names)
+            )
+        )
+        for k in runners
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    failed = {
+        k: [n for n, v in verdicts.items() if not v.passed]
+        for k, verdicts in results.items()
+    }
+    assert failed == {"a": ["seed_1"], "b": ["seed_6"]}
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["batch.json"]
