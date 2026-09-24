@@ -301,6 +301,8 @@ def campaign(
             ),
             parallel_lanes=tuple(health.parallel_lanes),
             parallel_drop_tolerance=health.parallel_drop_tolerance,
+            parallel_baseline_blocks=health.parallel_baseline_blocks,
+            parallel_proof_floor=health.parallel_proof_floor,
         ),
     )
     if producer is not None:

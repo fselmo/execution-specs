@@ -2041,7 +2041,11 @@ class _DecidingRunner(_FakeRunner):
 
 
 def _deciding_campaign(
-    tmp_path: Path, monkeypatch: Any, decide: Any, **kw: Any
+    tmp_path: Path,
+    monkeypatch: Any,
+    decide: Any,
+    calibration: int = 20,
+    **kw: Any,
 ) -> Any:
     from ..fuzzer_bridge.health import HealthPolicy
 
@@ -2058,7 +2062,11 @@ def _deciding_campaign(
         ),
         batch=20,
         baseline=False,
-        health=HealthPolicy(window=20, parallel_lanes=("nethermind",)),
+        health=HealthPolicy(
+            window=20,
+            parallel_lanes=("nethermind",),
+            parallel_baseline_blocks=calibration,
+        ),
         **kw,
     )
 
@@ -2069,24 +2077,25 @@ def test_parallel_decisions_are_joined_counted_and_baselined(
     """
     Each decision line is joined to its block by hash; a lane's decided
     fraction is its parallel decisions over the BAL-carrying blocks, a
-    line for no block is unmatched, and the segment's first batch sets
-    the baseline. A decision line is not a masked failure: it neither
-    alerts nor keeps the batch.
+    line for no block is unmatched, and the baseline accumulates over the
+    segment's opening batches until they hold the calibration's blocks.
+    A decision line is not a masked failure: it neither alerts nor keeps
+    the batch.
     """
     from ..fuzzer_bridge import campaign as campaign_module
 
     sent: List[str] = []
     monkeypatch.setattr(campaign_module, "send_alert", sent.append)
     state = _deciding_campaign(
-        tmp_path, monkeypatch, lambda seed: seed % 4 != 0, count=40
+        tmp_path, monkeypatch, lambda seed: seed % 4 != 0, 40, count=60
     )
     assert state.parallel["nethermind"] == {
-        "bal_blocks": 40,
-        "decisions": 40,
-        "parallel": 30,
-        "unmatched": 2,
+        "bal_blocks": 60,
+        "decisions": 60,
+        "parallel": 45,
+        "unmatched": 3,
     }
-    assert state.segments[-1]["parallel_baseline"] == {"nethermind": [15, 20]}
+    assert state.segments[-1]["parallel_baseline"] == {"nethermind": [30, 40]}
     assert state.status == "done" and sent == []
     assert list((tmp_path / "out" / "fixtures").iterdir()) == []
 
@@ -2124,3 +2133,36 @@ def test_a_lane_without_a_baseline_cannot_pause(
     assert state.segments[-1]["parallel_baseline"] == {}
     note = state.health["parallel"]["nethermind"]["note"]
     assert note == "no baseline for this segment: cannot pause"
+
+
+def test_a_lane_is_calibrating_until_the_baseline_has_its_blocks(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    One batch is a noisy baseline, so the lane calibrates over the
+    segment's opening batches and cannot pause meanwhile, however far its
+    decisions fall.
+    """
+    state = _deciding_campaign(
+        tmp_path, monkeypatch, lambda seed: seed < 20, 100, count=60
+    )
+    assert state.status == "done"
+    assert "parallel_baseline" not in state.segments[-1]
+    note = state.health["parallel"]["nethermind"]["note"]
+    assert note == "calibrating (60/100 BAL blocks): cannot pause yet"
+
+
+def test_a_baseline_below_the_pre_run_proof_is_flagged(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    The pre-run proof runs every BAL-carrying block in parallel; a binary
+    calibrating at half has already degraded, and a drop from its
+    baseline could never show it, so the lane is flagged.
+    """
+    state = _deciding_campaign(
+        tmp_path, monkeypatch, lambda seed: seed % 2 == 0, count=60
+    )
+    guarded = state.health["parallel"]["nethermind"]
+    assert guarded["baseline"] == 0.5
+    assert "below the pre-run proof" in guarded["note"]
