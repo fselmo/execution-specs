@@ -200,6 +200,59 @@ versions before it is a regression. An absolute floor cannot see a rate
 fall by half and stay above it; this can."""
 
 
+_TOUCH_KINDS = {
+    0x31: "balance",
+    0x3B: "extcodesize",
+    0x3F: "extcodehash",
+    0x3C: "extcodecopy",
+    0x54: "sload",
+    0x55: "sstore",
+    0xF1: "value_call",
+}
+"""The toucher's touch opcodes, by the kind names the generator draws."""
+
+
+def _tally_toucher(case: Any, tally: Dict[str, Counter]) -> None:
+    """
+    Count the toucher's presence, touch kinds and target classes.
+
+    Read back from the case: each account-level target is a 20-byte push
+    in the toucher's code, classed as itself, an address another
+    transaction in an owned block sends from or to, or any other pool
+    address. Storage touches act on the toucher's own storage.
+    """
+    from execution_testing.base_types import Address
+
+    from .generator import TOUCHER_ADDRESS
+
+    toucher = Address(TOUCHER_ADDRESS)
+    owned = {tx.block for tx in case.transactions if tx.to == toucher}
+    if not owned:
+        tally["toucher_tx"]["absent"] += 1
+        return
+    tally["toucher_tx"]["present"] += 1
+    others = {
+        int.from_bytes(bytes(address), "big")
+        for tx in case.transactions
+        if tx.block in owned and tx.to != toucher
+        for address in (tx.from_, tx.to)
+        if address is not None
+    }
+    for opcode, immediate in _decode(bytes(case.accounts[toucher].code)):
+        if opcode in _TOUCH_KINDS:
+            tally["toucher_touch"][_TOUCH_KINDS[opcode]] += 1
+            if opcode in (0x54, 0x55):
+                tally["toucher_target"]["self"] += 1
+        elif opcode == 0x73:  # PUSH20: an account-level target
+            target = int.from_bytes(immediate, "big")
+            if target == TOUCHER_ADDRESS:
+                tally["toucher_target"]["self"] += 1
+            elif target in others:
+                tally["toucher_target"]["other_tx"] += 1
+            else:
+                tally["toucher_target"]["pool"] += 1
+
+
 def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     """
     Share of draws holding each value of every multi-valued input axis.
@@ -232,6 +285,9 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "blockhash_depth": Counter(),
         "failing_tx": Counter(),
         "failer_outcome": Counter(),
+        "toucher_tx": Counter(),
+        "toucher_touch": Counter(),
+        "toucher_target": Counter(),
     }
     reads = _blockhash_signatures()
 
@@ -312,6 +368,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
                 raise ValueError(f"unclassified failer ending {last:#x}")
         else:
             tally["failing_tx"]["absent"] += 1
+        _tally_toucher(case, tally)
         for tx in case.transactions:
             target = (
                 int.from_bytes(bytes(tx.to), "big")
@@ -436,6 +493,17 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "blockhash_depth": ("parent", "in_case", "current", "out_of_window"),
     "failing_tx": ("present", "absent"),
     "failer_outcome": ("revert", "exceptional_halt"),
+    "toucher_tx": ("present", "absent"),
+    "toucher_touch": (
+        "balance",
+        "extcodesize",
+        "extcodehash",
+        "extcodecopy",
+        "sload",
+        "sstore",
+        "value_call",
+    ),
+    "toucher_target": ("self", "pool", "other_tx"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""

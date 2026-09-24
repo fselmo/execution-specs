@@ -24,6 +24,7 @@ from ..fuzzer_bridge import campaign as mod
 from ..fuzzer_bridge.density import axis_collapse_warnings, axis_coverage
 from ..fuzzer_bridge.generator import (
     FAILER_ADDRESS,
+    TOUCHER_ADDRESS,
     failer_code,
     generate_fuzzer_output,
 )
@@ -216,3 +217,131 @@ def test_only_the_succeeding_failer_commits_a_storage_write() -> None:
     succeeded = _fill(_send_to_failer(code[: -len(ending)], storage))
     index, _, _ = _failer_tx(succeeded)
     assert index in _indices_with_storage_changes(succeeded["blocks"][0])
+
+
+TOUCHER = Address(TOUCHER_ADDRESS)
+SHARED = Address(0x3F200)
+"""A contract both transactions reach: the first pays it and bumps its
+slot 0, the toucher reads its balance and calls it."""
+
+
+def _shared_block(ending: bytes) -> FuzzerOutput:
+    """
+    A two-transaction block: the first pays `SHARED`, whose code adds one
+    to its slot 0; the second runs a toucher that reads `SHARED`'s
+    balance, calls it with one wei, reads and writes its own slot 0, and
+    ends with `ending`.
+    """
+    case = generate_fuzzer_output(Amsterdam, 0)
+    accounts = dict(case.accounts)
+    accounts[SHARED] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(1),
+        code=Bytes(bytes(Op.SSTORE(0, Op.ADD(Op.SLOAD(0), 1)))),
+        storage={HexNumber(0): HexNumber(5)},
+    )
+    toucher = (
+        Op.POP(Op.BALANCE(Op.PUSH20(SHARED)))
+        + Op.POP(Op.CALL(50_000, Op.PUSH20(SHARED), 1, 0, 0, 0, 0))
+        + Op.POP(Op.SLOAD(0))
+        + Op.SSTORE(1, 9)
+    )
+    accounts[TOUCHER] = FuzzerAccountInput(
+        balance=HexNumber(1),
+        nonce=HexNumber(1),
+        code=Bytes(bytes(toucher) + ending),
+        storage={HexNumber(0): HexNumber(3), HexNumber(1): HexNumber(4)},
+    )
+    first, second = case.transactions[:2]
+    plain = {"authorization_list": None, "gas_need_fraction": None}
+    transactions = [
+        first.model_copy(
+            update={
+                **plain,
+                "to": SHARED,
+                "value": HexNumber(7),
+                "data": b"",
+                "gas": HexNumber(SMALLEST_GAS),
+                "block": 0,
+            }
+        ),
+        second.model_copy(
+            update={
+                **plain,
+                "to": TOUCHER,
+                "value": HexNumber(0),
+                "data": b"",
+                "gas": HexNumber(SMALLEST_GAS),
+                "block": 0,
+            }
+        ),
+    ]
+    return case.model_copy(
+        update={
+            "accounts": accounts,
+            "transactions": transactions,
+            "block_count": 1,
+            "withdrawals": [],
+        }
+    )
+
+
+def _entry(fixture: Dict[str, Any], address: Address) -> Dict[str, Any]:
+    (block,) = fixture["blocks"]
+    return next(
+        entry
+        for entry in block["blockAccessList"]
+        if entry["address"].lower() == str(address).lower()
+    )
+
+
+def _indices(changes: List[Dict[str, Any]]) -> List[int]:
+    return [int(change["blockAccessIndex"], 16) for change in changes]
+
+
+def test_a_failed_toucher_leaves_the_shared_entries_intact() -> None:
+    """
+    The toucher reverts after reading and calling an account the first
+    transaction changed. That account keeps exactly the first
+    transaction's changes, at index 1; nothing changes at the toucher's
+    index 2; the toucher's own slots are reads.
+    """
+    fixture = _fill(_shared_block(bytes(Op.REVERT(0, 0))))
+    (block,) = fixture["blocks"]
+    assert [bool(r["status"]) for r in block["receipts"]] == [True, False]
+
+    shared = _entry(fixture, SHARED)
+    assert _indices(shared["balanceChanges"]) == [1]
+    (slot,) = shared["storageChanges"]
+    assert int(slot["slot"], 16) == 0
+    assert _indices(slot["slotChanges"]) == [1]
+    assert int(slot["slotChanges"][0]["postValue"], 16) == 6
+
+    toucher = _entry(fixture, TOUCHER)
+    assert _slots(toucher["storageReads"]) == {0, 1}
+    assert toucher["storageChanges"] == []
+    assert toucher["balanceChanges"] == []
+
+
+def test_a_succeeding_toucher_adds_its_own_changes_at_its_index() -> None:
+    """
+    The near-miss: the same toucher ending in STOP. The shared account
+    now changes at both indices, the call's wei and the second bump at 2.
+    """
+    fixture = _fill(_shared_block(bytes(Op.STOP)))
+    shared = _entry(fixture, SHARED)
+    assert _indices(shared["balanceChanges"]) == [1, 2]
+    (slot,) = shared["storageChanges"]
+    assert _indices(slot["slotChanges"]) == [1, 2]
+    assert int(slot["slotChanges"][1]["postValue"], 16) == 7
+    toucher = _entry(fixture, TOUCHER)
+    assert _indices(toucher["balanceChanges"]) == [2]
+
+
+def test_every_toucher_axis_keeps_all_its_values() -> None:
+    """Presence, every touch kind and every target class stay drawn."""
+    coverage = axis_coverage(Amsterdam, range(0, 400))
+    warnings_ = [
+        w for w in axis_collapse_warnings(coverage) if w.startswith("toucher")
+    ]
+    assert warnings_ == []

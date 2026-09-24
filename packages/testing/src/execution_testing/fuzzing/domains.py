@@ -215,6 +215,33 @@ class ValueDomains:
     )
     """How the failer ends. Both roll its writes back, and both must leave
     what it read and wrote in the list as reads."""
+    toucher_tx_rate: float = 0.08
+    """Share of transactions sent to the toucher: a helper that touches
+    accounts other transactions touch, then fails, so its accesses merge
+    into entries other transactions also produce at other indices."""
+    toucher_touch_kinds: Tuple[str, ...] = (
+        "balance",
+        "extcodesize",
+        "extcodehash",
+        "extcodecopy",
+        "sload",
+        "sstore",
+        "value_call",
+    )
+    toucher_target_shares: Tuple[Tuple[str, float], ...] = (
+        ("self", 0.2),
+        ("pool", 0.4),
+        ("other_tx", 0.4),
+    )
+    """Whom an account-level touch reaches: the toucher itself, any
+    mixed-pool address, or an address another transaction in the same
+    block sends from or to. Storage touches are always its own."""
+    toucher_max_touches: int = 4
+    toucher_call_gas: int = 50_000
+    """Gas each value call forwards. Bounded, so the toucher reaches its
+    failure whatever the callee's code does."""
+    toucher_margins: Tuple[float, ...] = (1.5, 3.0)
+    """Gas for a toucher transaction as a multiple of its measured need."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays

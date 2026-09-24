@@ -49,7 +49,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 18
+GENERATOR_VERSION = 19
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -134,6 +134,90 @@ def failer_code(
     storage = {
         HexNumber(slot): HexNumber(rng.randrange(1, 2**16))
         for slot in range(2 * pairs)
+    }
+    return bytes(code), storage
+
+
+TOUCHER_ADDRESS = 0x1FFFB
+"""Helper a transaction targets to fail after touching shared accounts.
+
+Where the failer touches only its own storage, the toucher reads and
+calls into addresses other transactions in the block send from or to, so
+a failed transaction's accesses land in entries other transactions also
+produce, at other indices. Its storage touches are its own: SLOAD and
+SSTORE act only on the executing contract. Its code is drawn after the
+transactions, so it knows whom they touch.
+"""
+
+
+def _toucher_target(
+    rng: random.Random,
+    domains: ValueDomains,
+    pool: List[int],
+    others: List[int],
+) -> int:
+    """Draw one account-level touch's target by its class."""
+    classes, shares = zip(*domains.toucher_target_shares, strict=True)
+    kind = rng.choices(classes, weights=shares)[0]
+    if kind == "self":
+        return TOUCHER_ADDRESS
+    elif kind == "pool":
+        return rng.choice(pool)
+    elif kind == "other_tx":
+        # With no other transaction in the block, a pool address stands
+        # in; the guard's axis counts what was drawn, not what was asked.
+        return rng.choice(others or pool)
+    raise ValueError(f"unknown toucher target class {kind!r}")
+
+
+def toucher_code(
+    rng: random.Random,
+    domains: ValueDomains,
+    pool: List[int],
+    others: List[int],
+) -> Tuple[bytes, Dict[HexNumber, HexNumber]]:
+    """
+    Draw the toucher's code and seeded storage.
+
+    Each touch pushes its target as a full 20-byte immediate, so the
+    guard can read the targets back from the code. Its own slots are
+    seeded nonzero, so no write pays state gas.
+    """
+    code = Bytecode()
+    slots = domains.toucher_max_touches
+    for _ in range(rng.randint(1, domains.toucher_max_touches)):
+        kind = rng.choice(domains.toucher_touch_kinds)
+        if kind == "sload":
+            code += Op.POP(Op.SLOAD(rng.randrange(slots)))
+        elif kind == "sstore":
+            code += Op.SSTORE(rng.randrange(slots), rng.randrange(1, 2**16))
+        else:
+            target = Op.PUSH20(_toucher_target(rng, domains, pool, others))
+            if kind == "balance":
+                code += Op.POP(Op.BALANCE(target))
+            elif kind == "extcodesize":
+                code += Op.POP(Op.EXTCODESIZE(target))
+            elif kind == "extcodehash":
+                code += Op.POP(Op.EXTCODEHASH(target))
+            elif kind == "extcodecopy":
+                code += Op.EXTCODECOPY(target, 0, 0, 32)
+            elif kind == "value_call":
+                code += Op.POP(
+                    Op.CALL(domains.toucher_call_gas, target, 1, 0, 0, 0, 0)
+                )
+            else:
+                raise ValueError(f"unknown toucher touch {kind!r}")
+    outcomes, shares = zip(*domains.failing_tx_outcome_shares, strict=True)
+    outcome = rng.choices(outcomes, weights=shares)[0]
+    if outcome == "revert":
+        code += Op.REVERT(0, 0)
+    elif outcome == "exceptional_halt":
+        code += Op.INVALID
+    else:
+        raise ValueError(f"unknown toucher outcome {outcome!r}")
+    storage = {
+        HexNumber(slot): HexNumber(rng.randrange(1, 2**16))
+        for slot in range(slots)
     }
     return bytes(code), storage
 
@@ -515,8 +599,12 @@ def generate_fuzzer_output(
         base_fee = _highest_base_fee(fork, domains, block)
         sender = rng.choice(sender_addresses)
         to = Address(rng.choice(tx_targets))
+        gas_need_fraction = None
         if rng.random() < domains.failing_tx_rate:
             to = Address(FAILER_ADDRESS)
+        elif rng.random() < domains.toucher_tx_rate:
+            to = Address(TOUCHER_ADDRESS)
+            gas_need_fraction = rng.choice(domains.toucher_margins)
         choices = tx_gas_choices
         if domains.reservoir_tx_gas and rng.random() < RESERVOIR_TX_RATE:
             choices = domains.reservoir_tx_gas + tx_gas_choices
@@ -561,12 +649,35 @@ def generate_fuzzer_output(
                 nonce=HexNumber(tx_nonce),
                 value=HexNumber(rng.randrange(0, 10**16)),
                 data=Bytes(fuzzed_calldata(rng, domains=domains)),
+                gas_need_fraction=gas_need_fraction,
                 **fields,
             )
         )
         nonces[sender] = max(nonces[sender], tx_nonce) + 1
 
-    # Drawn last so the case is what it was before this axis existed.
+    # The toucher is drawn once the transactions are, so its "other
+    # transaction" targets are the senders and targets of transactions
+    # sharing a block with one sent to it.
+    toucher = Address(TOUCHER_ADDRESS)
+    owned_blocks = {tx.block for tx in transactions if tx.to == toucher}
+    others = sorted(
+        {
+            int.from_bytes(bytes(address), "big")
+            for tx in transactions
+            if tx.block in owned_blocks and tx.to != toucher
+            for address in (tx.from_, tx.to)
+            if address is not None
+        }
+    )
+    code, storage = toucher_code(rng, domains, pool.call_targets(), others)
+    accounts[toucher] = FuzzerAccountInput(
+        # Enough for every value call to carry one wei.
+        balance=HexNumber(domains.toucher_max_touches),
+        nonce=HexNumber(1),
+        code=Bytes(code),
+        storage=storage,
+    )
+
     kinds, shares = zip(*domains.coinbase_shares, strict=False)
     coinbase_kind = rng.choices(kinds, weights=shares)[0]
     # The manifest's weighting carries over: a precompile the fork

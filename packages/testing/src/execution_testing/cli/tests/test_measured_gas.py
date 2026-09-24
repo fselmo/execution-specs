@@ -39,7 +39,10 @@ def _owned_failer_case(fraction: float) -> FuzzerOutput:
         code=Bytes(code),
         storage=storage,
     )
-    transactions = list(case.transactions)
+    transactions = [
+        tx.model_copy(update={"gas_need_fraction": None})
+        for tx in case.transactions
+    ]
     transactions[0] = transactions[0].model_copy(
         update={"to": Address(FAILER_ADDRESS), "gas_need_fraction": fraction}
     )
@@ -60,7 +63,7 @@ def _filler() -> Any:
 
 def test_a_case_with_an_unmeasured_limit_is_refused() -> None:
     """A lane that skips the measurement fails instead of running `gas`."""
-    with pytest.raises(UnresolvedGasError, match=r"\[0\]"):
+    with pytest.raises(UnresolvedGasError, match=r"transactions \[0\] "):
         blockchain_test_from_fuzzer(_owned_failer_case(2.0), Amsterdam)
 
 
@@ -90,3 +93,20 @@ def test_a_fraction_below_the_need_is_refused_until_bounded() -> None:
     """
     with pytest.raises(ValueError, match="below 1"):
         resolve_measured_gas(_owned_failer_case(0.5), Amsterdam, _filler())
+
+
+def test_the_measuring_fill_feeds_none_of_the_lanes_observers() -> None:
+    """
+    The measuring fill runs the owned transaction on ample gas, which the
+    case never does. It runs on a tool of its own, so the lane's tool
+    holds one BAL witness per block of the real fill and nothing more.
+    """
+    mod._init_fill_worker("Amsterdam")
+    fork, eels = mod._FILL["fork"], mod._FILL["eels"]
+    eels.compute_bal_witness = True
+    eels.bal_witnesses = []
+    try:
+        fixture = mod.fill_case(_owned_failer_case(2.0), fork, eels)
+    finally:
+        eels.compute_bal_witness = False
+    assert len(eels.bal_witnesses) == len(fixture["blocks"])

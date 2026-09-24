@@ -174,10 +174,12 @@ def _second_block_calls(case: FuzzerOutput, target: Address, code: Any) -> Any:
         if tx.block == 1 and tx.to is not None
     )
     for i, tx in enumerate(transactions):
-        if tx.block == 1 and i != index:
-            # Only the chosen transaction runs in block 2, so the event
-            # can only come from it.
-            transactions[i] = tx.model_copy(update={"to": Address(0x3F001)})
+        if tx.block >= 1 and i != index:
+            # Only the chosen transaction runs code after block 1, so the
+            # event can only come from it.
+            transactions[i] = tx.model_copy(
+                update={"to": Address(0x3F001), "gas_need_fraction": None}
+            )
     transactions[index] = transactions[index].model_copy(
         update={"to": target, "data": b"", "gas": HexNumber(2_000_000)}
     )

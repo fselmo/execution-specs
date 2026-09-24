@@ -28,7 +28,7 @@ from execution_testing.test_types import EOA
 from execution_testing.vm import Opcodes as Op
 
 from .converter import state_test_from_fuzzer
-from .measured_gas import fixture_filler, resolve_measured_gas
+from .measured_gas import measuring_filler, resolve_measured_gas
 from .models import FuzzerOutput
 from .runners import FixtureRunner, StateTestsUnsupportedError
 
@@ -40,7 +40,7 @@ def fill_state_test(
     case: FuzzerOutput, fork: Fork, eels: Any
 ) -> Dict[str, Any]:
     """Fill a single-transaction case into a state fixture's JSON."""
-    case = resolve_measured_gas(case, fork, fixture_filler(fork, eels))
+    case = resolve_measured_gas(case, fork, measuring_filler(fork))
     test = state_test_from_fuzzer(case, fork)
     with contextlib.redirect_stdout(io.StringIO()):
         with warnings.catch_warnings():
