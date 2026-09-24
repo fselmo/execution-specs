@@ -109,6 +109,10 @@ class FuzzerTransactionInput(BaseModel):
     authorization_list: List[FuzzerAuthorizationInput] | None = Field(
         None, alias="authorizationList"
     )
+    gas_need_fraction: float | None = Field(None, alias="gasNeedFraction")
+    """A declared draw: this transaction's gas limit is its measured need
+    times this fraction. `resolve_measured_gas` sets `gas` from it before
+    the case is converted, on every replay; `gas` is the draw when None."""
 
 
 class FuzzerWithdrawalInput(BaseModel):

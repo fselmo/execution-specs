@@ -59,6 +59,9 @@ def _fake_transition(behaviour: Dict[str, Any]) -> Any:
 def _no_prepare(monkeypatch: Any) -> None:
     """Skip genesis construction: the fakes never look at the case."""
     monkeypatch.setattr(differential, "_prepare", lambda case, _fork: case)
+    monkeypatch.setattr(
+        differential, "_resolve", lambda case, _fork, _tools: case
+    )
 
 
 def test_fork_by_name_roundtrips() -> None:

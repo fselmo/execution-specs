@@ -69,6 +69,7 @@ from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
 from .differential import _fork_by_name, is_tool_rejection
 from .generator import GENERATOR_VERSION, generate_fuzzer_output
+from .measured_gas import resolve_measured_gas
 from .models import FuzzerOutput
 from .reproducer import client_judge, write_reproducer
 from .run_manifest import RunManifest, _eels_commit, binary_digest
@@ -781,6 +782,9 @@ def fill_case(
     stdout before raising; unfillable candidates are routine here, so that
     output is discarded and the exception is the whole story.
     """
+    case = resolve_measured_gas(
+        case, fork, lambda probe: fill_case(probe, fork, eels)
+    )
     test = blockchain_test_from_fuzzer(case, fork)
     with contextlib.redirect_stdout(io.StringIO()):
         with warnings.catch_warnings():
