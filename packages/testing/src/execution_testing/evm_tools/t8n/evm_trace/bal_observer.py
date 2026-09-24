@@ -273,17 +273,20 @@ class BalReachObserver:
             name: self._wrap(name, fn) for name, fn in self._originals.items()
         }
         patched: List[Tuple[Any, str, Callable]] = []
-        for module in self._modules():
-            for attribute, value in list(vars(module).items()):
-                name = by_identity.get(id(value))
-                if name is not None and value is self._originals[name]:
-                    setattr(module, attribute, wrappers[name])
-                    patched.append((module, attribute, value))
-        self._bindings = frozenset(
-            (module.__name__[len(self._prefix) :], attribute)
-            for module, attribute, _ in patched
-        )
+        # Patching sits inside the try: a failure partway through must
+        # still restore what was already wrapped, or every later fill in
+        # the process reports its calls to this observer too.
         try:
+            for module in self._modules():
+                for attribute, value in list(vars(module).items()):
+                    name = by_identity.get(id(value))
+                    if name is not None and value is self._originals[name]:
+                        setattr(module, attribute, wrappers[name])
+                        patched.append((module, attribute, value))
+            self._bindings = frozenset(
+                (module.__name__[len(self._prefix) :], attribute)
+                for module, attribute, _ in patched
+            )
             yield self
         finally:
             for module, attribute, value in patched:

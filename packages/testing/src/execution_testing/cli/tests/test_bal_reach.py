@@ -440,17 +440,107 @@ def test_a_destroy_with_nothing_pending_is_not_a_storage_read() -> None:
 
 def test_a_real_destroy_of_pending_writes_is_still_a_read() -> None:
     """
-    The positive on real execution for the conditional check: an account
-    destroyed at the end of its transaction with writes still pending
-    (created and self-destructed in one transaction) has those writes
-    enter the list as reads, and that must survive the check that removed
-    the empty-destroy phantom.
+    The positive on real execution for the conditional check: a contract
+    created and self-destructed in one transaction, having written a slot,
+    is destroyed with that write pending. The fixture's list carries the
+    slot as a read of the created address, and the observer must credit
+    the read to the destroy rather than drop it with the empty-destroy
+    phantom. Built rather than searched for: the cell occurs in about
+    one generated case in 500, so a seed range only finds it by luck.
     """
-    observations = _observed_fills(range(0, 100))
-    reads = {
-        cell
-        for observation in observations
-        for cell in observation.cells
-        if cell[0] == "fork.process_transaction" and cell[1] == "storage_read"
+    import contextlib
+    import io
+    import warnings
+
+    from execution_testing import Op, compute_create_address
+    from execution_testing.base_types import Bytes, HexNumber
+
+    from ..fuzzer_bridge import campaign as mod
+    from ..fuzzer_bridge.bal_reach import observer_spec
+    from ..fuzzer_bridge.generator import generate_fuzzer_output
+
+    mod._init_fill_worker("Amsterdam")
+    fork, eels = mod._FILL["fork"], mod._FILL["eels"]
+    eels.bal_reach = observer_spec(fork)
+    eels.last_bal_observation = None
+    case = generate_fuzzer_output(fork, 0)
+    transactions = list(case.transactions)
+    creator = transactions[0]
+    initcode = Op.SSTORE(0, 1) + Op.SELFDESTRUCT(Op.ORIGIN)
+    transactions[0] = creator.model_copy(
+        update={
+            "to": None,
+            "data": Bytes(bytes(initcode)),
+            "value": HexNumber(0),
+            "gas": HexNumber(2_000_000),
+        }
+    )
+    with contextlib.redirect_stdout(io.StringIO()):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fixture = mod.fill_case(
+                case.model_copy(update={"transactions": transactions}),
+                fork,
+                eels,
+            )
+    eels.bal_reach = None
+
+    created = compute_create_address(
+        address=creator.from_, nonce=int(creator.nonce)
+    )
+    (entry,) = [
+        e
+        for block in fixture["blocks"]
+        for e in block["blockAccessList"]
+        if e["address"].lower() == str(created).lower()
+    ]
+    assert [int(slot, 16) for slot in entry["storageReads"]] == [0]
+    assert entry["storageChanges"] == []
+    assert str(created).lower() not in {
+        a.lower() for a in fixture["postState"]
     }
-    assert reads, "no destroyed pending write in range; widen the seeds"
+    cell = ("fork.process_transaction", "storage_read", "success")
+    assert cell in eels.last_bal_observation.cells
+
+
+def _wrapped_bindings() -> list:
+    """Every binding in a loaded spec module that is still an observer."""
+    import sys
+
+    return [
+        (name, attribute)
+        for name, module in list(sys.modules.items())
+        if name.startswith("ethereum.")
+        for attribute, value in list(vars(module).items())
+        if getattr(value, "__name__", "").startswith("bal_reach_")
+    ]
+
+
+def test_an_exception_inside_the_hook_still_unwraps_it() -> None:
+    """A fill that raises must not leave the recorders wrapped."""
+    import pytest
+
+    from ..fuzzer_bridge.bal_reach import observer_spec
+
+    observer = BalReachObserver(observer_spec(Amsterdam))
+    with pytest.raises(RuntimeError):
+        with observer.installed():
+            assert _wrapped_bindings()
+            raise RuntimeError("the fill failed")
+    assert _wrapped_bindings() == []
+
+
+def test_a_second_fill_observes_only_its_own_calls() -> None:
+    """
+    Two fills in one process: the second case observed after the first
+    must match the same case observed on its own, and nothing is left
+    wrapped between them. A leaked wrapper would hand the second fill's
+    calls to the first fill's observer, or count them twice.
+    """
+    first, second = _observed_fills(range(3, 4)), _observed_fills(range(5, 6))
+    assert _wrapped_bindings() == []
+    again = _observed_fills(range(5, 6))
+    assert _wrapped_bindings() == []
+    (a,), (b,), (b_again,) = first, second, again
+    assert b.calls == b_again.calls and b.cells == b_again.cells
+    assert a.calls != b.calls
