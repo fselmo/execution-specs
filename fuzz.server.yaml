@@ -127,6 +127,61 @@ clients:
     env: {DOTNET_ROOT: /home/fselmo/.dotnet,
           PATH: "/home/fselmo/.dotnet:/usr/local/go/bin:/usr/bin:/bin"}
 
+  # Parallel-path panel on the devnet-11 heads (mainline, pinned 2026-09-22).
+  # geth's and nethermind's series apply unchanged; besu's is ported
+  # (patches/besu-d11), since its three files moved. On this head besu
+  # falls back to sequential on any parallel failure, list or not, so its
+  # BAL-FALLBACK line is a masked failure like nethermind's BAL-RETRY.
+  - name: geth-par-d11
+    build:
+      recipe: geth
+      repo: ethereum/go-ethereum
+      ref: 5b5c9d06810f8dfcc092e8d1c35b34c11fa9b8fe
+      patches:
+        - patches/geth/0001-cmd-evm-add-bal.sequential-to-blocktest.patch
+        - patches/geth/0002-tests-attach-a-fixture-s-block-access-list-to-the-bl.patch
+    contrast_flags: [--bal.sequential]
+  - name: erigon-par-d11
+    build: {recipe: erigon, repo: erigontech/erigon,
+            ref: f099f0161ade159a442bde9328acf35e9e3b5742}
+    contrasts:
+      hints-off: {env: {IGNORE_BAL: "true"}}
+      serial: {env: {EXEC3_WORKERS: "1"}}
+  - name: besu-par-d11
+    build:
+      recipe: besu
+      repo: besu-eth/besu
+      ref: 028f9d7391b1a85885a87d6c6f931bad7610da8c
+      patches:
+        - patches/besu-d11/0001-referencetests-let-a-caller-ask-for-the-parallel-blo.patch
+        - patches/besu-d11/0002-evmtool-run-block-test-on-the-parallel-path-on-the-f.patch
+        - patches/besu-d11/0003-core-print-the-parallel-processor-s-sequential-fallb.patch
+      patch_paths:
+        - ethereum/evmtool/
+        - ethereum/referencetests/
+        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
+    env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
+          PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
+    contrast_flags: [--bal.sequential]
+  - name: nethermind-par-d11
+    build:
+      recipe: nethermind
+      repo: NethermindEth/nethermind
+      ref: 0aacb82fa8da8999ce0e68d85a8cb15202f36094
+      # nethermind-d11, not nethermind: the devnet-8 series applies here but
+      # does not compile (StorageChange takes a UInt256 value on this head).
+      patches:
+        - patches/nethermind-d11/0001-Ethereum.Test.Base-attach-a-fixture-s-block-access-l.patch
+        - patches/nethermind-d11/0002-Consensus-print-the-sequential-retry-of-a-parallel-B.patch
+      patch_paths:
+        - src/Nethermind/Nethermind.Test.Runner/
+        - src/Nethermind/Ethereum.Test.Base/
+        - src/Nethermind/Nethermind.Consensus/Processing/BranchProcessor.cs
+    env: {DOTNET_ROOT: /home/fselmo/.dotnet,
+          PATH: "/home/fselmo/.dotnet:/usr/local/go/bin:/usr/bin:/bin"}
+    runner_flags: [--parallelExecution, "true"]
+    contrast_flags: [--parallelExecution, "false"]
+
 campaigns:
   smoke:
     fork: Amsterdam
@@ -223,4 +278,40 @@ campaigns:
     fork: Amsterdam
     clients: [geth, erigon, besu, nethermind]
     seed_start: 0
+    known: []
+  # v18 gate on the overnight panel: besu-gate's 2d29706a is the control,
+  # and every other client must agree on every case, failers included.
+  gate-v18:
+    fork: Amsterdam
+    clients: [geth-par, erigon-par, besu-par, nethermind-par, besu-gate]
+    producer: evmone-producer
+    seed_start: 210000
+    known: []
+  # The first full parallel-lane night: two shards on fresh, disjoint
+  # seed ranges (runner-stage pipelining is not built yet).
+  parallel-night-a:
+    fork: Amsterdam
+    clients: [geth-par, erigon-par, besu-par, nethermind-par, besu-gate]
+    producer: evmone-producer
+    seed_start: 10000000
+    known: []
+  parallel-night-b:
+    fork: Amsterdam
+    clients: [geth-par, erigon-par, besu-par, nethermind-par, besu-gate]
+    producer: evmone-producer
+    seed_start: 20000000
+    known: []
+  # The parallel campaign on the devnet-11 panel, same bands as the night;
+  # all-fail expected 0 now the clients carry #3478's repayment.
+  parallel-d11-a:
+    fork: Amsterdam
+    clients: [geth-par-d11, erigon-par-d11, besu-par-d11, nethermind-par-d11, besu-gate]
+    producer: evmone-producer
+    seed_start: 30000000
+    known: []
+  parallel-d11-b:
+    fork: Amsterdam
+    clients: [geth-par-d11, erigon-par-d11, besu-par-d11, nethermind-par-d11, besu-gate]
+    producer: evmone-producer
+    seed_start: 40000000
     known: []
