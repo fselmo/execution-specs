@@ -335,12 +335,41 @@ class CampaignState:
     status_reason: str = ""
     """Why it is not running, in one line; empty while it is."""
     status_at: float = 0.0
+    segment: str = ""
+    """The segment being judged: generator version, spec commit and every
+    binary fixed; see `segment_id`."""
+    segments: List[Dict[str, Any]] = field(default_factory=list)
+    """Every segment so far, oldest first, with the seeds it covered."""
     health_window: List[Dict[str, Any]] = field(default_factory=list)
     """Per-batch samples the health checks are measured over, newest
     last; see `health.batch_sample`."""
     health: Dict[str, Any] = field(default_factory=dict)
     """The latest window's rates, for the report and the status page."""
     signatures_reset: bool = field(default=False, compare=False)
+
+    def enter_segment(self, segment: str) -> bool:
+        """
+        Make ``segment`` the one being judged; True when it is new.
+
+        The open segment is closed at the last seed judged under it, so
+        every seed belongs to exactly one segment.
+        """
+        if self.segment == segment:
+            return False
+        now = time.time()
+        if self.segments and self.segments[-1].get("last_seed") is None:
+            self.segments[-1]["last_seed"] = self.next_seed - 1
+            self.segments[-1]["closed"] = now
+        self.segments.append(
+            {
+                "id": segment,
+                "opened": now,
+                "first_seed": self.next_seed,
+                "last_seed": None,
+            }
+        )
+        self.segment = segment
+        return True
 
     def set_status(self, status: str, reason: str = "") -> None:
         """Record what the campaign is doing and why, with the time."""
@@ -375,6 +404,8 @@ class CampaignState:
                 status_reason=data.get("status_reason", ""),
                 status_at=data.get("status_at", 0.0),
                 health_window=data.get("health_window", []),
+                segment=data.get("segment", ""),
+                segments=data.get("segments", []),
                 health=data.get("health", {}),
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
@@ -402,6 +433,8 @@ class CampaignState:
                     "status_reason": self.status_reason,
                     "status_at": self.status_at,
                     "health_window": self.health_window,
+                    "segment": self.segment,
+                    "segments": self.segments,
                     "health": self.health,
                 },
                 indent=1,
@@ -439,9 +472,13 @@ class CampaignState:
                 "bundle": bundle,
                 "known": known,
                 "events_necessary": sorted(events),
+                "first_segment": self.segment,
+                "segments": {self.segment: 1},
             }
             return True
         entry["count"] += 1
+        per_segment = entry.setdefault("segments", {})
+        per_segment[self.segment] = per_segment.get(self.segment, 0) + 1
         seeds = entry.setdefault("seeds", [entry["first_seed"]])
         if len(seeds) < SEED_SAMPLE_CAP:
             seeds.append(seed)
@@ -924,6 +961,25 @@ class StopRequest:
     signal_name: Optional[str] = None
 
 
+def segment_id(manifest: RunManifest) -> str:
+    """
+    Name what a segment holds fixed: fork, generator version, spec commit,
+    fixture format, and the digest of every binary.
+
+    Moving any of them changes the id, so a finding's segment says
+    exactly which binaries produced it.
+    """
+    fixed = {
+        "fork": manifest.fork,
+        "generator_version": manifest.generator_version,
+        "eels_commit": manifest.eels_commit,
+        "fixture_format": manifest.fixture_format,
+        "binaries": manifest.binaries,
+    }
+    digest = hashlib.sha256(json.dumps(fixed, sort_keys=True).encode())
+    return digest.hexdigest()[:8]
+
+
 @contextlib.contextmanager
 def graceful_stop(echo: Callable[[str], None]) -> Iterator[StopRequest]:
     """
@@ -1396,7 +1452,7 @@ def run_campaign(
     binaries = dict(options.clients)
     if options.producer is not None:
         binaries[options.producer_name] = options.producer
-    RunManifest(
+    manifest = RunManifest(
         fork=options.fork.name(),
         generator_version=GENERATOR_VERSION,
         eels_commit=versions["eels"],
@@ -1416,7 +1472,22 @@ def run_campaign(
             name: binary_digest(path) for name, path in binaries.items()
         },
         client_env={n: dict(e) for n, e in options.client_env.items() if e},
-    ).write(output / "manifest.json")
+    )
+    manifest.write(output / "manifest.json")
+    segment = segment_id(manifest)
+    previous = state.segment
+    if state.enter_segment(segment):
+        manifest.write(output / "segments" / f"{segment}.json")
+        if previous:
+            echo(
+                f"segment {previous} closed at seed {state.next_seed - 1}; "
+                f"segment {segment} opened: a pin, the spec or the "
+                "generator moved, so the baseline gate runs again"
+            )
+            # A new segment is a new comparison: its clients are checked
+            # for staleness as a fresh campaign's would be.
+            fresh_start = True
+    state.save()
 
     def fill_spec(fixture_name: str) -> Tuple[Dict[str, Any], List[str]]:
         assert spec_tool is not None
@@ -1665,6 +1736,7 @@ def run_campaign(
                                 runners,
                                 focus_client=None,
                                 events=found.events.get(fixture_name, []),
+                                segment=state.segment,
                             )
                         # From here on the spec's fixture is the case's.
                         shard_fixtures[fixture_name] = found.spec_fixtures[
@@ -1774,6 +1846,7 @@ def run_campaign(
                                 runners,
                                 focus_client=None,
                                 events=events,
+                                segment=state.segment,
                             )
                     kind = classify(verdicts)
                     state.counts[kind] = state.counts.get(kind, 0) + 1
@@ -1812,6 +1885,7 @@ def run_campaign(
                                 runners,
                                 focus_client=client,
                                 events=events,
+                                segment=state.segment,
                             )
 
                 if fresh_start and fill_batches == 0 and options.baseline:
@@ -2017,9 +2091,13 @@ def _write_bundle(
     *,
     focus_client: Optional[str],
     events: Sequence[str] = (),
+    segment: str = "",
 ) -> None:
     """
     Save what a reviewer needs to reproduce a new signature.
+
+    ``segment.json`` names the segment the finding came from, whose
+    manifest in the campaign's `segments/` holds the exact binaries.
 
     ``events.json`` holds the case's execution events and, after
     minimization, the minimized case's: the events that survive
@@ -2029,6 +2107,11 @@ def _write_bundle(
     which the corpus predicate does not express yet) and is saved as is.
     """
     bundle.mkdir(parents=True, exist_ok=True)
+    (bundle / "segment.json").write_text(
+        json.dumps(
+            {"segment": segment, "manifest": f"segments/{segment}.json"}
+        )
+    )
     seed = _seed_of(fixture_name)
     case = generate_fuzzer_output(options.fork, seed)
     save_case(case, bundle / "case.json")

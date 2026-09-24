@@ -1563,3 +1563,63 @@ def test_a_control_gone_quiet_pauses_the_campaign(
     )
     assert resumed.next_seed == 9 and resumed.status == "done"
     assert resumed.health["control_rate"] == 1.0
+
+
+def test_a_rebuilt_binary_opens_a_new_segment(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Segments hold the binaries fixed. A client rebuilt between runs
+    closes the first segment at the last seed it judged and opens a new
+    one; a finding counts its hits per segment and its bundle names the
+    segment, whose manifest names the binaries.
+    """
+    (tmp_path / "geth").write_text("build one")
+    (tmp_path / "erigon").write_text("erigon")
+    failing = {"geth": lambda _s: False, "erigon": lambda _s: True}
+    first = _campaign(
+        tmp_path, monkeypatch, failing, batch=3, count=3, baseline=False
+    )
+    (only,) = first.segments
+    assert (only["id"], only["first_seed"]) == (first.segment, 0)
+
+    (tmp_path / "geth").write_text("build two")
+    second = _campaign(
+        tmp_path, monkeypatch, failing, batch=3, count=6, baseline=False
+    )
+    old, new = second.segments
+    assert old["id"] == first.segment and old["last_seed"] == 2
+    assert new["id"] == second.segment != first.segment
+    assert new["first_seed"] == 3 and new["last_seed"] is None
+    (finding,) = second.signatures.values()
+    assert finding["first_segment"] == first.segment
+    assert finding["segments"] == {first.segment: 3, second.segment: 3}
+    manifests = tmp_path / "out" / "segments"
+    assert {p.stem for p in manifests.iterdir()} == {old["id"], new["id"]}
+    bundle = Path(finding["bundle"])
+    assert json.loads((bundle / "segment.json").read_text())["segment"] == (
+        first.segment
+    )
+
+
+def test_a_new_segment_runs_the_baseline_gate_again(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    The gate that refuses a stale client runs on a campaign's first
+    batch; a new segment is a new comparison, so it runs again there,
+    while a plain resume within the same segment does not.
+    """
+    from ..fuzzer_bridge.baseline import StaleClientError
+
+    (tmp_path / "geth").write_text("build one")
+    (tmp_path / "erigon").write_text("erigon")
+    clean = {"geth": lambda _s: False, "erigon": lambda _s: False}
+    _campaign(tmp_path, monkeypatch, clean, batch=3, count=3)
+    broken = {"geth": lambda _s: True, "erigon": lambda _s: False}
+    resumed = _campaign(tmp_path, monkeypatch, broken, batch=3, count=6)
+    assert resumed.next_seed == 6
+
+    (tmp_path / "geth").write_text("build two")
+    with pytest.raises(StaleClientError):
+        _campaign(tmp_path, monkeypatch, broken, batch=3, count=9)
