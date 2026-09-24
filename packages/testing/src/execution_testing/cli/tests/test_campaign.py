@@ -1398,3 +1398,86 @@ def test_the_manifest_names_the_format_the_run_wrote(
     )
     manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
     assert manifest["fixture_format"] == "blockchain_test_engine"
+
+
+def _splitting_runner(fails: Any) -> Any:
+    """A runner whose file runs error on every fixture when `fails` says."""
+    from ..fuzzer_bridge.runners import (
+        RUNNER_ERROR_PREFIX,
+        FixtureRunner,
+        Verdict,
+    )
+
+    runner = FixtureRunner("besu", Path("/bin/x"), "BesuFixtureConsumer")
+    runner.runs = []  # type: ignore[attr-defined]
+
+    def run_file(_path: Path, names: Any) -> Any:
+        names = list(names)
+        runner.runs.append(names)  # type: ignore[attr-defined]
+        runner.last_stderr = f"BAL-RETRY {len(names)}\n"
+        if fails(names):
+            return {
+                n: Verdict(False, f"{RUNNER_ERROR_PREFIX}parse failed")
+                for n in names
+            }
+        return {n: Verdict(True) for n in names}
+
+    runner.run_file = run_file  # type: ignore[assignment]
+    return runner
+
+
+def test_a_runner_error_is_split_down_to_the_fixture_that_caused_it(
+    tmp_path: Path,
+) -> None:
+    """
+    One fixture the runner cannot load errors its whole streamed batch.
+    Halves holding the error are judged again until only that fixture
+    carries it; every other verdict comes back, the split files are
+    removed, and stderr from every run is kept.
+    """
+    from ..fuzzer_bridge.campaign import judge_splitting
+
+    names = [f"seed_{i}" for i in range(8)]
+    batch = tmp_path / "batch.json"
+    batch.write_text(json.dumps({n: {} for n in names}))
+    runner = _splitting_runner(lambda part: "seed_5" in part)
+    verdicts = judge_splitting(runner, batch, names)
+    assert [n for n, v in verdicts.items() if not v.passed] == ["seed_5"]
+    # A streamed batch errors on every fixture, so both halves run at
+    # each level: 1 + 2 + 2 + 2, not one run per fixture.
+    assert len(runner.runs) == 7
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["batch.json"]
+    assert runner.last_stderr.count("BAL-RETRY") == 7
+
+
+def test_a_runner_that_fails_everything_is_not_split_to_the_bottom(
+    tmp_path: Path,
+) -> None:
+    """
+    When both halves error on every fixture the runner is failing, not a
+    fixture: splitting stops after one level instead of running every
+    fixture alone, and every verdict stays a runner error.
+    """
+    from ..fuzzer_bridge.campaign import judge_splitting
+
+    names = [f"seed_{i}" for i in range(8)]
+    batch = tmp_path / "batch.json"
+    batch.write_text(json.dumps({n: {} for n in names}))
+    runner = _splitting_runner(lambda _part: True)
+    verdicts = judge_splitting(runner, batch, names)
+    assert not any(v.passed for v in verdicts.values())
+    assert len(runner.runs) == 3
+
+
+def test_a_clean_batch_is_judged_once(tmp_path: Path) -> None:
+    """No runner error, no split."""
+    from ..fuzzer_bridge.campaign import judge_splitting
+
+    names = ["seed_0", "seed_1"]
+    batch = tmp_path / "batch.json"
+    batch.write_text(json.dumps({n: {} for n in names}))
+    runner = _splitting_runner(lambda _part: False)
+    assert all(
+        v.passed for v in judge_splitting(runner, batch, names).values()
+    )
+    assert len(runner.runs) == 1

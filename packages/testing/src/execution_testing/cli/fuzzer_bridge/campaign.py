@@ -1786,7 +1786,77 @@ def _timed_run(
     runner: FixtureRunner, batch_file: Path, names: List[str]
 ) -> Tuple[Dict[str, Verdict], float]:
     started = time.time()
-    return runner.run_file(batch_file, names), time.time() - started
+    return judge_splitting(runner, batch_file, names), time.time() - started
+
+
+def judge_splitting(
+    runner: FixtureRunner, batch_file: Path, names: List[str]
+) -> Dict[str, Verdict]:
+    """
+    Judge a batch, splitting it around any fixture the runner errors on.
+
+    A streamed batch lets one fixture the runner cannot load -- besu's
+    loader before #11180 on a 2^64-1 nonce, say -- cost every verdict in
+    the batch. Each half holding a runner error is judged again on its
+    own, down to single fixtures, so the error stays with the fixture that
+    caused it. When both halves error on every fixture the runner itself
+    is failing, not a fixture, and splitting stops there. The runner's
+    stderr from every run is kept: the parallel-path tags are read from
+    it afterwards.
+    """
+    verdicts = runner.run_file(batch_file, names)
+    stderr = [runner.last_stderr]
+    if _runner_errors(verdicts, names):
+        fixtures = json.loads(batch_file.read_text())
+        _split(runner, batch_file, fixtures, names, verdicts, stderr)
+    runner.last_stderr = "".join(stderr)
+    return verdicts
+
+
+def _runner_errors(
+    verdicts: Mapping[str, Verdict], names: List[str]
+) -> Set[str]:
+    return {
+        name
+        for name in names
+        if not verdicts[name].passed and is_runner_error(verdicts[name].error)
+    }
+
+
+def _split(
+    runner: FixtureRunner,
+    batch_file: Path,
+    fixtures: Mapping[str, Any],
+    names: List[str],
+    verdicts: Dict[str, Verdict],
+    stderr: List[str],
+) -> None:
+    errored = _runner_errors(verdicts, names)
+    if not errored or len(names) == 1:
+        return
+    half = len(names) // 2
+    parts = [p for p in (names[:half], names[half:]) if errored & set(p)]
+    judged = []
+    for index, part in enumerate(parts):
+        part_file = batch_file.with_name(
+            f"{batch_file.stem}.{index}{batch_file.suffix}"
+        )
+        part_file.write_text(
+            json.dumps({name: fixtures[name] for name in part})
+        )
+        try:
+            part_verdicts = runner.run_file(part_file, part)
+        finally:
+            part_file.unlink(missing_ok=True)
+        stderr.append(runner.last_stderr)
+        judged.append((part, part_verdicts))
+    if len(judged) == 2 and all(
+        _runner_errors(pv, part) == set(part) for part, pv in judged
+    ):
+        return
+    for part, part_verdicts in judged:
+        verdicts.update(part_verdicts)
+        _split(runner, batch_file, fixtures, part, verdicts, stderr)
 
 
 def _write_bundle(
