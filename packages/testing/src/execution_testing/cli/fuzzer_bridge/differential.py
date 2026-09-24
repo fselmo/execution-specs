@@ -38,6 +38,7 @@ from .clients import client_environment
 from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
 from .generator import GENERATOR_VERSION, generate_fuzzer_output
+from .measured_gas import fixture_filler, resolve_measured_gas
 from .models import FuzzerOutput
 
 REFERENCE = "eels"
@@ -139,6 +140,23 @@ def _prepare(case: FuzzerOutput, fork: Fork) -> Prepared:
     pre, genesis = test.make_genesis(apply_pre_allocation_blockchain=True)
     env = environment_from_parent_header(genesis.header)
     return test, env, pre
+
+
+def _resolve(
+    case: FuzzerOutput, fork: Fork, tools: Dict[str, Any]
+) -> FuzzerOutput:
+    """
+    Set the case's measured gas limits with the reference tool.
+
+    Every tool then runs the case the reference measured; a tool never
+    derives its own limits. Without a reference, a case that needs them
+    is refused at conversion.
+    """
+    if REFERENCE not in tools:
+        return case
+    return resolve_measured_gas(
+        case, fork, fixture_filler(fork, tools[REFERENCE])
+    )
 
 
 def _transition(
@@ -279,7 +297,7 @@ def run_tools(
     Run ``case`` through each tool, collecting results, failures, and the
     post-state each tool produced.
     """
-    prepared = _prepare(case, fork)
+    prepared = _prepare(_resolve(case, fork, tools), fork)
     results: Dict[str, List[Result]] = {}
     errors: Dict[str, str] = {}
     rejections: Dict[str, str] = {}

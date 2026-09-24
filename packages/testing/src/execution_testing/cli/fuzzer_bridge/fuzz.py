@@ -29,6 +29,7 @@ from execution_testing.test_types import Alloc
 from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
 from .generator import GENERATOR_VERSION, generate_fuzzer_output
+from .measured_gas import fixture_filler, resolve_measured_gas
 from .models import FuzzerOutput
 
 
@@ -68,6 +69,7 @@ def _run_case(
 
     Raises whatever the fill path raises; callers treat that as a crash.
     """
+    case = resolve_measured_gas(case, fork, fixture_filler(fork, t8n))
     test = blockchain_test_from_fuzzer(case, fork)
     pre, genesis = test.make_genesis(apply_pre_allocation_blockchain=True)
     env = environment_from_parent_header(genesis.header)

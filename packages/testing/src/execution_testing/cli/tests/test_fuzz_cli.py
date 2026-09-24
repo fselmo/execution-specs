@@ -167,6 +167,9 @@ def _fake_tools(monkeypatch: Any, behaviour: Dict[str, Any]) -> None:
     )
     monkeypatch.setattr(differential, "_prepare", lambda case, _fork: case)
     monkeypatch.setattr(
+        differential, "_resolve", lambda case, _fork, _tools: case
+    )
+    monkeypatch.setattr(
         differential, "_transition", _fake_transition(behaviour)
     )
 

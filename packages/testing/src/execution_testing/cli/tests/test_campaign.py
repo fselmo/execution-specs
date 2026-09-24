@@ -590,6 +590,9 @@ def test_fill_case_swallows_the_spec_debug_dump(
     monkeypatch.setattr(
         campaign_module, "blockchain_test_from_fuzzer", lambda _c, _f: _Loud()
     )
+    monkeypatch.setattr(
+        campaign_module, "resolve_measured_gas", lambda case, _f, _fill: case
+    )
     with pytest.raises(RuntimeError, match="invalid block"):
         campaign_module.fill_case(None, Osaka, None)  # type: ignore[arg-type]
     assert capsys.readouterr().out == ""

@@ -173,6 +173,30 @@ def create_sender_eoa_map(
     return senders
 
 
+class UnresolvedGasError(ValueError):
+    """A case reached conversion with a gas limit still to be measured."""
+
+
+def require_resolved_gas(fuzzer_output: FuzzerOutput) -> None:
+    """
+    Refuse a case whose derived gas limits were never measured.
+
+    Converting it would run the drawn `gas` instead of the declared need
+    times fraction, so the lane that forgot `resolve_measured_gas` would
+    quietly run a different case from every other lane.
+    """
+    pending = [
+        index
+        for index, tx in enumerate(fuzzer_output.transactions)
+        if tx.gas_need_fraction is not None
+    ]
+    if pending:
+        raise UnresolvedGasError(
+            f"transactions {pending} carry a gas need fraction; call "
+            "resolve_measured_gas before converting"
+        )
+
+
 def blockchain_test_from_fuzzer(
     fuzzer_output: FuzzerOutput,
     fork: Fork,
@@ -210,6 +234,7 @@ def blockchain_test_from_fuzzer(
                        (sender validation, etc.)
 
     """
+    require_resolved_gas(fuzzer_output)
     # Step 1: Convert accounts to EEST Account domain models
     pre_dict: Dict[Address, Account | None] = {}
     for addr, fuzzer_account in fuzzer_output.accounts.items():
@@ -303,6 +328,7 @@ def state_test_from_fuzzer(
     reproducer format for a minimized case with exactly one transaction.
     The environment is the one the case's block would have had.
     """
+    require_resolved_gas(fuzzer_output)
     if len(fuzzer_output.transactions) != 1:
         raise ValueError(
             "a state test carries one transaction; this case has "
