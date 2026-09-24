@@ -422,3 +422,26 @@ def test_rejection_does_not_mask_a_divergence_among_the_rest(
     assert outcome.diverged
     assert "geth" in outcome.rejections
     assert any(d.field == "gas_used" for d in outcome.divergences)
+
+
+def test_only_a_case_compared_in_full_counts_as_agreed() -> None:
+    """
+    A case some tool refused, one where a tool raised, and one with a
+    single result are each counted apart; none of them is agreement.
+    """
+    from ..fuzzer_bridge.differential import CaseOutcome
+
+    agreed = CaseOutcome(seed=0, tool_count=2, compared=2)
+    refused = CaseOutcome(
+        seed=1, tool_count=2, compared=1, rejections={"geth": "refused"}
+    )
+    raised = CaseOutcome(
+        seed=2, tool_count=2, compared=0, errors={"eels": "x", "geth": "y"}
+    )
+    alone = CaseOutcome(seed=3, tool_count=1, compared=1)
+    assert [c.category for c in (agreed, refused, raised, alone)] == [
+        "agreed",
+        "tool_rejected",
+        "runner_error",
+        "not_compared",
+    ]

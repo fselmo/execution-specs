@@ -245,6 +245,16 @@ def differential(
         f"\nagreed {report.agreed}/{report.seeds}  diverged {report.diverged}"
         f"  (eels adjudicated {report.eels_runs}/{report.seeds})"
     )
+    uncompared = {
+        "tool-rejected": report.tool_rejected,
+        "runner-error": report.runner_error,
+        "not-compared": report.not_compared,
+    }
+    if any(uncompared.values()):
+        click.echo(
+            "not compared in full: "
+            + "  ".join(f"{name} {n}" for name, n in uncompared.items())
+        )
     if rejected:
         summary = ", ".join(f"{t}={n}" for t, n in sorted(rejected.items()))
         click.echo(
@@ -292,6 +302,16 @@ def write_summary(report: Any, seeds: range, path: Path) -> Path:
         "seeds": report.seeds,
         "agreed": report.agreed,
         "diverged": report.diverged,
+        "compared": report.agreed + report.diverged,
+        "tool_rejected": report.tool_rejected,
+        "runner_error": report.runner_error,
+        "not_compared": report.not_compared,
+        "rejected_by": dict(
+            Counter(tool for o in report.outcomes for tool in o.rejections)
+        ),
+        "errored": dict(
+            Counter(tool for o in report.outcomes for tool in o.errors)
+        ),
         "eels_runs": report.eels_runs,
         "first_divergent_seed": min(o.seed for o in divergent)
         if divergent

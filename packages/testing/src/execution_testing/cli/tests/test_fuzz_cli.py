@@ -48,6 +48,9 @@ campaigns:
             seeds=len(seeds),
             outcomes=[],
             manifest=None,
+            tool_rejected=0,
+            runner_error=0,
+            not_compared=0,
             eels_runs=0,
         )
 
@@ -99,6 +102,9 @@ campaigns:
             seeds=len(seeds),
             outcomes=[],
             manifest=None,
+            tool_rejected=0,
+            runner_error=0,
+            not_compared=0,
             eels_runs=0,
         )
 
@@ -242,6 +248,9 @@ def test_diff_writes_summary_and_exits_nonzero_on_divergence(
             seeds=len(seeds),
             outcomes=[outcome],
             manifest=None,
+            tool_rejected=0,
+            runner_error=0,
+            not_compared=0,
             eels_runs=len(seeds),
             fork=fork.name(),
             generator_version=4,
