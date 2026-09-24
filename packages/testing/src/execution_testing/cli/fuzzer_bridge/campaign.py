@@ -945,6 +945,31 @@ def _case_opcodes(eels: Any) -> int:
     return total
 
 
+class SilentContrastError(RuntimeError):
+    """
+    A declared contrast run compared no case at all.
+
+    A lane that compares nothing reports no mismatch, which reads exactly
+    like a lane that looked and found nothing. Erigon's contrast did that
+    for a whole campaign: its verdicts were lost to a parser that stopped
+    at a `[WARN]` line, and every case landed in a count nobody was made
+    to read. A declared contrast is a claim that the question is being
+    asked, so one that asked it of no case stops the campaign by name.
+    """
+
+    def __init__(self, silent: Dict[str, int]) -> None:
+        """Name each silent lane and how many cases it set aside."""
+        self.silent = dict(silent)
+        lanes = ", ".join(
+            f"{lane} (compared 0, set aside {count})"
+            for lane, count in sorted(silent.items())
+        )
+        super().__init__(
+            f"declared contrast run(s) compared no case: {lanes}. Check the "
+            "lane's runner output is being read before trusting its tally."
+        )
+
+
 class MixedGeneratorError(RuntimeError):
     """
     A shard was filled by a different generator than the run started with.
@@ -1282,6 +1307,9 @@ def run_campaign(
         versions[f"producer ({options.producer_name})"] = producer_version
         spec_tool = ExecutionSpecsTransitionTool()
         spec_tool.compute_signature = True
+    binaries = dict(options.clients)
+    if options.producer is not None:
+        binaries[options.producer_name] = options.producer
     RunManifest(
         fork=options.fork.name(),
         generator_version=GENERATOR_VERSION,
@@ -1298,6 +1326,9 @@ def run_campaign(
         and f"{options.producer_name}: {producer_version}",
         sources=dict(options.sources),
         fixture_format=options.fixture_format,
+        binaries={
+            name: binary_digest(path) for name, path in binaries.items()
+        },
         client_env={n: dict(e) for n, e in options.client_env.items() if e},
     ).write(output / "manifest.json")
 
@@ -1307,9 +1338,6 @@ def run_campaign(
         case = generate_fuzzer_output(options.fork, _seed_of(fixture_name))
         fixture = fill_case(
             case,
-    binaries = dict(options.clients)
-    if options.producer is not None:
-        binaries[options.producer_name] = options.producer
             options.fork,
             spec_tool,
             fixture_format=campaign_format(options.fixture_format),
@@ -1326,9 +1354,6 @@ def run_campaign(
     end_seed = (
         options.seed_start + options.count
         if options.count is not None
-        binaries={
-            name: binary_digest(path) for name, path in binaries.items()
-        },
         else None
     )
     fill_batches = 0
@@ -1669,6 +1694,16 @@ def run_campaign(
                         state.save()
                         write_report()
                         raise StaleClientError(stale, len(names))
+
+                silent = {
+                    lane: state.contrast.get(lane, {}).get("not_compared", 0)
+                    for lane in contrast_runners
+                    if state.contrast.get(lane, {}).get("compared", 0) == 0
+                }
+                if silent:
+                    state.save()
+                    write_report()
+                    raise SilentContrastError(silent)
 
                 if not keep_file and not options.keep_fixtures:
                     batch_file.unlink(missing_ok=True)

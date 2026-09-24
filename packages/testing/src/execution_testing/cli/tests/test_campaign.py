@@ -440,37 +440,38 @@ class _GoesSilentRunner(_FakeRunner):
         )
 
 
-def test_a_contrast_run_that_never_reports_is_counted(
+def test_a_contrast_run_that_never_reports_fails_the_campaign(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     """
-    A lane that compares nothing must say so: erigon's contrast once lost
-    every verdict to its parser and the report showed no row at all.
+    A lane that compares nothing reads like a lane that found nothing, so
+    it stops the campaign by name after its first batch rather than
+    becoming a count: erigon's contrast once lost every verdict to its
+    parser and nothing made anyone look. The report is still written, so
+    the stopped run leaves its row behind.
     """
+    from ..fuzzer_bridge.campaign import SilentContrastError
     from ..fuzzer_bridge.config import ContrastRun
 
     failing = {"geth": lambda _s: False, "erigon": lambda _s: False}
 
-    state = _campaign(
-        tmp_path,
-        monkeypatch,
-        failing,
-        runner=lambda name, flags: (
-            _GoesSilentRunner(name, failing[name], None, flags)
-            if name == "erigon"
-            else _FakeRunner(name, failing[name], None, flags)
-        ),
-        contrasts={"erigon": {"serial": ContrastRun(env={"X": "1"})}},
-        count=6,
-        batch=3,
-    )
-    assert state.contrast["erigon:serial"] == {
-        "compared": 0,
-        "mismatches": 0,
-        "not_compared": 6,
-    }
+    with pytest.raises(SilentContrastError, match="erigon:serial") as caught:
+        _campaign(
+            tmp_path,
+            monkeypatch,
+            failing,
+            runner=lambda name, flags: (
+                _GoesSilentRunner(name, failing[name], None, flags)
+                if name == "erigon"
+                else _FakeRunner(name, failing[name], None, flags)
+            ),
+            contrasts={"erigon": {"serial": ContrastRun(env={"X": "1"})}},
+            count=6,
+            batch=3,
+        )
+    assert caught.value.silent == {"erigon:serial": 3}
     report = (tmp_path / "out" / "report.md").read_text()
-    assert "| erigon:serial | 0 | 6 |" in report
+    assert "| erigon:serial | 0 | 3 |" in report
 
 
 def test_a_client_disagreeing_with_itself_is_a_contrast_mismatch(
