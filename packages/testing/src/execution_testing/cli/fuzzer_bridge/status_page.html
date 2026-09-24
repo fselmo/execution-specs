@@ -123,8 +123,10 @@ function render(s) {
     const fraction = p.bal_blocks ? p.parallel / p.bal_blocks : null;
     let text = p.parallel + " / " + p.bal_blocks + " BAL blocks (" + pct(fraction) + ")";
     if (p.unmatched) text += ", " + p.unmatched + " unmatched";
-    if (g) text += g.baseline === null ? "; no baseline for this segment: cannot pause" : "; baseline " + pct(g.baseline) + ", window " + pct(g.fraction);
-    return row(lane, text, g && g.baseline !== null && g.fraction !== null && g.fraction < g.baseline);
+    if (g && g.baseline !== null) text += "; baseline " + pct(g.baseline) + ", window " + pct(g.fraction);
+    if (g && g.note) text += "; " + g.note;
+    const degraded = g && g.note && g.baseline !== null;
+    return row(lane, text, degraded || (g && g.baseline !== null && g.fraction !== null && g.fraction < g.baseline));
   }));
   fill("findings", (s.findings || []).map((f) => {
     const node = el("div", "finding");

@@ -45,6 +45,13 @@ class HealthPolicy:
     parallel_drop_tolerance: float = 0.0
     """Proportional drop the decided fraction may take before the binomial
     test is even asked; 0 leaves the test alone to decide."""
+    parallel_baseline_blocks: int = 2000
+    """BAL-carrying blocks the segment's opening batches must hold before a
+    lane's baseline is set; until then the lane is calibrating."""
+    parallel_proof_floor: float = 0.9
+    """The pre-run proof runs every BAL-carrying block in parallel. A
+    baseline below this share was likely set by an already-degraded
+    binary, which the drop test can then never catch, so it is flagged."""
 
 
 def batch_sample(
@@ -113,7 +120,7 @@ def evaluate(
     policy: HealthPolicy,
     lanes: List[str],
     runners: int,
-    parallel_baseline: Optional[Mapping[str, List[int]]] = None,
+    segment: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[Dict[str, Any], List[str]]:
     """
     The window's rates and every band they fall outside.
@@ -175,7 +182,7 @@ def evaluate(
             f"the last {cases} cases"
         )
     rates["parallel"], dropped = _parallel_checks(
-        window, policy, parallel_baseline or {}
+        window, policy, segment or {}
     )
     problems += dropped
     return rates, problems
@@ -184,14 +191,15 @@ def evaluate(
 def _parallel_checks(
     window: List[Dict[str, Any]],
     policy: HealthPolicy,
-    baseline: Mapping[str, List[int]],
+    segment: Mapping[str, Any],
 ) -> Tuple[Dict[str, Any], List[str]]:
     """
     Each parallel-primary lane's decided fraction against its baseline.
 
     The same binomial test the version-bump guard uses: a drop pauses only
-    when it is further than sampling explains. A lane with no baseline is
-    reported and cannot pause.
+    when it is further than sampling explains. While the segment is still
+    calibrating, or for a lane that printed nothing while it did, there is
+    no baseline and the lane cannot pause.
     """
     from .density import significant_drops
 
@@ -209,12 +217,30 @@ def _parallel_checks(
             "bal_blocks": blocks,
             "fraction": parallel / blocks if blocks else None,
         }
-        base = baseline.get(lane)
-        if not base or not base[1]:
+        baseline = segment.get("parallel_baseline")
+        base = (baseline or {}).get(lane)
+        if baseline is None:
+            calibrated = segment.get("parallel_calibration", {}).get(
+                "bal_blocks", 0
+            )
+            entry["baseline"] = None
+            entry["note"] = (
+                f"calibrating ({calibrated}/{policy.parallel_baseline_blocks}"
+                " BAL blocks): cannot pause yet"
+            )
+        elif not base or not base[1]:
             entry["baseline"] = None
             entry["note"] = "no baseline for this segment: cannot pause"
         else:
             entry["baseline"] = base[0] / base[1]
+            if entry["baseline"] < policy.parallel_proof_floor:
+                entry["note"] = (
+                    f"baseline {entry['baseline']:.2%} is below the pre-run "
+                    f"proof's all-parallel (floor "
+                    f"{policy.parallel_proof_floor:.0%}): a binary degraded "
+                    "before the segment opened set it, and a drop from it "
+                    "cannot catch that"
+                )
             if blocks:
                 drops = significant_drops(
                     {lane: base[0]},

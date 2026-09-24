@@ -388,15 +388,20 @@ class CampaignState:
         return True
 
     def record_parallel(
-        self, decided: Mapping[str, Mapping[str, int]]
+        self,
+        decided: Mapping[str, Mapping[str, int]],
+        calibration_blocks: int = 0,
     ) -> None:
         """
-        Add a batch's parallel decisions to the totals, and set the open
-        segment's baseline from the first batch it judges.
+        Add a batch's parallel decisions to the totals, and calibrate the
+        open segment's baseline from its opening batches.
 
         The baseline is measured on the segment's own binaries and
         generated cases, so a later drop against it is the lane changing,
-        not the comparison.
+        not the comparison. One batch is itself a noisy sample the drop
+        test would treat as exact, so the baseline accumulates until the
+        segment's opening batches hold ``calibration_blocks`` BAL-carrying
+        blocks.
         """
         for lane, tally in decided.items():
             total = self.parallel.setdefault(
@@ -410,14 +415,29 @@ class CampaignState:
             )
             for key, value in tally.items():
                 total[key] = total.get(key, 0) + value
-        if self.segments and "parallel_baseline" not in self.segments[-1]:
+        if not self.segments or "parallel_baseline" in self.segments[-1]:
+            return
+        calibration = self.segments[-1].setdefault(
+            "parallel_calibration", {"bal_blocks": 0, "lanes": {}}
+        )
+        calibration["bal_blocks"] += max(
+            (tally["bal_blocks"] for tally in decided.values()), default=0
+        )
+        for lane, tally in decided.items():
+            counts = calibration["lanes"].setdefault(lane, [0, 0, 0])
+            counts[0] += tally["parallel"]
+            counts[1] += tally["bal_blocks"]
+            counts[2] += tally["decisions"]
+        if calibration["bal_blocks"] >= calibration_blocks:
             # Only a lane that printed decisions has a baseline: one whose
             # binary lacks the print would otherwise get a baseline of
             # zero, which nothing can fall below.
             self.segments[-1]["parallel_baseline"] = {
-                lane: [tally["parallel"], tally["bal_blocks"]]
-                for lane, tally in decided.items()
-                if tally["decisions"]
+                lane: [parallel, blocks]
+                for lane, (parallel, blocks, decisions) in calibration[
+                    "lanes"
+                ].items()
+                if decisions and blocks
             }
 
     def record_timing(
@@ -2055,7 +2075,9 @@ def run_campaign(
                         if lane in timed or lane in contrast_timed
                     ],
                 )
-                state.record_parallel(decided)
+                state.record_parallel(
+                    decided, options.health.parallel_baseline_blocks
+                )
                 if tagged:
                     # The batch is kept so each line can be traced to its
                     # fixture; the tag names the block, not the test.
@@ -2349,11 +2371,7 @@ def run_campaign(
                 options.health,
                 lanes=sorted(contrast_runners),
                 runners=len(runners),
-                parallel_baseline=(
-                    state.segments[-1].get("parallel_baseline")
-                    if state.segments
-                    else None
-                ),
+                segment=state.segments[-1] if state.segments else None,
             )
             found_new = new_findings(state, seen)
             if found_new:

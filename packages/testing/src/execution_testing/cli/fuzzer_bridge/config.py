@@ -231,6 +231,8 @@ class HealthConfig(BaseModel):
     """Lanes running the parallel path as their primary, whose decided
     fraction is held to the segment's baseline."""
     parallel_drop_tolerance: float = 0.0
+    parallel_baseline_blocks: int = 2000
+    parallel_proof_floor: float = 0.9
 
     @model_validator(mode="after")
     def _control_names_a_client(self) -> "HealthConfig":
