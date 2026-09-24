@@ -99,10 +99,11 @@ FAILER_ADDRESS = 0x1FFFC
 
 It reads slots of its own storage, writes other slots of it, and then
 REVERTs or runs onto an undefined byte. Every slot is seeded nonzero, so
-no write pays state gas and the smallest drawn gas limit reaches the end:
-the transaction fails the way the case declares, never by running out of
-gas first. Nothing else calls it, so every access to its storage belongs
-to a transaction that failed.
+no write pays state gas and the smallest drawn gas limit usually reaches
+the end. Not always: a set-code transaction's authorizations can spend
+most of that limit before the failer runs (1 of 104 failer transactions
+at v18 ran out of gas that way). Nothing else calls it, so every access
+to its storage belongs to a transaction that failed.
 """
 
 FAILER_MAX_PAIRS = 3
