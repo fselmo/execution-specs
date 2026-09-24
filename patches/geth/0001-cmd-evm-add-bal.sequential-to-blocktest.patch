@@ -1,0 +1,88 @@
+From 4abb6bbb5eaf9e8f18ee2ba0c043126fde973b45 Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <felipe.selmo@ethereum.org>
+Date: Tue, 22 Sep 2026 13:19:49 -0600
+Subject: [PATCH 1/2] cmd/evm: add --bal.sequential to blocktest
+
+Force the sequential block-processing path even where EIP-7928 parallel execution applies, so a fixture can be judged by both paths of the same binary. The default is unchanged: blocktest still runs the parallel path whenever supportsParallelExecution allows it. Threads vm.Config.DisableParallelExecution through BlockTest.Run.
+---
+ cmd/evm/blockrunner.go   | 3 ++-
+ cmd/evm/main.go          | 4 ++++
+ tests/block_test.go      | 2 +-
+ tests/block_test_util.go | 5 +++--
+ 4 files changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/cmd/evm/blockrunner.go b/cmd/evm/blockrunner.go
+index b175f05dc..90d274667 100644
+--- a/cmd/evm/blockrunner.go
++++ b/cmd/evm/blockrunner.go
+@@ -43,6 +43,7 @@ var blockTestCommand = &cli.Command{
+ 		HumanReadableFlag,
+ 		RunFlag,
+ 		WitnessCrossCheckFlag,
++		SequentialFlag,
+ 		FuzzFlag,
+ 	}, traceFlags),
+ }
+@@ -117,7 +118,7 @@ func runBlockTest(ctx *cli.Context, fname string) ([]testResult, error) {
+ 		test := tests[name]
+ 		result := &testResult{Name: name, Pass: true}
+ 		var finalRoot *common.Hash
+-		if err := test.Run(false, rawdb.PathScheme, ctx.Bool(WitnessCrossCheckFlag.Name), tracer, func(res error, chain *core.BlockChain) {
++		if err := test.Run(false, rawdb.PathScheme, ctx.Bool(WitnessCrossCheckFlag.Name), ctx.Bool(SequentialFlag.Name), tracer, func(res error, chain *core.BlockChain) {
+ 			if ctx.Bool(DumpFlag.Name) {
+ 				if s, _ := chain.State(); s != nil {
+ 					result.State = dump(s)
+diff --git a/cmd/evm/main.go b/cmd/evm/main.go
+index 5d33b56f0..08e626f00 100644
+--- a/cmd/evm/main.go
++++ b/cmd/evm/main.go
+@@ -66,6 +66,10 @@ var (
+ 		Aliases: []string{"xc"},
+ 		Usage:   "Cross-check stateful execution against stateless, verifying the witness generation.",
+ 	}
++	SequentialFlag = &cli.BoolFlag{
++		Name:  "bal.sequential",
++		Usage: "Execute blocks sequentially even where EIP-7928 parallel execution applies, so the same fixture can be judged by both paths.",
++	}
+ 
+ 	// Debugging flags.
+ 	DumpFlag = &cli.BoolFlag{
+diff --git a/tests/block_test.go b/tests/block_test.go
+index a054e59e0..961913174 100644
+--- a/tests/block_test.go
++++ b/tests/block_test.go
+@@ -116,7 +116,7 @@ func execBlockTest(t *testing.T, bt *testMatcher, test *BlockTest) {
+ 	}
+ 	for _, snapshot := range snapshotConf {
+ 		for _, dbscheme := range dbschemeConf {
+-			if err := bt.checkFailure(t, test.Run(snapshot, dbscheme, true, nil, nil)); err != nil {
++			if err := bt.checkFailure(t, test.Run(snapshot, dbscheme, true, false, nil, nil)); err != nil {
+ 				t.Errorf("test with config {snapshotter:%v, scheme:%v} failed: %v", snapshot, dbscheme, err)
+ 				return
+ 			}
+diff --git a/tests/block_test_util.go b/tests/block_test_util.go
+index 62ee3b3b4..5eb5c319c 100644
+--- a/tests/block_test_util.go
++++ b/tests/block_test_util.go
+@@ -113,7 +113,7 @@ type btHeaderMarshaling struct {
+ 	SlotNumber    *math.HexOrDecimal64
+ }
+ 
+-func (t *BlockTest) Run(snapshotter bool, scheme string, witness bool, tracer *tracing.Hooks, postCheck func(error, *core.BlockChain)) (result error) {
++func (t *BlockTest) Run(snapshotter bool, scheme string, witness bool, sequential bool, tracer *tracing.Hooks, postCheck func(error, *core.BlockChain)) (result error) {
+ 	config, ok := Forks[t.json.Network]
+ 	if !ok {
+ 		return UnsupportedForkError{t.json.Network}
+@@ -161,7 +161,8 @@ func (t *BlockTest) Run(snapshotter bool, scheme string, witness bool, tracer *t
+ 		Preimages:      true,
+ 		TxLookupLimit:  -1, // disable tx indexing
+ 		VmConfig: vm.Config{
+-			Tracer: tracer,
++			Tracer:                   tracer,
++			DisableParallelExecution: sequential,
+ 		},
+ 		StatelessSelfValidation: witness,
+ 	}
+-- 
+2.47.3
+

@@ -1,0 +1,42 @@
+From 6565f7cf320bdc0e1a5828ad473f3348572b12fc Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <fselmo2@gmail.com>
+Date: Wed, 23 Sep 2026 23:29:45 +0000
+Subject: [PATCH 3/3] core: print the parallel processor's sequential fallback
+
+MainnetParallelBlockProcessor re-runs a failed block sequentially unless
+perfect parallelization had a block access list to schedule from, and says
+so only at INFO -- which evmtool never shows, since it turns logging off. A
+block-test run would read the sequential result as the parallel verdict.
+The fallback is now also printed to stderr with a BAL-FALLBACK tag, so a
+fuzzing runner can count it and the day the configuration drifts (a list
+fed with perfect parallelization off) the masked failures are visible.
+
+Not a runner change: it touches ethereum/core, so the series admits this
+one file by name.
+---
+ .../parallelization/MainnetParallelBlockProcessor.java   | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java b/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
+index 348b43a7f5..801515f9cc 100644
+--- a/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
++++ b/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
+@@ -153,6 +153,15 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
+             new ParallelTransactionPreprocessing(transactionProcessor, executor, balConfiguration));
+     if (blockProcessingResult.isFailed() && !balPerfectParallelization) {
+       // Fallback to non-parallel processing if there is a block processing exception .
++      // Printed as well as logged: evmtool turns logging off, and a fuzzing
++      // runner counts this line to see when the fallback masks a failure.
++      System.err.println(
++          "BAL-FALLBACK block="
++              + block.getHeader().getNumber()
++              + " bal="
++              + blockAccessList.isPresent()
++              + " reason="
++              + blockProcessingResult.errorMessage.orElse("unknown"));
+       LOG.info(
+           "Parallel transaction processing failure. Falling back to non-parallel processing for block #{} ({})",
+           block.getHeader().getNumber(),
+-- 
+2.47.3
+

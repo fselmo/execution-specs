@@ -1,0 +1,163 @@
+From b3483bfef2e909634e268e570a2a96a92c5b5058 Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <felipe.selmo@ethereum.org>
+Date: Tue, 22 Sep 2026 14:56:29 -0600
+Subject: [PATCH 1/2] Ethereum.Test.Base: attach a fixture's block access list
+ to the block under test
+
+The EIP-7928 list travels beside the block RLP; the blockchain test lane
+decoded only the RLP, so Block.BlockAccessList was null on every test block
+and BlockAccessListManager.PrepareForProcessing -- which requires a non-null
+list -- never enabled parallel execution, whatever --parallelExecution said.
+
+Parse the fixture's blockAccessList into a ReadOnlyBlockAccessList, round-trip
+it through RLP so the block carries the encoded bytes and wire hash the way the
+network path delivers them, and attach it before the block is enrolled.
+
+Verified at 7a63aa02da on a 40-fixture generated shard, counting the
+PrepareForProcessing decision per real block: --parallelExecution true gives
+parallel=True with the list attached on 40 of 40; false gives parallel=False on
+40 of 40; verdicts 40/40 both ways. A fixture with a corrupted delivered list
+is rejected in both modes (InvalidBlockLevelAccessListHash).
+---
+ .../Ethereum.Test.Base/BlockAccessListJson.cs | 85 +++++++++++++++++++
+ .../Ethereum.Test.Base/BlockchainTestBase.cs  | 11 +++
+ .../Ethereum.Test.Base/TestBlockJson.cs       |  2 +
+ 3 files changed, 98 insertions(+)
+ create mode 100644 src/Nethermind/Ethereum.Test.Base/BlockAccessListJson.cs
+
+diff --git a/src/Nethermind/Ethereum.Test.Base/BlockAccessListJson.cs b/src/Nethermind/Ethereum.Test.Base/BlockAccessListJson.cs
+new file mode 100644
+index 0000000000..fc76201f82
+--- /dev/null
++++ b/src/Nethermind/Ethereum.Test.Base/BlockAccessListJson.cs
+@@ -0,0 +1,85 @@
++// SPDX-FileCopyrightText: 2026 Demerzel Solutions Limited
++// SPDX-License-Identifier: LGPL-3.0-only
++
++using System.Linq;
++using Nethermind.Core;
++using Nethermind.Core.BlockAccessLists;
++using Nethermind.Core.Extensions;
++using Nethermind.Int256;
++
++namespace Ethereum.Test.Base;
++
++/// <summary>
++/// The blockchain fixture's <c>blockAccessList</c> entry: the EIP-7928 list
++/// travels beside the block RLP, and a block decoded from the RLP alone has
++/// none, so the parallel processor never runs on a test block unless the
++/// fixture's list is attached.
++/// </summary>
++public class BlockAccessListAccountJson
++{
++    public string? Address { get; set; }
++    public BlockAccessListNonceJson[]? NonceChanges { get; set; }
++    public BlockAccessListBalanceJson[]? BalanceChanges { get; set; }
++    public BlockAccessListCodeJson[]? CodeChanges { get; set; }
++    public BlockAccessListSlotJson[]? StorageChanges { get; set; }
++    public string[]? StorageReads { get; set; }
++
++    public static ReadOnlyBlockAccessList ToBlockAccessList(BlockAccessListAccountJson[] accounts)
++    {
++        ReadOnlyAccountChanges[] changes = new ReadOnlyAccountChanges[accounts.Length];
++        int itemCount = 0;
++        for (int i = 0; i < accounts.Length; i++)
++        {
++            BlockAccessListAccountJson a = accounts[i];
++            ReadOnlySlotChanges[] storageChanges = (a.StorageChanges ?? []).Select(s =>
++                new ReadOnlySlotChanges(
++                    ToUInt256(s.Slot),
++                    (s.SlotChanges ?? []).Select(c => new StorageChange(ToIndex(c.BlockAccessIndex), ToUInt256(c.PostValue).ToBigEndianWord())).ToArray()))
++                .ToArray();
++            UInt256[] storageReads = (a.StorageReads ?? []).Select(ToUInt256).ToArray();
++            changes[i] = new ReadOnlyAccountChanges(
++                new Address(a.Address!),
++                storageChanges,
++                storageReads,
++                (a.BalanceChanges ?? []).Select(c => new BalanceChange(ToIndex(c.BlockAccessIndex), ToUInt256(c.PostBalance))).ToArray(),
++                (a.NonceChanges ?? []).Select(c => new NonceChange(ToIndex(c.BlockAccessIndex), ToULong(c.PostNonce))).ToArray(),
++                (a.CodeChanges ?? []).Select(c => new CodeChange(ToIndex(c.BlockAccessIndex), Bytes.FromHexString(c.NewCode!))).ToArray());
++            itemCount += 1 + storageChanges.Length + storageReads.Length;
++        }
++        return new ReadOnlyBlockAccessList(changes, itemCount);
++    }
++
++    private static UInt256 ToUInt256(string? hex) => Bytes.FromHexString(hex!).ToUInt256();
++    private static ulong ToULong(string? hex) => Bytes.FromHexString(hex!).ToULongFromBigEndianByteArrayWithoutLeadingZeros();
++    private static uint ToIndex(string? hex) => (uint)ToULong(hex);
++}
++
++public class BlockAccessListNonceJson
++{
++    public string? BlockAccessIndex { get; set; }
++    public string? PostNonce { get; set; }
++}
++
++public class BlockAccessListBalanceJson
++{
++    public string? BlockAccessIndex { get; set; }
++    public string? PostBalance { get; set; }
++}
++
++public class BlockAccessListCodeJson
++{
++    public string? BlockAccessIndex { get; set; }
++    public string? NewCode { get; set; }
++}
++
++public class BlockAccessListSlotJson
++{
++    public string? Slot { get; set; }
++    public BlockAccessListStorageChangeJson[]? SlotChanges { get; set; }
++}
++
++public class BlockAccessListStorageChangeJson
++{
++    public string? BlockAccessIndex { get; set; }
++    public string? PostValue { get; set; }
++}
+diff --git a/src/Nethermind/Ethereum.Test.Base/BlockchainTestBase.cs b/src/Nethermind/Ethereum.Test.Base/BlockchainTestBase.cs
+index f3b125a961..a698ee65bb 100644
+--- a/src/Nethermind/Ethereum.Test.Base/BlockchainTestBase.cs
++++ b/src/Nethermind/Ethereum.Test.Base/BlockchainTestBase.cs
+@@ -19,6 +19,7 @@ using Nethermind.Consensus.Processing;
+ using Nethermind.Consensus.Rewards;
+ using Nethermind.Consensus.Validators;
+ using Nethermind.Core;
++using Nethermind.Core.BlockAccessLists;
+ using Nethermind.Core.Exceptions;
+ using Nethermind.Core.Crypto;
+ using Nethermind.Core.Extensions;
+@@ -691,6 +692,16 @@ public abstract class BlockchainTestBase
+             {
+                 byte[] rlpBytes = Bytes.FromHexString(testBlockJson.Rlp!);
+                 Block suggestedBlock = Rlp.Decode<Block>(rlpBytes);
++                // The EIP-7928 list is not in the RLP; without it PrepareForProcessing
++                // never enables parallel execution, whatever --parallelExecution says.
++                if (testBlockJson.BlockAccessList is not null)
++                {
++                    // Round-trip through RLP so the block carries the list the way the
++                    // network path delivers it: encoded bytes and a cached wire hash.
++                    byte[] encoded = Rlp.Encode(BlockAccessListAccountJson.ToBlockAccessList(testBlockJson.BlockAccessList)).Bytes;
++                    suggestedBlock.BlockAccessList = Rlp.Decode<ReadOnlyBlockAccessList>(encoded);
++                    suggestedBlock.EncodedBlockAccessList = encoded;
++                }
+ 
+                 // EEST omits blockHeader (and the parsed body fields) for invalid-block fixtures
+                 // because there is no canonical header for a block that must be rejected. The
+diff --git a/src/Nethermind/Ethereum.Test.Base/TestBlockJson.cs b/src/Nethermind/Ethereum.Test.Base/TestBlockJson.cs
+index 05817354f6..80afa4972b 100644
+--- a/src/Nethermind/Ethereum.Test.Base/TestBlockJson.cs
++++ b/src/Nethermind/Ethereum.Test.Base/TestBlockJson.cs
+@@ -8,6 +8,8 @@ namespace Ethereum.Test.Base
+         public TestBlockHeaderJson? BlockHeader { get; set; }
+         public TestBlockHeaderJson[]? UncleHeaders { get; set; }
+         public string? Rlp { get; set; }
++        // EIP-7928: the fixture carries the block access list beside the RLP.
++        public BlockAccessListAccountJson[]? BlockAccessList { get; set; }
+         public LegacyTransactionJson[]? Transactions { get; set; }
+         public string? ExpectException { get; set; }
+ 
+-- 
+2.47.3
+
