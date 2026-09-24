@@ -49,7 +49,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 19
+GENERATOR_VERSION = 20
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -220,6 +220,94 @@ def toucher_code(
         for slot in range(slots)
     }
     return bytes(code), storage
+
+
+STATE_EXHAUSTER_ADDRESS = 0x1FFFA
+"""Helper that runs a reservoir-funded transaction out of gas on a state
+charge.
+
+Three phases. It writes as many fresh slots as its calldata asks, which
+the generator sizes to empty the reservoir, so later state charges spill
+into execution gas. It then burns execution gas in bounded calls to
+`BURNER_ADDRESS` until `GAS` falls below `STATE_EXHAUST_THRESHOLD`, and
+writes one more fresh slot. At that point the store's execution cost is
+always affordable and its state cost never is, so the transaction runs
+out of gas on the state charge by construction rather than by measuring
+or predicting its need.
+"""
+
+BURNER_ADDRESS = 0x1FFF9
+"""Helper whose code is a single undefined byte: a call to it consumes
+exactly the gas forwarded."""
+
+STATE_EXHAUST_BURN = 80_000
+"""Gas each burner call forwards."""
+
+STATE_EXHAUST_THRESHOLD = 105_000
+"""The burner loop stops once `GAS` is below this. The last burn leaves
+between this less one burn and this, which covers the final store's
+execution cost and falls short of its state cost."""
+
+
+def state_exhauster_code() -> bytes:
+    """
+    The exhauster's code; its first phase's length comes from calldata.
+
+    Phase one writes slots 1..n, n from calldata word 0; phase two calls
+    the burner while `GAS` is at least the threshold; phase three writes
+    a slot no phase touched.
+    """
+
+    def assemble(fill_loop: int, fill_done: int, burn_loop: int) -> Bytecode:
+        return (
+            Op.PUSH0
+            + Op.JUMPDEST  # fill_loop, stack: [i]
+            + Op.DUP1
+            + Op.CALLDATALOAD(0)
+            + Op.GT
+            + Op.ISZERO
+            + Op.PUSH2(fill_done)
+            + Op.JUMPI
+            # The counter sits under the value and the addend: DUP3.
+            + Op.SSTORE(Op.ADD(Op.DUP3, 1), 1)
+            + Op.PUSH1(1)
+            + Op.ADD
+            + Op.PUSH2(fill_loop)
+            + Op.JUMP
+            + Op.JUMPDEST  # fill_done
+            + Op.POP
+            + Op.JUMPDEST  # burn_loop
+            + Op.PUSH3(STATE_EXHAUST_THRESHOLD)
+            + Op.GAS
+            + Op.LT
+            + Op.PUSH2(0)  # patched: the final store
+            + Op.JUMPI
+            + Op.POP(
+                Op.CALL(
+                    STATE_EXHAUST_BURN,
+                    Op.PUSH20(BURNER_ADDRESS),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                )
+            )
+            + Op.PUSH2(burn_loop)
+            + Op.JUMP
+        )
+
+    probe = bytes(assemble(0, 0, 0))
+    fill_loop = 1
+    fill_done = probe.index(bytes(Op.JUMPDEST + Op.POP + Op.JUMPDEST))
+    burn_loop = fill_done + 2
+    body = bytes(assemble(fill_loop, fill_done, burn_loop))
+    final = len(body)
+    # The only PUSH2 0x0000 left is the burn loop's exit target.
+    exit_push = bytes(Op.PUSH2(0))
+    assert body.count(exit_push) == 1
+    body = body.replace(exit_push, bytes(Op.PUSH2(final)))
+    return body + bytes(Op.JUMPDEST + Op.SSTORE(2**255, 1))
 
 
 RESERVOIR_TX_RATE = 0.35
@@ -578,6 +666,19 @@ def generate_fuzzer_output(
         )
         contract_addresses.append(address)
 
+    accounts[Address(STATE_EXHAUSTER_ADDRESS)] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(1),
+        code=Bytes(state_exhauster_code()),
+    )
+    accounts[Address(BURNER_ADDRESS)] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(1),
+        code=Bytes(bytes(Op.INVALID)),
+    )
+    fresh_store_state = Op.SSTORE(
+        key_warm=False, original_value=0, new_value=1
+    ).state_cost(fork)
     nonces: Dict[Address, int] = dict.fromkeys(sender_addresses, 0)
     authority_nonces: Dict[Address, int] = dict(authority_start)
     tx_targets = pool.tx_targets()
@@ -600,11 +701,28 @@ def generate_fuzzer_output(
         sender = rng.choice(sender_addresses)
         to = Address(rng.choice(tx_targets))
         gas_need_fraction = None
+        exhaust: Optional[Tuple[int, int]] = None
         if rng.random() < domains.failing_tx_rate:
             to = Address(FAILER_ADDRESS)
         elif rng.random() < domains.toucher_tx_rate:
             to = Address(TOUCHER_ADDRESS)
             gas_need_fraction = rng.choice(domains.toucher_margins)
+        elif (
+            domains.reservoir_tx_gas
+            and rng.random() < domains.state_exhaust_tx_rate
+        ):
+            # The limit is the cap plus the drawn reservoir: arithmetic on
+            # the draw, not a prediction of what execution needs.
+            reservoir = int(
+                rng.choice(domains.state_exhaust_reservoir_stores)
+                * fresh_store_state
+            )
+            if tx_gas_cap + reservoir <= budgets[block]:
+                to = Address(STATE_EXHAUSTER_ADDRESS)
+                exhaust = (
+                    tx_gas_cap + reservoir,
+                    -(-reservoir // fresh_store_state),
+                )
         choices = tx_gas_choices
         if domains.reservoir_tx_gas and rng.random() < RESERVOIR_TX_RATE:
             choices = domains.reservoir_tx_gas + tx_gas_choices
@@ -619,8 +737,15 @@ def generate_fuzzer_output(
             # later one with room, so the draw goes on.
             continue
         gas = rng.choice(affordable)
-        budgets[block] -= gas
         tx_type = rng.choices(types, weights=shares)[0]
+        data = Bytes(fuzzed_calldata(rng, domains=domains))
+        if exhaust is not None:
+            # No authorizations: their intrinsic state would come out of
+            # the reservoir the draw sized.
+            gas, stores = exhaust
+            tx_type = 2
+            data = Bytes(stores.to_bytes(32, "big"))
+        budgets[block] -= gas
         # Read before building authorizations: an authorization whose
         # authority is this sender advances `nonces[sender]`, and the
         # transaction's own nonce is the value from before that.
@@ -648,7 +773,7 @@ def generate_fuzzer_output(
                 gas=HexNumber(gas),
                 nonce=HexNumber(tx_nonce),
                 value=HexNumber(rng.randrange(0, 10**16)),
-                data=Bytes(fuzzed_calldata(rng, domains=domains)),
+                data=data,
                 gas_need_fraction=gas_need_fraction,
                 **fields,
             )

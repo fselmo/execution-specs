@@ -43,23 +43,25 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 19
+BASELINE_GENERATOR_VERSION = 20
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    50,
-    193,
-    407,
-    604,
-    739,
-    1777,
-    1820,
-    2202,
-    3200,
-    3737,
-    4710,
+    174,
+    255,
+    312,
+    677,
+    766,
+    1132,
+    1174,
+    1312,
+    1709,
+    3064,
+    3218,
+    4035,
+    4423,
 )
-"""Greedy cover over a 5000-seed baseline at v19: together these fire
+"""Greedy cover over a 5000-seed baseline at v20: together these fire
 every target below.
 
 Re-baseline over at least `GATE_BASELINE_SEEDS`, which is measured
@@ -68,15 +70,18 @@ reports its own sampling as a regression: at 400 seeds this map lost
 `OutOfBoundsRead` at depths 2 and 3, and seeds 400-800 reach both while
 800-1200 reach neither."""
 
-GATE_BASELINE_SEEDS = 2400
+GATE_BASELINE_SEEDS = 4700
 """Baseline window, from the rarest gated cell's measured rate.
 
-`(3, "halt", "StackOverflowError")` occurs 11 times in 5000 cases at
-v19, a rate of 0.0022, which needs 2094 seeds to clear a 1% miss
-probability (the BAL cell `extcodehash x touched_account x revert`: 10
-in 5000 and 2303 at v18; `StackOverflowError` at depth 3: 10 in 5000 at
-v17; `OutOfBoundsRead` at depth 3: 10 in 5000 and 2303 at v16,
-11 in 5000 and 2094 at v15; 14 in 6000 and 1977 at v14). Recheck it
+`(3, "halt", "OutOfBoundsRead")` occurs 5 times in 5000 cases at v20,
+a rate of 0.0010, which needs 4606 seeds to clear a 1% miss probability.
+It was at least 11 at v19, but 11 against 5 in two samples of 5000 is
+not a significant drop (p about 0.1). Earlier rarest cells:
+`StackOverflowError` at depth 3, 11 in 5000 and 2094 at v19; the BAL
+cell `extcodehash x touched_account x revert`, 10 in 5000 and 2303 at
+v18; `StackOverflowError` at depth 3, 10 in 5000 at v17;
+`OutOfBoundsRead` at depth 3, 10 in 5000 and 2303 at v16, 11 in 5000
+and 2094 at v15; 14 in 6000 and 1977 at v14. Recheck it
 with `required_gate_seeds` whenever a motif is added; the number moving
 is the signal. A 2000-seed probe of v15 put the rarest cell at 2/2000
 and asked for 4606; the small sample, not the generator, was what
@@ -192,6 +197,9 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "touched_account",
             "success",
         ),
+        ("fork.process_transaction", "nonce_change", "success"),
+        ("fork.process_transaction", "storage_read", "success"),
+        ("fork.process_transaction", "touched_account", "success"),
         ("fork.process_withdrawals", "balance_change", "success"),
         ("fork.process_withdrawals", "touched_account", "success"),
         ("fork.update_sender_state", "balance_change", "exceptional_halt"),
@@ -318,6 +326,11 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "revert",
         ),
         (
+            "vm.instructions.environment.extcodecopy",
+            "touched_account",
+            "success",
+        ),
+        (
             "vm.instructions.environment.extcodehash",
             "touched_account",
             "exceptional_halt",
@@ -419,6 +432,7 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "exceptional_halt",
         ),
         ("vm.instructions.system.create", "touched_account", "out_of_gas"),
+        ("vm.instructions.system.create", "touched_account", "revert"),
         ("vm.instructions.system.create", "touched_account", "success"),
         (
             "vm.instructions.system.delegatecall",
@@ -502,6 +516,7 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
         ("vm.interpreter.process_call", "touched_account", "out_of_gas"),
         ("vm.interpreter.process_call", "touched_account", "revert"),
         ("vm.interpreter.process_call", "touched_account", "success"),
+        ("vm.interpreter.process_create", "code_change", "success"),
         ("vm.interpreter.process_create", "nonce_change", "exceptional_halt"),
         ("vm.interpreter.process_create", "nonce_change", "out_of_gas"),
         ("vm.interpreter.process_create", "nonce_change", "revert"),
@@ -516,27 +531,16 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
         ("vm.interpreter.process_create", "touched_account", "success"),
     }
 )
-"""BAL cells the baseline window samples reliably: 139 of the
-147 reached over 5000 seeds at v19, each seen at least
-`bal_gate_floor` = 11 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
+"""BAL cells the baseline window samples reliably: 145 of the
+146 reached over 5000 seeds at v20, each seen at least
+`bal_gate_floor` = 5 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
 
 BAL_CELLS_BELOW_WINDOW: Dict[Tuple[str, str, str], int] = {
-    ("fork.process_transaction", "code_change", "success"): 1,
-    ("fork.process_transaction", "nonce_change", "success"): 5,
-    ("fork.process_transaction", "storage_read", "success"): 5,
-    ("fork.process_transaction", "touched_account", "success"): 5,
-    (
-        "vm.instructions.environment.extcodecopy",
-        "touched_account",
-        "success",
-    ): 6,
-    ("vm.instructions.system.create", "touched_account", "revert"): 5,
     (
         "vm.instructions.system.selfdestruct",
         "touched_account",
         "out_of_gas",
-    ): 3,
-    ("vm.interpreter.process_create", "code_change", "success"): 3,
+    ): 1,
 }
 """Reached in the 5000-seed baseline but fewer than `bal_gate_floor` times,
 with their occurrence counts. Listed so they stay visible rather than gated:
@@ -705,6 +709,14 @@ def _bal_items(observation: Any, seed: int) -> Set[Any]:
     }
 
 
+def _target_label(target: Tuple[str, Any]) -> str:
+    """`event|name` or `frame|depth|kind|name`, for the reach log."""
+    kind, name = target
+    if isinstance(name, str):
+        return f"{kind}|{name}"
+    return "|".join([kind, *map(str, name)])
+
+
 def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
     """
     Measure per-seed signatures and greedy-cover a fresh baseline.
@@ -798,6 +810,14 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
         },
         "required_seeds": required_gate_seeds(gated, len(per_seed)),
         "rarest": _rarest(gated, len(per_seed)),
+        # Every event's and frame's count, so a window that grows between
+        # versions names the target that became rare.
+        "occurrences": {
+            _target_label(target): count
+            for target, count in sorted(
+                base.items(), key=lambda item: (item[1], str(item[0]))
+            )
+        },
     }
 
 

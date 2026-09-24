@@ -26,6 +26,7 @@ from typing import Dict, FrozenSet, Optional, Set, Tuple
 
 from ethereum.trace import (
     EvmStop,
+    GasAndRefund,
     OpException,
     OpStart,
     PrecompileStart,
@@ -226,6 +227,10 @@ class Signature:
     transaction's top-level frame ended, one of `TX_OUTCOMES`. Telemetry,
     not novelty. At v17, 82% of generated transactions failed and no
     record counted it."""
+    tx_oog: Tuple[Tuple[str, int], ...] = ()
+    """`(kind, transactions)` pairs for top-level out-of-gas halts, one of
+    `TX_OOG_KINDS`: which gas ran out, and whether the transaction carried
+    a state reservoir. Telemetry, not novelty."""
 
     def is_empty(self) -> bool:
         """Return whether nothing was observed."""
@@ -246,6 +251,7 @@ def merge_signatures(a: Signature, b: Signature) -> Signature:
         a.tx_types | b.tx_types,
         _sum_steps(a.block_steps, b.block_steps),
         _sum_counts(a.tx_outcomes, b.tx_outcomes),
+        _sum_counts(a.tx_oog, b.tx_oog),
     )
 
 
@@ -261,6 +267,18 @@ def _sum_counts(
 
 TX_OUTCOMES = ("success", "revert", "out_of_gas", "exceptional_halt")
 """How a user transaction's top-level frame can end."""
+
+TX_OOG_KINDS = (
+    "execution",
+    "execution-reservoir",
+    "state",
+    "state-reservoir",
+)
+"""Which charge a top-level out-of-gas halt failed on, execution gas or
+state gas, and whether the transaction carried a state reservoir. A state
+charge fails only once the reservoir and execution gas together fall
+short of it; a halt with no charge event (memory expansion, a gas check)
+is execution."""
 
 
 def tx_outcome(error: object) -> str:
@@ -294,6 +312,29 @@ def _block_number(evm: object) -> int:
     return int(getattr(block_env, "number", 0))
 
 
+def _top_frame_charge(evm: object, event: TraceEvent, last: str) -> str:
+    """
+    The charge a top-level out-of-gas halt would be blamed on so far.
+
+    A state charge is announced before it is taken; it fails only if the
+    reservoir and execution gas together fall short. Anything else --
+    an execution charge, or an op starting -- makes execution the answer
+    until the next state charge, which covers halts that raise without a
+    charge event.
+    """
+    if isinstance(event, StateGasAndRefund):
+        meter = getattr(evm, "gas_meter", None)
+        available = int(getattr(meter, "state_gas_left", 0)) + int(
+            getattr(meter, "gas_left", 0)
+        )
+        return (
+            "state" if int(event.state_gas_cost) > available else "execution"
+        )
+    if isinstance(event, (GasAndRefund, OpStart)):
+        return "execution"
+    return last
+
+
 class SignatureTracer:
     """Accumulate an execution Signature from the ``(evm, event)`` stream."""
 
@@ -305,6 +346,8 @@ class SignatureTracer:
         self._block_steps: Dict[int, int] = {}
         self._block_txs: Dict[int, Set[int]] = {}
         self._tx_outcomes: Dict[str, int] = {}
+        self._tx_oog: Dict[str, int] = {}
+        self._last_charge = "execution"
         self._max_depth = 0
         # True only between a CALL-family OpStart and the next OpStart or
         # PrecompileStart: the window in which an OutOfGasError means the
@@ -395,6 +438,10 @@ class SignatureTracer:
         if _child_state_gas_spilled(evm, depth):
             self._events.add("child-state-gas-spill")
         self._fold_state_gas(evm, depth)
+        if tx_index is not None and depth == 0:
+            self._last_charge = _top_frame_charge(
+                evm, event, self._last_charge
+            )
         if isinstance(event, OpStart):
             if tx_index is not None:
                 number = _block_number(evm)
@@ -443,6 +490,16 @@ class SignatureTracer:
             # EvmStop(REVERT) -- the unreached map exposed the dead path.
             error_kind = type(event.error).__name__
             self._frames.add((_bucket(depth), "halt", error_kind))
+            if (
+                tx_index is not None
+                and depth == 0
+                and error_kind == "OutOfGasError"
+            ):
+                kind = self._last_charge
+                tx_env = getattr(evm, "tx_env", None)
+                if int(getattr(tx_env, "state_gas_reservoir", 0)) > 0:
+                    kind += "-reservoir"
+                self._tx_oog[kind] = self._tx_oog.get(kind, 0) + 1
             if self._entry_oog(error_kind):
                 self._events.add("call-entry-oog")
             self._call_pending = False
@@ -507,4 +564,5 @@ class SignatureTracer:
                 for number, steps in sorted(self._block_steps.items())
             ),
             tx_outcomes=tuple(sorted(self._tx_outcomes.items())),
+            tx_oog=tuple(sorted(self._tx_oog.items())),
         )

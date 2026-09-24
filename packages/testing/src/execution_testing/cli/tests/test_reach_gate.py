@@ -154,6 +154,22 @@ def test_a_generator_version_ships_with_its_rate_records() -> None:
         ran_before, ran_now = sum(before.values()), sum(outcomes.values())
         assert significant_drops(before, outcomes, ran_before, ran_now) == []
 
+    # Top-level out-of-gas halts by which gas ran out, against the
+    # transactions run.
+    oog = current.get("tx_oog")
+    assert oog is not None, f"v{GENERATOR_VERSION} event-rates lacks tx_oog"
+    before_oog = previous.get("tx_oog")
+    if before_oog and before:
+        assert (
+            significant_drops(
+                before_oog,
+                oog,
+                sum(before.values()),
+                sum(outcomes.values()),
+            )
+            == []
+        )
+
     # Transactions whose writes survive, read from the fixture's list.
     writes = current.get("tx_writes")
     assert writes, f"v{GENERATOR_VERSION} event-rates lacks tx_writes"

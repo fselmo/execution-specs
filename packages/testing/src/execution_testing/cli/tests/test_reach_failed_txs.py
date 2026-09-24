@@ -24,6 +24,7 @@ from ..fuzzer_bridge import campaign as mod
 from ..fuzzer_bridge.density import axis_collapse_warnings, axis_coverage
 from ..fuzzer_bridge.generator import (
     FAILER_ADDRESS,
+    STATE_EXHAUSTER_ADDRESS,
     TOUCHER_ADDRESS,
     failer_code,
     generate_fuzzer_output,
@@ -343,5 +344,92 @@ def test_every_toucher_axis_keeps_all_its_values() -> None:
     coverage = axis_coverage(Amsterdam, range(0, 400))
     warnings_ = [
         w for w in axis_collapse_warnings(coverage) if w.startswith("toucher")
+    ]
+    assert warnings_ == []
+
+
+EXHAUSTER = Address(STATE_EXHAUSTER_ADDRESS)
+STORE = Op.SSTORE(key_warm=False, original_value=0, new_value=1)
+FINAL_SLOT = 2**255
+
+
+def _exhaust(reservoir: int, stores: int) -> FuzzerOutput:
+    """
+    One transaction to the exhauster, funded `reservoir` above the cap,
+    told to fill `stores` slots before it burns execution gas.
+    """
+    case = generate_fuzzer_output(Amsterdam, 0)
+    cap = Amsterdam.transaction_gas_limit_cap()
+    assert cap is not None
+    (first, *_) = case.transactions
+    tx = first.model_copy(
+        update={
+            "to": EXHAUSTER,
+            "gas": HexNumber(cap + reservoir),
+            "data": Bytes(stores.to_bytes(32, "big")),
+            "value": HexNumber(0),
+            "authorization_list": None,
+            "gas_need_fraction": None,
+            "block": 0,
+        }
+    )
+    return case.model_copy(
+        update={"transactions": [tx], "block_count": 1, "withdrawals": []}
+    )
+
+
+def _oog_kinds() -> Dict[str, int]:
+    return dict(mod._FILL["eels"].last_signature.tx_oog)
+
+
+def test_an_emptied_reservoir_runs_out_on_a_state_charge() -> None:
+    """
+    A reservoir of one store is emptied by the first write; the final
+    write's state charge then exceeds what execution gas is left. The
+    transaction fails, both slots are reads, and the tally blames a state
+    charge in a reservoir-funded transaction.
+    """
+    fixture = _fill(_exhaust(STORE.state_cost(Amsterdam), 1))
+    (block,) = fixture["blocks"]
+    (receipt,) = block["receipts"]
+    assert not receipt["status"]
+    entry = _entry(fixture, EXHAUSTER)
+    assert _slots(entry["storageReads"]) == {1, FINAL_SLOT}
+    assert entry["storageChanges"] == []
+    assert _oog_kinds() == {"state-reservoir": 1}
+
+
+def test_one_more_store_of_reservoir_pays_for_the_final_write() -> None:
+    """
+    The near-miss by one input: a reservoir one store larger covers the
+    final write's state charge, so the transaction succeeds and both
+    writes are changes at its index.
+    """
+    fixture = _fill(_exhaust(2 * STORE.state_cost(Amsterdam), 1))
+    (block,) = fixture["blocks"]
+    (receipt,) = block["receipts"]
+    assert receipt["status"]
+    entry = _entry(fixture, EXHAUSTER)
+    changed = {int(c["slot"], 16) for c in entry["storageChanges"]}
+    assert changed == {1, FINAL_SLOT}
+    assert _oog_kinds() == {}
+
+
+def test_without_a_reservoir_it_is_a_state_charge_but_not_this_cell() -> None:
+    """
+    At the cap exactly there is no reservoir: the final write still runs
+    out on its state charge, and the tally says so without the reservoir.
+    """
+    _fill(_exhaust(0, 0))
+    assert _oog_kinds() == {"state": 1}
+
+
+def test_every_state_exhaust_axis_keeps_all_its_values() -> None:
+    """Presence and every reservoir size stay drawn."""
+    coverage = axis_coverage(Amsterdam, range(0, 400))
+    warnings_ = [
+        w
+        for w in axis_collapse_warnings(coverage)
+        if w.startswith("state_exhaust")
     ]
     assert warnings_ == []

@@ -380,6 +380,32 @@ SHAPES: Dict[str, Shape] = {
         ),
         models_client_bug=False,
     ),
+    "exhausted-reservoir-state-charge-swallowed": Shape(
+        name="exhausted-reservoir-state-charge-swallowed",
+        description=(
+            "REACH PROBE, NOT A CLIENT MODEL. In a frame that began with a "
+            "state reservoir, a state charge larger than the reservoir and "
+            "execution gas together empties both instead of running out of "
+            "gas, so the frame goes on. Frames without a reservoir are "
+            "untouched: the defect lives only where a reservoir-funded "
+            "transaction runs out on a state charge. No client is known to "
+            "have had it."
+        ),
+        edits=(
+            Edit(
+                module=f"{_AMSTERDAM}/vm/gas.py",
+                find="    else:\n        raise OutOfGasError\n",
+                replace=(
+                    "    elif gas_meter.state_gas_baseline > Uint(0):\n"
+                    "        gas_meter.state_gas_left = StateGas(Uint(0))\n"
+                    "        gas_meter.gas_left = ExecutionGas(Uint(0))\n"
+                    "    else:\n"
+                    "        raise OutOfGasError\n"
+                ),
+            ),
+        ),
+        models_client_bug=False,
+    ),
     "blockhash-from-history": Shape(
         name="blockhash-from-history",
         description=(

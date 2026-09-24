@@ -479,6 +479,7 @@ def _rates_and_blocks(
     Dict[str, Dict[str, Any]],
     Dict[str, int],
     Dict[str, int],
+    Dict[str, int],
 ]:
     """
     Fill each seed once and return its event rates and block execution.
@@ -493,7 +494,8 @@ def _rates_and_blocks(
     The third map counts executed user transactions by how their
     top-level frame ended. The fourth counts, from the fixture rather than
     the trace, how many transactions left a storage change in the block
-    access list at their own index: the ones whose writes survived.
+    access list at their own index: the ones whose writes survived. The
+    fifth counts top-level out-of-gas halts by which gas ran out.
     """
     from execution_testing.cli.fuzzer_bridge.campaign import fill_case
     from execution_testing.cli.fuzzer_bridge.generator import (
@@ -509,6 +511,7 @@ def _rates_and_blocks(
     blocks: Dict[str, Dict[str, Any]] = {}
     outcomes: Dict[str, int] = {}
     writes = {"txs": 0, "committed_storage": 0}
+    oog: Dict[str, int] = {}
     for seed in seeds:
         eels.last_signature = None
         case = generate_fuzzer_output(fork, seed)
@@ -540,7 +543,9 @@ def _rates_and_blocks(
             block["steps"].append(steps)
         for outcome, count in signature.tx_outcomes:
             outcomes[outcome] = outcomes.get(outcome, 0) + count
-    return rates, blocks, outcomes, writes
+        for kind, count in signature.tx_oog:
+            oog[kind] = oog.get(kind, 0) + count
+    return rates, blocks, outcomes, writes, oog
 
 
 def event_rates(fork: "Fork", seeds: range) -> Dict[str, Dict[str, int]]:
@@ -598,6 +603,7 @@ def event_rate_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
         record["block_code"],
         record["tx_outcomes"],
         record["tx_writes"],
+        record["tx_oog"],
     ) = _rates_and_blocks(fork, seeds)
     record["below_floor"] = rate_floor_warnings(record)
     return record
