@@ -17,6 +17,10 @@ from typing import Dict, List, Optional
 
 from execution_testing.base_types import Account, Address, Hash, HexNumber
 from execution_testing.forks import Fork
+from execution_testing.fuzzing import (
+    blockhash_history,
+    require_blockhash_history,
+)
 from execution_testing.specs import Block, BlockchainTest, StateTest
 from execution_testing.test_types import (
     Alloc,
@@ -26,7 +30,6 @@ from execution_testing.test_types import (
     Withdrawal,
 )
 from execution_testing.test_types.account_types import EOA
-from execution_testing.test_types.utils import keccak256
 
 from .models import (
     FuzzerAccountInput,
@@ -313,11 +316,6 @@ def blockchain_test_from_fuzzer(
     )
 
 
-BLOCKHASH_WINDOW = 256
-"""How many recent blocks BLOCKHASH can return, the opcode's own window;
-EIP-2935 serves more through its contract but leaves the opcode's alone."""
-
-
 def state_test_from_fuzzer(
     fuzzer_output: FuzzerOutput, fork: Fork
 ) -> StateTest:
@@ -347,20 +345,12 @@ def state_test_from_fuzzer(
     )
     env = fuzzer_output.env
     number = 1
-    # A state test has no chain behind it, so the hashes BLOCKHASH can read
-    # come from the state-test convention every runner shares -- keccak256
-    # of the block number in decimal -- as EEST's own recency test uses.
-    # Without them EELS indexes an empty list on any in-window read.
-    block_hashes = {
-        n: keccak256(str(n).encode())
-        for n in range(max(0, number - BLOCKHASH_WINDOW), number)
-    }
     block_env = Environment(
         fee_recipient=env.fee_recipient,
         difficulty=0,
         gas_limit=int(env.gas_limit),
         number=number,
-        block_hashes=block_hashes,
+        block_hashes=blockhash_history(number),
         timestamp=env.timestamp,
         prev_randao=env.prev_randao or Hash(0),
         base_fee_per_gas=env.base_fee_per_gas
@@ -370,6 +360,7 @@ def state_test_from_fuzzer(
         blob_gas_used=env.blob_gas_used if env.blob_gas_used else None,
         parent_beacon_block_root=fuzzer_output.parent_beacon_block_root,
     ).set_fork_requirements(fork)
+    require_blockhash_history(block_env)
     return StateTest(
         pre=pre,
         post={},

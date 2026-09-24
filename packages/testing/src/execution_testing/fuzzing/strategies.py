@@ -17,7 +17,7 @@ divergence is already caught globally by the transition tool).
 """
 
 import random
-from typing import Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 from execution_testing.vm import Bytecode
 from execution_testing.vm import Opcodes as Op
@@ -381,6 +381,66 @@ BLOCKHASH_DEPTHS: Tuple[int, ...] = (1, 1, 2, 3, 0, 257)
 case's second block on is a block the case itself produced; two and
 three reach further into the case. Zero is the current block and 257 is
 one past the window: both read as zero, the near-misses."""
+
+
+BLOCKHASH_WINDOW = 256
+"""Blocks back BLOCKHASH can read; older ones read as zero."""
+
+
+def blockhash_history(number: int) -> Dict[int, Any]:
+    """
+    The block hashes a state test at block ``number`` needs for BLOCKHASH.
+
+    A state test has no chain behind it, so the hashes come from the
+    convention every runner shares -- keccak256 of the block number in
+    decimal -- as EEST's own recency test uses. Every block in the window
+    is given one: the spec indexes the list it builds from them, and a
+    short list fails the fill on the first in-window read.
+    """
+    from execution_testing.test_types.utils import keccak256
+
+    return {
+        n: keccak256(str(n).encode())
+        for n in range(max(0, number - BLOCKHASH_WINDOW), number)
+    }
+
+
+def require_blockhash_history(env: Any) -> None:
+    """
+    Refuse an environment whose history is shorter than BLOCKHASH reads.
+
+    Generated code can read any block in the window, so a generated case
+    must carry all of it; checked here with the missing blocks named, not
+    left to an IndexError inside the spec.
+    """
+    number = int(env.number)
+    have = {int(n) for n in (env.block_hashes or {})}
+    missing = sorted(
+        set(range(max(0, number - BLOCKHASH_WINDOW), number)) - have
+    )
+    if missing:
+        raise ValueError(
+            f"block {number}'s environment lacks the hashes of blocks "
+            f"{missing[:3]}{'...' if len(missing) > 3 else ''}: generated "
+            "code can read them with BLOCKHASH; use blockhash_history"
+        )
+
+
+def fuzz_environment(**fields: Any) -> Any:
+    """An `Environment` for a generated case, with its BLOCKHASH history."""
+    from execution_testing.test_types import Environment
+
+    number = int(fields.pop("number", 1))
+    env = Environment(
+        number=number,
+        block_hashes={
+            **blockhash_history(number),
+            **fields.pop("block_hashes", {}),
+        },
+        **fields,
+    )
+    require_blockhash_history(env)
+    return env
 
 
 def blockhash_read(depth: int, slot: int) -> Bytecode:

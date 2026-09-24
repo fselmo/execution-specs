@@ -28,7 +28,7 @@ These helpers let a test author draw fuzzed-but-valid inputs from a seeded
         )
         # `post={}` — the reference spec computes the expected state; the
         # fill-time invariant checks (`--invariant-checks`) validate it.
-        state_test(env=Environment(), pre=pre, post={}, tx=tx)
+        state_test(env=fuzz_environment(), pre=pre, post={}, tx=tx)
 
 Each seed fills a deterministic, reproducible fixture, so in CI a fuzz test
 is just a parametrized test; under a fuzzing service the same authoring
@@ -48,9 +48,12 @@ from .domains import (
     mixed_address_pool,
 )
 from .strategies import (
+    blockhash_history,
+    fuzz_environment,
     fuzzed_bytecode,
     fuzzed_calldata,
     interleaving_spill_code,
+    require_blockhash_history,
 )
 
 __all__ = [
@@ -61,11 +64,14 @@ __all__ = [
     "MixtureWeights",
     "ValueDomains",
     "WalkWeights",
+    "blockhash_history",
     "boundary_values",
     "draw_mixed",
     "fork_domains",
+    "fuzz_environment",
     "fuzzed_bytecode",
     "interleaving_spill_code",
     "fuzzed_calldata",
     "mixed_address_pool",
+    "require_blockhash_history",
 ]
