@@ -150,8 +150,21 @@ def clients(
 
 @fuzz.command("campaign")
 @click.argument("name")
-@click.option("--hours", type=float, default=None, help="Time budget.")
+@click.option(
+    "--hours",
+    type=float,
+    default=None,
+    help="Time budget. With neither this nor --count the campaign runs "
+    "until stopped: SIGTERM or Ctrl-C finishes the current batch, saves "
+    "state and exits.",
+)
 @click.option("--count", type=int, default=None, help="Seed budget.")
+@click.option(
+    "--continue",
+    "resume",
+    is_flag=True,
+    help="Resume the campaign at its next seed; refuse if it has no state.",
+)
 @click.option("--batch", type=int, default=200, show_default=True)
 @click.option(
     "--output",
@@ -194,6 +207,7 @@ def campaign(
     name: str,
     hours: Optional[float],
     count: Optional[int],
+    resume: bool,
     batch: int,
     output: Optional[Path],
     fill_workers: Optional[int],
@@ -210,8 +224,8 @@ def campaign(
     judge them with every client's standalone runner, keeping only what is
     new. Resumable; leave it in a terminal.
     """
-    if hours is None and count is None:
-        raise click.UsageError("pass --hours or --count")
+    if resume and fresh:
+        raise click.UsageError("--continue and --fresh contradict each other")
     config = load_config_or_fail(config_path)
     campaign_config = campaign_or_fail(config, name)
     assert campaign_config is not None
@@ -227,10 +241,15 @@ def campaign(
         ]
         producer = producer_client.binary
         sources[f"producer ({producer_name})"] = producer_client.source
+    output = output or Path("campaigns") / name
+    if resume and not (output / "state.json").is_file():
+        raise click.UsageError(
+            f"--continue: {output} holds no campaign state to resume"
+        )
     options = CampaignOptions(
         fork=fork,
         clients=clients,
-        output=output or Path("campaigns") / name,
+        output=output,
         seed_start=campaign_config.seed_start,
         hours=hours,
         count=count,
@@ -299,7 +318,8 @@ def campaign(
         ) from exc
     except KeyboardInterrupt:
         click.echo(
-            "\ninterrupted; state saved -- rerun the same command to resume"
+            "\ninterrupted mid-batch; state holds the last finished batch "
+            "-- resume with --continue"
         )
         return
     click.echo(
