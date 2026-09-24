@@ -192,6 +192,27 @@ class BalObservation:
     """`(module, name)` of every recorder binding that was wrapped."""
 
 
+def merge_bal_observations(
+    a: BalObservation, b: BalObservation
+) -> BalObservation:
+    """
+    Combine two runs' observations, such as a case's blocks.
+
+    Aliases stay within a block: each run found its own from its own
+    indices, so the union claims no pair across blocks.
+    """
+    return BalObservation(
+        cells=a.cells | b.cells,
+        aliases=a.aliases | b.aliases,
+        unattributed=dict(Counter(a.unattributed) + Counter(b.unattributed)),
+        closed_by_state=a.closed_by_state + b.closed_by_state,
+        unresolved=a.unresolved + b.unresolved,
+        unindexed=a.unindexed + b.unindexed,
+        calls=a.calls + b.calls,
+        bindings=a.bindings | b.bindings,
+    )
+
+
 class BalReachObserver:
     """Wrap the recorders during a fill and join entries to outcomes."""
 

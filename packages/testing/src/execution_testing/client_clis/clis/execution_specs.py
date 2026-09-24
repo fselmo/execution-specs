@@ -5,7 +5,7 @@ Ethereum Specs EVM Transition Tool Interface.
 import dataclasses
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
 
 from typing_extensions import override
 
@@ -63,6 +63,11 @@ class ExecutionSpecsTransitionTool(TransitionTool):
         self.last_signature: Optional["Signature"] = None
         self.compute_bal_witness = False
         self.last_bal_witness: Optional["BalWitness"] = None
+        self.bal_witnesses: List["BalWitness"] = []
+        """Every run's witness in order, one per block; the caller empties
+        it between cases. A block access list is per block, so a check of
+        a whole case pairs each block with its own witness rather than the
+        last one with all of them."""
         self.bal_reach: Optional["BalReachSpec"] = None
         """The derived BAL reach space to observe against; None is off."""
         self.bal_reach_every = 1
@@ -70,6 +75,9 @@ class ExecutionSpecsTransitionTool(TransitionTool):
         fill, and a reach map needs a cell seen at least once, not every
         time, so a later measurement can trade rate for cost here."""
         self.last_bal_observation: Optional["BalObservation"] = None
+        """Every observed run since the caller last reset it to None,
+        merged: a case's blocks are separate runs, and keeping only the
+        last one dropped every earlier block's cells."""
         self._bal_reach_runs = 0
         self._info_metadata: Optional[Dict[str, Any]] = {}
         # Defer importing the `ethereum` package (see `fork_cache` and
@@ -192,6 +200,7 @@ class ExecutionSpecsTransitionTool(TransitionTool):
             if (self._bal_reach_runs - 1) % self.bal_reach_every == 0:
                 from execution_testing.evm_tools.t8n.evm_trace.bal_observer import (  # noqa: E501
                     BalReachObserver,
+                    merge_bal_observations,
                 )
 
                 bal_observer = BalReachObserver(self.bal_reach)
@@ -208,7 +217,14 @@ class ExecutionSpecsTransitionTool(TransitionTool):
         if bal_observer is not None:
             with bal_observer.installed():
                 output = t8n.run()
-            self.last_bal_observation = bal_observer.observation()
+            observation = bal_observer.observation()
+            self.last_bal_observation = (
+                observation
+                if self.last_bal_observation is None
+                else merge_bal_observations(
+                    self.last_bal_observation, observation
+                )
+            )
         else:
             output = t8n.run()
 
@@ -219,6 +235,7 @@ class ExecutionSpecsTransitionTool(TransitionTool):
 
         if bal_tracer is not None:
             self.last_bal_witness = bal_tracer.witness()
+            self.bal_witnesses.append(self.last_bal_witness)
 
         if signature_tracer is not None:
             from execution_testing.evm_tools.t8n.evm_trace.signature import (
