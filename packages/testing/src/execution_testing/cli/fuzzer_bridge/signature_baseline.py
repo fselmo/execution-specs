@@ -464,7 +464,9 @@ def signature_baseline(fork: "Fork", seeds: range) -> BaselineReport:
 
 def _rates_and_blocks(
     fork: "Fork", seeds: range
-) -> Tuple[Dict[str, Dict[str, int]], Dict[str, Dict[str, Any]]]:
+) -> Tuple[
+    Dict[str, Dict[str, int]], Dict[str, Dict[str, Any]], Dict[str, int]
+]:
     """
     Fill each seed once and return its event rates and block execution.
 
@@ -474,6 +476,9 @@ def _rates_and_blocks(
     The per-case list is what a version comparison needs: the total is
     heavy-tailed, and whether a later block runs code at all barely moved
     when one budget for the whole case starved the later blocks.
+
+    The third map counts executed user transactions by how their
+    top-level frame ended.
     """
     from execution_testing.cli.fuzzer_bridge.campaign import fill_case
     from execution_testing.cli.fuzzer_bridge.generator import (
@@ -487,6 +492,7 @@ def _rates_and_blocks(
     eels.compute_signature = True
     rates: Dict[str, Dict[str, int]] = {}
     blocks: Dict[str, Dict[str, Any]] = {}
+    outcomes: Dict[str, int] = {}
     for seed in seeds:
         eels.last_signature = None
         case = generate_fuzzer_output(fork, seed)
@@ -510,7 +516,9 @@ def _rates_and_blocks(
             block["code"] += txs > 0
             block["txs"] += txs
             block["steps"].append(steps)
-    return rates, blocks
+        for outcome, count in signature.tx_outcomes:
+            outcomes[outcome] = outcomes.get(outcome, 0) + count
+    return rates, blocks, outcomes
 
 
 def event_rates(fork: "Fork", seeds: range) -> Dict[str, Dict[str, int]]:
@@ -563,7 +571,11 @@ def event_rate_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
         "seeds": len(seeds),
         "rate_floor_fraction": RATE_FLOOR_FRACTION,
     }
-    record["rates"], record["block_code"] = _rates_and_blocks(fork, seeds)
+    (
+        record["rates"],
+        record["block_code"],
+        record["tx_outcomes"],
+    ) = _rates_and_blocks(fork, seeds)
     record["below_floor"] = rate_floor_warnings(record)
     return record
 

@@ -13,7 +13,7 @@ worth running.
 """
 
 import random
-from typing import Any, Dict, FrozenSet, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from execution_testing.base_types import (
     Address,
@@ -34,6 +34,7 @@ from execution_testing.fuzzing import (
 )
 from execution_testing.test_types import Environment
 from execution_testing.test_types.account_types import EOA
+from execution_testing.vm import Bytecode
 from execution_testing.vm import Opcodes as Op
 
 from .models import (
@@ -48,7 +49,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 17
+GENERATOR_VERSION = 18
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -92,6 +93,49 @@ execution-gas cap), and halting exceptionally is the only path that
 forfeits the frame's gas: together they are the precondition for the
 halt-chain settlement rule of EIP-8037.
 """
+
+FAILER_ADDRESS = 0x1FFFC
+"""Helper a transaction targets to fail on purpose.
+
+It reads slots of its own storage, writes other slots of it, and then
+REVERTs or runs onto an undefined byte. Every slot is seeded nonzero, so
+no write pays state gas and the smallest drawn gas limit reaches the end:
+the transaction fails the way the case declares, never by running out of
+gas first. Nothing else calls it, so every access to its storage belongs
+to a transaction that failed.
+"""
+
+FAILER_MAX_PAIRS = 3
+"""Most read-then-write pairs the failer runs before it fails."""
+
+
+def failer_code(
+    rng: random.Random, domains: ValueDomains
+) -> Tuple[bytes, Dict[HexNumber, HexNumber]]:
+    """
+    Draw the failer's code and seeded storage.
+
+    Slot `i` is read and slot `pairs + i` is written with the value read
+    plus one, for each of the drawn pairs, then the drawn failure ends it.
+    """
+    pairs = rng.randint(1, FAILER_MAX_PAIRS)
+    code = Bytecode()
+    for i in range(pairs):
+        code += Op.SSTORE(pairs + i, Op.ADD(Op.SLOAD(i), 1))
+    outcomes, shares = zip(*domains.failing_tx_outcome_shares, strict=True)
+    outcome = rng.choices(outcomes, weights=shares)[0]
+    if outcome == "revert":
+        code += Op.REVERT(0, 0)
+    elif outcome == "exceptional_halt":
+        code += Op.INVALID
+    else:
+        raise ValueError(f"unknown failer outcome {outcome!r}")
+    storage = {
+        HexNumber(slot): HexNumber(rng.randrange(1, 2**16))
+        for slot in range(2 * pairs)
+    }
+    return bytes(code), storage
+
 
 RESERVOIR_TX_RATE = 0.35
 """Fraction of transactions drawn above the execution-gas cap, so the
@@ -415,6 +459,13 @@ def generate_fuzzer_output(
         nonce=HexNumber(1),
         code=Bytes(bytes(Op.PUSH1(1) + Op.GAS + Op.SSTORE + Op.INVALID)),
     )
+    failer, failer_storage = failer_code(rng, domains)
+    accounts[Address(FAILER_ADDRESS)] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(1),
+        code=Bytes(failer),
+        storage=failer_storage,
+    )
     contract_addresses: List[Address] = []
     for target in contract_ints:
         address = Address(target)
@@ -463,6 +514,8 @@ def generate_fuzzer_output(
         base_fee = _highest_base_fee(fork, domains, block)
         sender = rng.choice(sender_addresses)
         to = Address(rng.choice(tx_targets))
+        if rng.random() < domains.failing_tx_rate:
+            to = Address(FAILER_ADDRESS)
         choices = tx_gas_choices
         if domains.reservoir_tx_gas and rng.random() < RESERVOIR_TX_RATE:
             choices = domains.reservoir_tx_gas + tx_gas_choices

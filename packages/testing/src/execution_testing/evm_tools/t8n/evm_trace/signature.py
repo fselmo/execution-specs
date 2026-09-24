@@ -221,6 +221,11 @@ class Signature:
     Telemetry like `max_depth`, not novelty: it feeds the per-block
     execution density. Whether a later block runs code at all did not
     see a starved block, which still ran a little."""
+    tx_outcomes: Tuple[Tuple[str, int], ...] = ()
+    """`(outcome, user transactions)` pairs, sorted by outcome: how each
+    transaction's top-level frame ended, one of `TX_OUTCOMES`. Telemetry,
+    not novelty. At v17, 82% of generated transactions failed and no
+    record counted it."""
 
     def is_empty(self) -> bool:
         """Return whether nothing was observed."""
@@ -240,7 +245,34 @@ def merge_signatures(a: Signature, b: Signature) -> Signature:
         a.interleavings | b.interleavings,
         a.tx_types | b.tx_types,
         _sum_steps(a.block_steps, b.block_steps),
+        _sum_counts(a.tx_outcomes, b.tx_outcomes),
     )
+
+
+def _sum_counts(
+    a: Tuple[Tuple[str, int], ...], b: Tuple[Tuple[str, int], ...]
+) -> Tuple[Tuple[str, int], ...]:
+    """Add two `(name, count)` tallies name by name."""
+    total: Dict[str, int] = dict(a)
+    for name, count in b:
+        total[name] = total.get(name, 0) + count
+    return tuple(sorted(total.items()))
+
+
+TX_OUTCOMES = ("success", "revert", "out_of_gas", "exceptional_halt")
+"""How a user transaction's top-level frame can end."""
+
+
+def tx_outcome(error: object) -> str:
+    """Classify a `TransactionEnd` error into one of `TX_OUTCOMES`."""
+    if error is None:
+        return "success"
+    name = type(error).__name__
+    if name == "Revert":
+        return "revert"
+    if name == "OutOfGasError":
+        return "out_of_gas"
+    return "exceptional_halt"
 
 
 def _sum_steps(
@@ -272,6 +304,7 @@ class SignatureTracer:
         self._events: Set[str] = set()
         self._block_steps: Dict[int, int] = {}
         self._block_txs: Dict[int, Set[int]] = {}
+        self._tx_outcomes: Dict[str, int] = {}
         self._max_depth = 0
         # True only between a CALL-family OpStart and the next OpStart or
         # PrecompileStart: the window in which an OutOfGasError means the
@@ -441,6 +474,11 @@ class SignatureTracer:
             ):
                 self._events.add("state-gas-from-reservoir")
         elif isinstance(event, TransactionEnd):
+            if tx_index is not None:
+                outcome = tx_outcome(event.error)
+                self._tx_outcomes[outcome] = (
+                    self._tx_outcomes.get(outcome, 0) + 1
+                )
             if _refund_is_clamped(evm):
                 self._events.add("refund-clamp")
 
@@ -468,4 +506,5 @@ class SignatureTracer:
                 (number, len(self._block_txs[number]), steps)
                 for number, steps in sorted(self._block_steps.items())
             ),
+            tx_outcomes=tuple(sorted(self._tx_outcomes.items())),
         )

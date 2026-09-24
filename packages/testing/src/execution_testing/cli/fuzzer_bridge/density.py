@@ -208,9 +208,11 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     axis. Any axis that stops showing both values has stopped testing the
     thing it existed to vary -- regardless of whether any cell went dark.
     """
+    from execution_testing.base_types import Address
     from execution_testing.eip_properties import fuzz_precompile_targets
+    from execution_testing.vm import Opcodes as Op
 
-    from .generator import generate_fuzzer_output
+    from .generator import FAILER_ADDRESS, generate_fuzzer_output
 
     precompiles = set(fuzz_precompile_targets(fork))
     tally: Dict[str, Counter] = {
@@ -228,6 +230,8 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "block_count": Counter(),
         "blockhash_read": Counter(),
         "blockhash_depth": Counter(),
+        "failing_tx": Counter(),
+        "failer_outcome": Counter(),
     }
     reads = _blockhash_signatures()
 
@@ -296,6 +300,18 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         tally["blockhash_read"]["present" if depths else "absent"] += 1
         for kind in depths:
             tally["blockhash_depth"][kind] += 1
+        failer = Address(FAILER_ADDRESS)
+        if any(tx.to == failer for tx in case.transactions):
+            tally["failing_tx"]["present"] += 1
+            last = bytes(case.accounts[failer].code)[-1]
+            if last == Op.REVERT.int():
+                tally["failer_outcome"]["revert"] += 1
+            elif last == Op.INVALID.int():
+                tally["failer_outcome"]["exceptional_halt"] += 1
+            else:
+                raise ValueError(f"unclassified failer ending {last:#x}")
+        else:
+            tally["failing_tx"]["absent"] += 1
         for tx in case.transactions:
             target = (
                 int.from_bytes(bytes(tx.to), "big")
@@ -418,6 +434,8 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "block_count": ("one", "several"),
     "blockhash_read": ("present", "absent"),
     "blockhash_depth": ("parent", "in_case", "current", "out_of_window"),
+    "failing_tx": ("present", "absent"),
+    "failer_outcome": ("revert", "exceptional_halt"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""
