@@ -1,0 +1,124 @@
+From e29ad9d5830b3a7182652fe5a53f535f9e41c9ea Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <felipe.selmo@ethereum.org>
+Date: Tue, 22 Sep 2026 13:24:23 -0600
+Subject: [PATCH 2/2] tests: attach a fixture's block access list to the block
+ under test
+
+The EIP-7928 access list travels beside the block, not in its RLP, and blocktest decoded only the RLP: block.AccessList() was nil for every test block, so supportsParallelExecution never let the parallel processor run on a fixture, with or without --bal.sequential. Decode the fixture's blockAccessList (normalizing the zero-padded hex quantities the fixtures write and geth's strict decoders reject) and attach it with WithAccessListUnsafe. The parallel path now runs by default and judges the delivered list; --bal.sequential contrasts it against the path that rebuilds its own.
+---
+ tests/block_test_util.go | 80 +++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 78 insertions(+), 2 deletions(-)
+
+diff --git a/tests/block_test_util.go b/tests/block_test_util.go
+index 5eb5c319c..8df679331 100644
+--- a/tests/block_test_util.go
++++ b/tests/block_test_util.go
+@@ -26,6 +26,7 @@ import (
+ 	"math/big"
+ 	"os"
+ 	"reflect"
++	"strings"
+ 
+ 	"github.com/ethereum/go-ethereum/common"
+ 	"github.com/ethereum/go-ethereum/common/hexutil"
+@@ -37,6 +38,7 @@ import (
+ 	"github.com/ethereum/go-ethereum/core/state"
+ 	"github.com/ethereum/go-ethereum/core/tracing"
+ 	"github.com/ethereum/go-ethereum/core/types"
++	"github.com/ethereum/go-ethereum/core/types/bal"
+ 	"github.com/ethereum/go-ethereum/core/vm"
+ 	"github.com/ethereum/go-ethereum/log"
+ 	"github.com/ethereum/go-ethereum/params"
+@@ -71,6 +73,71 @@ type btBlock struct {
+ 	ExpectException string
+ 	Rlp             string
+ 	UncleHeaders    []*btHeader
++	// The EIP-7928 block access list travels beside the block, not in its
++	// RLP; without it the parallel processor never runs on a test block.
++	BlockAccessList json.RawMessage `json:"blockAccessList"`
++}
++
++// balNumericKeys are the access-list fields the fixtures zero-pad
++// ("0x00", "0x03e8") and geth's strict hex decoders reject.
++var balNumericKeys = map[string]bool{
++	"blockAccessIndex": true, "postNonce": true, "postBalance": true,
++	"postValue": true, "slot": true, "storageReads": true,
++}
++
++// trimHexZeros rewrites a zero-padded hex quantity into geth's canonical
++// form, leaving addresses and code bytes alone.
++func trimHexZeros(v string) string {
++	if !strings.HasPrefix(v, "0x") {
++		return v
++	}
++	digits := strings.TrimLeft(v[2:], "0")
++	if digits == "" {
++		digits = "0"
++	}
++	return "0x" + digits
++}
++
++func normalizeBALNumbers(node any, numeric bool) any {
++	switch n := node.(type) {
++	case map[string]any:
++		for k, v := range n {
++			n[k] = normalizeBALNumbers(v, balNumericKeys[k])
++		}
++		return n
++	case []any:
++		for i, v := range n {
++			n[i] = normalizeBALNumbers(v, numeric)
++		}
++		return n
++	case string:
++		if numeric {
++			return trimHexZeros(n)
++		}
++		return n
++	default:
++		return n
++	}
++}
++
++// accessList decodes the fixture's block access list, if it carries one.
++func (bb *btBlock) accessList() (*bal.BlockAccessList, error) {
++	if len(bb.BlockAccessList) == 0 || string(bb.BlockAccessList) == "null" {
++		return nil, nil
++	}
++	var tree any
++	if err := json.Unmarshal(bb.BlockAccessList, &tree); err != nil {
++		return nil, err
++	}
++	normalized, err := json.Marshal(normalizeBALNumbers(tree, false))
++	if err != nil {
++		return nil, err
++	}
++	var list bal.BlockAccessList
++	if err := json.Unmarshal(normalized, &list); err != nil {
++		return nil, err
++	}
++	return &list, nil
+ }
+ 
+ //go:generate go run github.com/fjl/gencodec -type btHeader -field-override btHeaderMarshaling -out gen_btheader.go
+@@ -404,6 +471,15 @@ func (bb *btBlock) decode() (*types.Block, error) {
+ 		return nil, err
+ 	}
+ 	var b types.Block
+-	err = rlp.DecodeBytes(data, &b)
+-	return &b, err
++	if err = rlp.DecodeBytes(data, &b); err != nil {
++		return nil, err
++	}
++	list, err := bb.accessList()
++	if err != nil {
++		return nil, fmt.Errorf("block access list: %v", err)
++	}
++	if list != nil {
++		return b.WithAccessListUnsafe(list), nil
++	}
++	return &b, nil
+ }
+-- 
+2.47.3
+
