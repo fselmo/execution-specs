@@ -10,6 +10,7 @@ with a count, not thousands of files.
 """
 
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -19,6 +20,7 @@ import shutil
 import signal
 import sys
 import tempfile
+import threading
 import time
 import warnings
 from collections import deque
@@ -1142,8 +1144,6 @@ def graceful_stop(echo: Callable[[str], None]) -> Iterator[StopRequest]:
     counted. A second signal interrupts at once. Handlers can only be set
     from the main thread; elsewhere the default behaviour stands.
     """
-    import threading
-
     request = StopRequest()
     if threading.current_thread() is not threading.main_thread():
         yield request
@@ -1457,6 +1457,10 @@ class CampaignOptions:
     sources: Mapping[str, str] = field(default_factory=dict)
     """Per client, where its binary came from, for the manifest."""
     health: HealthPolicy = field(default_factory=HealthPolicy)
+    runner_concurrency: int = 1
+    """Batches each client judges at once. With 1 a fast client still
+    moves ahead to the next batch instead of waiting at a barrier for the
+    slowest; above 1 a slow client judges several batches side by side."""
     reproduce_runs: int = 5
     """Times a new finding's case is judged again alone, and again under
     load, on its first sighting; 0 skips it."""
@@ -1706,6 +1710,13 @@ def run_campaign(
             options.producer,
             options.fixture_format,
         ) as pool,
+        ThreadPoolExecutor(
+            max_workers=max(
+                1,
+                options.runner_concurrency
+                * (len(runners) + len(contrast_runners)),
+            )
+        ) as judge_pool,
     ):
         in_flight = max(2 * options.fill_workers, 2)
         pending: Deque[Tuple[range, "Future[Dict[str, Any]]"]] = deque()
@@ -1728,27 +1739,78 @@ def run_campaign(
             submit_cursor = stop
             return True
 
+        # Judging is a stage of its own: a batch is handed to the runners as
+        # soon as its fill lands, each client judging up to
+        # `runner_concurrency` batches at once, while batches are processed
+        # strictly in seed order below.
+        caps = {
+            name: threading.Semaphore(options.runner_concurrency)
+            for name in runners
+        }
+        judging: Deque[JudgedBatch] = deque()
+        max_judging = options.runner_concurrency + 1
+
+        def start_judging(fill_wait: float) -> None:
+            seeds, future = pending.popleft()
+            slice_result = future.result()
+            names = slice_result["names"]
+            primary: Dict[str, "Future[JudgeResult]"] = {}
+            contrast: Dict[str, "Future[JudgeResult]"] = {}
+            if names:
+                batch_file = Path(slice_result["path"])
+                primary = {
+                    name: judge_pool.submit(
+                        _judge_job, runner, caps[name], batch_file, names
+                    )
+                    for name, runner in runners.items()
+                }
+                contrast = {
+                    lane: judge_pool.submit(
+                        _judge_job, runner, caps[name], batch_file, names
+                    )
+                    for lane, (name, runner) in contrast_runners.items()
+                }
+            judging.append(
+                JudgedBatch(seeds, slice_result, fill_wait, primary, contrast)
+            )
+
         while True:
             if stop_request.signal_name is not None or pause_reason:
-                # Batches already filling are not judged; the next run
-                # starts at `state.next_seed` and fills them again.
+                # Batches still filling are not judged; the next run starts
+                # at `state.next_seed` and fills them again. Batches the
+                # runners already have are drained and counted below.
                 for seeds, future in pending:
                     future.cancel()
                     unjudged.append(seeds)
                 pending.clear()
-                break
-            while len(pending) < in_flight and submit_one():
-                pass
-            if not pending:
-                break
-            if deadline is not None and time.time() >= deadline:
-                while len(pending) > 1 and pending[-1][1].cancel():
-                    pending.pop()
-            seeds, future = pending.popleft()
-            waited = time.time()
-            slice_result = future.result()
-            fill_wait = time.time() - waited
-            judging = 0.0
+                if not judging:
+                    break
+            else:
+                while len(pending) < in_flight and submit_one():
+                    pass
+                if deadline is not None and time.time() >= deadline:
+                    while len(pending) > 1 and pending[-1][1].cancel():
+                        pending.pop()
+                # Hand filled batches to the runners in seed order, without
+                # blocking on a fill while there is a batch to process.
+                while pending and len(judging) < max_judging:
+                    if judging and not pending[0][1].done():
+                        break
+                    waited = time.time()
+                    pending[0][1].result()
+                    start_judging(time.time() - waited)
+                if not judging:
+                    if not pending:
+                        break
+                    continue
+            batch = judging.popleft()
+            seeds, slice_result, fill_wait = (
+                batch.seeds,
+                batch.slice_result,
+                batch.fill_wait,
+            )
+            judging_seconds = 0.0
+            batch_started = time.time()
             before = health_snapshot(state, options.health)
             seen = set(state.signatures)
             names: List[str] = slice_result["names"]
@@ -1792,37 +1854,20 @@ def run_campaign(
             if names:
                 batch_file = Path(slice_result["path"])
                 judged = time.time()
-                with ThreadPoolExecutor(
-                    max_workers=max(1, len(runners) + len(contrast_runners))
-                ) as tp:
-                    futures = {
-                        name: tp.submit(_timed_run, runner, batch_file, names)
-                        for name, runner in runners.items()
-                    }
-                    contrast_futures = {
-                        lane: tp.submit(_timed_run, runner, batch_file, names)
-                        for lane, (_, runner) in contrast_runners.items()
-                    }
-                    timed = {name: f.result() for name, f in futures.items()}
-                    contrast_results = {
-                        lane: f.result()[0]
-                        for lane, f in contrast_futures.items()
-                    }
-                judging = time.time() - judged
-                results = {
-                    name: verdicts for name, (verdicts, _) in timed.items()
+                timed = {name: f.result() for name, f in batch.primary.items()}
+                contrast_timed = {
+                    lane: f.result() for lane, f in batch.contrast.items()
                 }
-                runner_seconds = {
-                    name: seconds for name, (_, seconds) in timed.items()
+                judging_seconds = time.time() - judged
+                results = {name: r.verdicts for name, r in timed.items()}
+                contrast_results = {
+                    lane: r.verdicts for lane, r in contrast_timed.items()
                 }
-                # Read before escalation re-runs the primary runners.
+                runner_seconds = {name: r.seconds for name, r in timed.items()}
                 tagged = tagged_stderr_lines(
                     {
-                        **runners,
-                        **{
-                            lane: runner
-                            for lane, (_, runner) in contrast_runners.items()
-                        },
+                        lane: r.stderr
+                        for lane, r in {**timed, **contrast_timed}.items()
                     }
                 )
                 if tagged:
@@ -2134,7 +2179,9 @@ def run_campaign(
                 if failure:
                     echo(f"alert not sent: {failure}")
             state.record_timing(
-                fill_wait, judging, time.time() - waited - fill_wait - judging
+                fill_wait,
+                judging_seconds,
+                time.time() - batch_started - judging_seconds,
             )
             state.save()
             write_report()
@@ -2151,7 +2198,7 @@ def run_campaign(
                 f"({state.unique_findings()} unique) "
                 f"all-fail {counts.get('all-fail', 0)} "
                 f"fill-errors {counts.get('fill_error', 0)} "
-                f"| waited {fill_wait:.1f}s judged {judging:.1f}s "
+                f"| waited {fill_wait:.1f}s judged {judging_seconds:.1f}s "
                 f"| fill {fill_ms_case:.0f}ms/case "
                 f"rss {slice_result['rss_mb']}MB "
                 f"| {elapsed / 60:.1f} min | runners "
@@ -2186,23 +2233,54 @@ cannot show them: nethermind's sequential retry and besu's fallback. A tag
 on a valid fixture is a parallel-path failure the verdict masked."""
 
 
-def tagged_stderr_lines(
-    runners: Mapping[str, FixtureRunner],
-) -> List[Tuple[str, str]]:
-    """`(lane, line)` for every tagged line the runners' last runs printed."""
+def tagged_stderr_lines(stderr: Mapping[str, str]) -> List[Tuple[str, str]]:
+    """`(lane, line)` for every tagged line in each lane's runner stderr."""
     return [
         (lane, line.strip())
-        for lane, runner in sorted(runners.items())
-        for line in runner.last_stderr.splitlines()
+        for lane, text in sorted(stderr.items())
+        for line in text.splitlines()
         if line.strip().startswith(STDERR_TAGS)
     ]
 
 
-def _timed_run(
-    runner: FixtureRunner, batch_file: Path, names: List[str]
-) -> Tuple[Dict[str, Verdict], float]:
-    started = time.time()
-    return judge_splitting(runner, batch_file, names), time.time() - started
+@dataclass(frozen=True)
+class JudgeResult:
+    """One runner's verdicts on one batch, its time and what it printed."""
+
+    verdicts: Dict[str, Verdict]
+    seconds: float
+    stderr: str
+
+
+@dataclass
+class JudgedBatch:
+    """A filled batch whose judging has started, waiting its turn."""
+
+    seeds: range
+    slice_result: Dict[str, Any]
+    fill_wait: float
+    primary: Dict[str, "Future[JudgeResult]"]
+    contrast: Dict[str, "Future[JudgeResult]"]
+
+
+def _judge_job(
+    runner: FixtureRunner,
+    cap: "threading.Semaphore",
+    batch_file: Path,
+    names: List[str],
+) -> JudgeResult:
+    """
+    Judge one batch with a copy of ``runner``, within its client's cap.
+
+    A runner keeps its last stderr on itself, so two batches judged at
+    once by one shared object would read each other's; each job gets its
+    own copy.
+    """
+    with cap:
+        own = copy.copy(runner)
+        started = time.time()
+        verdicts = judge_splitting(own, batch_file, names)
+        return JudgeResult(verdicts, time.time() - started, own.last_stderr)
 
 
 def judge_splitting(

@@ -255,6 +255,7 @@ def campaign(
         clients=clients,
         output=output,
         reproduce_runs=campaign_config.reproduce_runs,
+        runner_concurrency=campaign_config.runner_concurrency,
         seed_start=campaign_config.seed_start,
         hours=hours,
         count=count,
