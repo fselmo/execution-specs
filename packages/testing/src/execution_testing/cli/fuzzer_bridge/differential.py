@@ -466,7 +466,7 @@ def differential_fuzz(
         agreed=0,
         diverged=0,
     )
-    report.manifest = collect_manifest(fork, tools, seeds)
+    report.manifest = collect_manifest(fork, tools, seeds, clients)
     if manifest_path is not None:
         report.manifest.write(manifest_path)
     if baseline_seeds > 0:

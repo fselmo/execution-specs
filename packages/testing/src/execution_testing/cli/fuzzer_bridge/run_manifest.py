@@ -6,11 +6,12 @@ version, and generator version; the manifest pins all three plus the seed
 range, so a corpus entry can be reproduced and a report can be trusted.
 """
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Mapping, Optional
 
 from execution_testing.forks import Fork
 from execution_testing.tools.utility.versioning import (
@@ -39,6 +40,11 @@ class RunManifest:
     sources: Dict[str, str] = field(default_factory=dict)
     """Where each client binary came from: a path, or `build@<base commit>`
     plus `+series:<hash>` when a patch series was applied on it."""
+    binaries: Dict[str, str] = field(default_factory=dict)
+    """Per client, a digest of what running its binary executes. A version
+    line is what the binary says about itself and a source is how it was
+    meant to be built; neither notices a rebuilt cache or a path client
+    swapped under the same name, and the digest does."""
     client_env: Dict[str, Dict[str, str]] = field(default_factory=dict)
     """Per client, the environment its toolchain ran under -- a `JAVA_HOME`
     or `DOTNET_ROOT` that would otherwise live only in the shell that
@@ -63,8 +69,47 @@ def _eels_commit() -> str:
     return "unknown"
 
 
+def binary_digest(path: Path) -> str:
+    """
+    A sha256 of what running ``path`` actually executes.
+
+    A plain binary is its own file. A launcher is a symlink into a
+    distribution the build lays out beside it as `{out}.<something>` --
+    besu's `evmtool` into `evmtool.dist`, nethermind's `nethtest` into
+    `nethtest.publish` -- and the launcher script alone would not change
+    when a jar or a DLL did, so that whole distribution is hashed.
+    """
+    if not path.exists():
+        return "missing"
+    resolved = path.resolve()
+    for sibling in sorted(path.parent.glob(path.name + ".*")):
+        if sibling.is_dir() and resolved.is_relative_to(sibling.resolve()):
+            return "tree:" + _tree_digest(sibling)
+    return "file:" + _file_digest(resolved)
+
+
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _tree_digest(root: Path) -> str:
+    """Every file under ``root`` by relative path, in a stable order."""
+    digest = hashlib.sha256()
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        digest.update(str(path.relative_to(root)).encode())
+        digest.update(_file_digest(path).encode())
+    return digest.hexdigest()
+
+
 def collect_manifest(
-    fork: Fork, tools: Dict[str, Any], seeds: range
+    fork: Fork,
+    tools: Dict[str, Any],
+    seeds: range,
+    binaries: Optional[Mapping[str, Path]] = None,
 ) -> RunManifest:
     """Record the provenance of a run over ``tools`` and ``seeds``."""
     clients = {
@@ -80,4 +125,8 @@ def collect_manifest(
         seed_start=seeds.start,
         count=len(seeds),
         created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        binaries={
+            name: binary_digest(path)
+            for name, path in (binaries or {}).items()
+        },
     )
