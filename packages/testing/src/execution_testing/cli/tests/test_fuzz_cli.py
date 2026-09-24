@@ -323,13 +323,24 @@ def test_campaign_command_runs_and_reports(
     assert options.output == tmp_path / "out"
 
 
-def test_campaign_command_needs_a_budget(tmp_path: Path) -> None:
-    """Without --hours or --count the command refuses to run forever."""
-    (tmp_path / "fuzz.yaml").write_text("")
-    result = CliRunner().invoke(
-        fuzz, ["campaign", "x", "--config", str(tmp_path / "fuzz.yaml")]
+def test_continue_needs_a_campaign_to_resume(tmp_path: Path) -> None:
+    """
+    `--continue` refuses a directory with no state rather than silently
+    starting over, and refuses `--fresh`, which means the opposite.
+    """
+    exe = tmp_path / "evm"
+    exe.write_text("")
+    config = tmp_path / "fuzz.yaml"
+    config.write_text(
+        f"clients:\n  - name: geth\n    path: {exe}\n"
+        "campaigns:\n  osaka:\n    fork: Osaka\n    clients: [geth]\n"
     )
-    assert result.exit_code != 0 and "--hours" in result.output
+    base = ["campaign", "osaka", "--config", str(config), "--continue"]
+    out = ["--output", str(tmp_path / "nowhere")]
+    missing = CliRunner().invoke(fuzz, [*base, *out])
+    assert missing.exit_code != 0 and "no campaign state" in missing.output
+    both = CliRunner().invoke(fuzz, [*base, *out, "--fresh"])
+    assert both.exit_code != 0 and "contradict" in both.output
 
 
 def _two_client_config(tmp_path: Path) -> Path:

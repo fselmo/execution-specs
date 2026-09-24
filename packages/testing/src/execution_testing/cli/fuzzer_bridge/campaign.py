@@ -325,7 +325,18 @@ class CampaignState:
     """Per client run under a second flag set: fixtures both runs judged,
     and how many they judged differently."""
     signatures: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    status: str = "running"
+    """`running`, `stopped` (a signal asked it to finish), `paused` (a
+    health check failed) or `done` (its budget ran out)."""
+    status_reason: str = ""
+    """Why it is not running, in one line; empty while it is."""
+    status_at: float = 0.0
     signatures_reset: bool = field(default=False, compare=False)
+
+    def set_status(self, status: str, reason: str = "") -> None:
+        """Record what the campaign is doing and why, with the time."""
+        self.status, self.status_reason = status, reason
+        self.status_at = time.time()
 
     @classmethod
     def load(cls, path: Path, *, seed_start: int) -> "CampaignState":
@@ -351,6 +362,9 @@ class CampaignState:
                     for k, v in data.get("contrast", {}).items()
                 },
                 signatures=signatures,
+                status=data.get("status", "running"),
+                status_reason=data.get("status_reason", ""),
+                status_at=data.get("status_at", 0.0),
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
             return state
@@ -373,6 +387,9 @@ class CampaignState:
                     "by_event": self.by_event,
                     "contrast": self.contrast,
                     "signatures": self.signatures,
+                    "status": self.status,
+                    "status_reason": self.status_reason,
+                    "status_at": self.status_at,
                 },
                 indent=1,
             )
@@ -699,6 +716,9 @@ def _init_fill_worker(
     fixture_format: str = BlockchainFixture.format_name,
 ) -> None:
     """Build the per-process fill tool once."""
+    # A Ctrl-C reaches the whole process group; the main process decides
+    # when to stop, so a worker must not die mid-fill on it.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     _FILL["fork"] = _fork_by_name(fork_name)
     _FILL["format"] = campaign_format(fixture_format)
     _FILL["invariants"] = invariants
@@ -879,6 +899,50 @@ opcodes executed (that case ran 297,066 against a neighbour's 346, at a
 *lower* cost per opcode), so the fix is the per-shape depth budget that
 bounds the recursive fan-out generating them.
 """
+
+
+@dataclass
+class StopRequest:
+    """Set by the first SIGTERM or SIGINT: stop after the current batch."""
+
+    signal_name: Optional[str] = None
+
+
+@contextlib.contextmanager
+def graceful_stop(echo: Callable[[str], None]) -> Iterator[StopRequest]:
+    """
+    Turn the first SIGTERM or SIGINT into a request to stop cleanly.
+
+    The campaign finishes the batch it is judging, saves its state and
+    exits, so a resumed run starts at the next seed with nothing half
+    counted. A second signal interrupts at once. Handlers can only be set
+    from the main thread; elsewhere the default behaviour stands.
+    """
+    import threading
+
+    request = StopRequest()
+    if threading.current_thread() is not threading.main_thread():
+        yield request
+        return
+
+    def handle(signum: int, _frame: Any) -> None:
+        if request.signal_name is not None:
+            raise KeyboardInterrupt
+        request.signal_name = signal.Signals(signum).name
+        echo(
+            f"\n{request.signal_name}: finishing the current batch, then "
+            "saving and exiting (send it again to stop now)"
+        )
+
+    previous = {
+        sig: signal.signal(sig, handle)
+        for sig in (signal.SIGTERM, signal.SIGINT)
+    }
+    try:
+        yield request
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 class FillTimeoutError(Exception):
@@ -1383,13 +1447,19 @@ def run_campaign(
         write_report()
         return state
 
-    with _fill_pool(
-        options.fill_workers,
-        options.fork,
-        options.invariant_checks,
-        options.producer,
-        options.fixture_format,
-    ) as pool:
+    state.set_status("running")
+    state.save()
+    unjudged: List[range] = []
+    with (
+        graceful_stop(echo) as stop_request,
+        _fill_pool(
+            options.fill_workers,
+            options.fork,
+            options.invariant_checks,
+            options.producer,
+            options.fixture_format,
+        ) as pool,
+    ):
         in_flight = max(2 * options.fill_workers, 2)
         pending: Deque[Tuple[range, "Future[Dict[str, Any]]"]] = deque()
         submit_cursor = state.next_seed
@@ -1399,6 +1469,8 @@ def run_campaign(
             if end_seed is not None and submit_cursor >= end_seed:
                 return False
             if deadline is not None and time.time() >= deadline:
+                return False
+            if stop_request.signal_name is not None:
                 return False
             stop = submit_cursor + options.batch
             if end_seed is not None:
@@ -1410,6 +1482,14 @@ def run_campaign(
             return True
 
         while True:
+            if stop_request.signal_name is not None:
+                # Batches already filling are not judged; the next run
+                # starts at `state.next_seed` and fills them again.
+                for seeds, future in pending:
+                    future.cancel()
+                    unjudged.append(seeds)
+                pending.clear()
+                break
             while len(pending) < in_flight and submit_one():
                 pass
             if not pending:
@@ -1760,6 +1840,20 @@ def run_campaign(
                 f"| {elapsed / 60:.1f} min | runners "
                 + " ".join(f"{n} {s:.1f}s" for n, s in runner_seconds.items())
             )
+    for seeds in unjudged:
+        shard_path(fixtures_dir, list(seeds)).unlink(missing_ok=True)
+    if stop_request.signal_name is not None:
+        state.set_status(
+            "stopped",
+            f"{stop_request.signal_name} after seed {state.next_seed - 1}",
+        )
+        echo(
+            f"stopped: state saved at next seed {state.next_seed}; "
+            "resume with --continue"
+        )
+    else:
+        state.set_status("done", "budget spent")
+    state.save()
     write_report()
     return state
 

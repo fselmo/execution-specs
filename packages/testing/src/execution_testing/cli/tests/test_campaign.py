@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -1481,3 +1481,47 @@ def test_a_clean_batch_is_judged_once(tmp_path: Path) -> None:
         v.passed for v in judge_splitting(runner, batch, names).values()
     )
     assert len(runner.runs) == 1
+
+
+def test_a_stop_signal_finishes_the_batch_saves_state_and_resumes(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    With no budget a campaign runs until stopped. SIGTERM mid-batch lets
+    that batch finish and be counted, saves state as stopped, and drops
+    the batches still filling; a resumed run starts at the next seed.
+    """
+    import os
+    import signal
+
+    sent: List[int] = []
+
+    def geth(seed: int) -> bool:
+        if not sent:
+            sent.append(seed)
+            os.kill(os.getpid(), signal.SIGTERM)
+        return False
+
+    quiet = {"geth": geth, "erigon": lambda _s: False}
+    state = _campaign(tmp_path, monkeypatch, quiet, batch=3, baseline=False)
+    assert state.next_seed == 3
+    assert state.counts["agreed"] == 3
+    assert (state.status, state.status_reason) == (
+        "stopped",
+        "SIGTERM after seed 2",
+    )
+    saved = json.loads((tmp_path / "out" / "state.json").read_text())
+    assert saved["status"] == "stopped" and saved["next_seed"] == 3
+    assert list((tmp_path / "out" / "fixtures").iterdir()) == []
+    assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
+
+    resumed = _campaign(
+        tmp_path,
+        monkeypatch,
+        {"geth": lambda _s: False, "erigon": lambda _s: False},
+        batch=3,
+        count=6,
+        baseline=False,
+    )
+    assert resumed.next_seed == 6 and resumed.counts["agreed"] == 6
+    assert resumed.status == "done"
