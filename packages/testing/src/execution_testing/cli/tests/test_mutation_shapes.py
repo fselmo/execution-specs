@@ -116,15 +116,37 @@ def test_run_differential_builds_the_fuzz_diff_command(
     )
 
 
-def test_classify_differential_divergence_is_a_kill() -> None:
-    """A nonzero `fuzz diff` exit (divergence) kills under the oracle."""
-    process = subprocess.CompletedProcess([], 1, "", "")
-    assert (
-        _classify(process, 0, oracle=Oracle.DIFFERENTIAL)
-        is Verdict.KILLED_DIFFERENTIAL
-    )
-    clean = subprocess.CompletedProcess([], 0, "", "")
-    assert _classify(clean, 0, oracle=Oracle.DIFFERENTIAL) is Verdict.SURVIVED
+def test_classify_differential_reads_the_summary_not_the_exit() -> None:
+    """
+    A kill is a compared seed that diverged. A run that compared nothing
+    -- every seed refused or raising, or no summary because `fuzz diff`
+    crashed, which also exits nonzero -- tested nothing, so it is neither
+    a kill nor a survivor.
+    """
+
+    def verdict(code: int, summary: Any) -> Verdict:
+        process = subprocess.CompletedProcess([], code, "", "")
+        return _classify(
+            process, 0, oracle=Oracle.DIFFERENTIAL, summary=summary
+        )
+
+    diverged = {"seeds": 300, "compared": 250, "diverged": 3}
+    clean = {"seeds": 300, "compared": 250, "diverged": 0}
+    refused = {"seeds": 300, "compared": 0, "diverged": 0}
+    assert verdict(1, diverged) is Verdict.KILLED_DIFFERENTIAL
+    assert verdict(0, clean) is Verdict.SURVIVED
+    assert verdict(0, refused) is Verdict.NOT_TESTED
+    assert verdict(1, None) is Verdict.NOT_TESTED
+
+
+def test_a_not_tested_mutant_is_not_counted_killed() -> None:
+    """The report's kill count leaves out mutants nothing exposed."""
+    report = runner_mod.MutationReport(module="m", total=2)
+    report.results = [
+        runner_mod.MutantResult(None, Verdict.NOT_TESTED),  # type: ignore[arg-type]
+        runner_mod.MutantResult(None, Verdict.KILLED_DIFFERENTIAL),  # type: ignore[arg-type]
+    ]
+    assert report.killed == 1
 
 
 def test_summary_detail_reads_first_divergent_seed(tmp_path: Path) -> None:
@@ -135,6 +157,12 @@ def test_summary_detail_reads_first_divergent_seed(tmp_path: Path) -> None:
     )
     assert runner_mod.summary_detail(summary) == (
         "34/300 diverged, first at seed 2"
+    )
+    summary.write_text(
+        json.dumps({"seeds": 300, "compared": 280, "diverged": 34})
+    )
+    assert runner_mod.summary_detail(summary) == (
+        "34/300 diverged (20 not compared)"
     )
     summary.write_text(
         json.dumps({"seeds": 300, "diverged": 0, "first_divergent_seed": None})

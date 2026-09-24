@@ -49,6 +49,10 @@ class Verdict(str, Enum):
     KILLED_TIMEOUT = "killed (timeout)"
     KILLED_DIFFERENTIAL = "killed (differential)"
     SURVIVED = "survived"
+    NOT_TESTED = "not tested (no seed compared)"
+    """The differential run compared nothing: every seed was refused,
+    raised, or had no second result, or the run left no summary. Such a
+    mutant was never exposed, so it neither survived nor died."""
 
 
 @dataclass
@@ -94,8 +98,12 @@ class MutationReport:
 
     @property
     def killed(self) -> int:
-        """Number of mutants killed by any signal."""
-        return sum(1 for r in self.results if r.verdict != Verdict.SURVIVED)
+        """Number of mutants killed by any signal; not-tested is not one."""
+        return sum(
+            1
+            for r in self.results
+            if r.verdict not in (Verdict.SURVIVED, Verdict.NOT_TESTED)
+        )
 
     @property
     def survivors(self) -> List[MutantResult]:
@@ -241,6 +249,9 @@ def summary_detail(summary_path: Path) -> str:
     """Render a `fuzz diff --summary-json` file as a one-line reach detail."""
     data = json.loads(summary_path.read_text())
     detail = f"{data['diverged']}/{data['seeds']} diverged"
+    uncompared = data["seeds"] - data.get("compared", data["seeds"])
+    if uncompared:
+        detail += f" ({uncompared} not compared)"
     first = data.get("first_divergent_seed")
     if first is not None:
         detail += f", first at seed {first}"
@@ -330,18 +341,23 @@ def run_shapes(
             )
         baseline_invariants = _invariant_count(baseline)
         for shape in shapes:
+            summary = output_dir / "summary.json"
+            # A run that dies before writing its summary must not inherit
+            # the previous shape's.
+            summary.unlink(missing_ok=True)
             with applied(shape):
                 process = _run_oracle(
                     oracle, test_paths, fork, output_dir, timeout, differential
                 )
-            verdict = _classify(process, baseline_invariants, oracle=oracle)
-            summary = output_dir / "summary.json"
             detail = ""
             data: Optional[Dict[str, Any]] = None
             if oracle is Oracle.DIFFERENTIAL and process is not None:
                 if summary.exists():
                     detail = summary_detail(summary)
                     data = summary_data(summary)
+            verdict = _classify(
+                process, baseline_invariants, oracle=oracle, summary=data
+            )
             results.append(ShapeResult(shape, verdict, detail, data))
     return results
 
@@ -351,12 +367,19 @@ def _classify(
     baseline_invariants: int,
     *,
     oracle: Oracle = Oracle.FILL,
+    summary: Optional[Dict[str, Any]] = None,
 ) -> Verdict:
     if process is None:
         return Verdict.KILLED_TIMEOUT
-    if process.returncode != 0:
-        if oracle is Oracle.DIFFERENTIAL:
+    if oracle is Oracle.DIFFERENTIAL:
+        # The summary decides, not the exit code: `fuzz diff` also exits
+        # nonzero when it crashes, and a crash compared nothing.
+        if summary is None or summary.get("compared", 0) == 0:
+            return Verdict.NOT_TESTED
+        if summary["diverged"]:
             return Verdict.KILLED_DIFFERENTIAL
+        return Verdict.SURVIVED
+    if process.returncode != 0:
         return Verdict.KILLED_TESTS
     if _invariant_count(process) > baseline_invariants:
         return Verdict.KILLED_INVARIANT

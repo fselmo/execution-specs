@@ -88,6 +88,8 @@ class CaseOutcome:
     rejections: Dict[str, str] = field(default_factory=dict)
     """Tools that refused to run the input at all. Reported, never a
     divergence -- see TOOL_REJECTION_PATTERNS."""
+    compared: int = 0
+    """How many tools produced a result to compare."""
 
     @property
     def asymmetric_failure(self) -> bool:
@@ -106,6 +108,37 @@ class CaseOutcome:
         """Whether any tool disagreed, or failed where another succeeded."""
         return bool(self.divergences) or self.asymmetric_failure
 
+    @property
+    def category(self) -> str:
+        """
+        How the case ended, one of `OUTCOME_CATEGORIES`.
+
+        Only a case every tool ran, with at least two results to compare,
+        can have agreed. One some tool refused, or one where a tool raised
+        instead of producing a result, was not compared in full, and
+        counting it as agreement made a run that compared nothing read as
+        a clean one.
+        """
+        if self.diverged:
+            return "diverged"
+        if self.rejections:
+            return "tool_rejected"
+        if self.errors:
+            return "runner_error"
+        if self.compared < 2:
+            return "not_compared"
+        return "agreed"
+
+
+OUTCOME_CATEGORIES = (
+    "agreed",
+    "diverged",
+    "tool_rejected",
+    "runner_error",
+    "not_compared",
+)
+"""Every case lands in exactly one; only the first two were compared."""
+
 
 @dataclass
 class DifferentialReport:
@@ -118,6 +151,9 @@ class DifferentialReport:
     agreed: int
     diverged: int
     outcomes: List[CaseOutcome] = field(default_factory=list)
+    tool_rejected: int = 0
+    runner_error: int = 0
+    not_compared: int = 0
     baseline: Dict[str, int] = field(default_factory=dict)
     manifest: Optional[Any] = None
 
@@ -371,6 +407,7 @@ def evaluate_case(
                 errors=errors,
                 rejections=rejections,
                 eels_ran=False,
+                compared=len(results),
             )
         (
             reference,
@@ -391,6 +428,7 @@ def evaluate_case(
         errors=errors,
         rejections=rejections,
         eels_ran=REFERENCE in tools,
+        compared=len(results),
     )
     if len(results) > 1:
         outcome.divergences = compare_results(results)
@@ -590,8 +628,16 @@ def differential_fuzz(
                         ),
                     )
                 save_case(case, corpus_dir / corpus_name(fork, outcome))
-        else:
+        elif outcome.category == "agreed":
             report.agreed += 1
+        elif outcome.category == "tool_rejected":
+            report.tool_rejected += 1
+        elif outcome.category == "runner_error":
+            report.runner_error += 1
+        elif outcome.category == "not_compared":
+            report.not_compared += 1
+        else:
+            raise ValueError(f"unknown outcome {outcome.category!r}")
         report.outcomes.append(outcome)
 
     return report
