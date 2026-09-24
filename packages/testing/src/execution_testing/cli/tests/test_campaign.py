@@ -1,9 +1,10 @@
 """Tests for the campaign loop's client-independent core."""
 
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -1495,7 +1496,8 @@ def test_a_stop_signal_finishes_the_batch_saves_state_and_resumes(
 ) -> None:
     """
     With no budget a campaign runs until stopped. SIGTERM mid-batch lets
-    that batch finish and be counted, saves state as stopped, and drops
+    that batch finish, drains the batch the runners already had (one
+    ahead, at the default concurrency), saves state as stopped, and drops
     the batches still filling; a resumed run starts at the next seed.
     """
     import os
@@ -1511,14 +1513,14 @@ def test_a_stop_signal_finishes_the_batch_saves_state_and_resumes(
 
     quiet = {"geth": geth, "erigon": lambda _s: False}
     state = _campaign(tmp_path, monkeypatch, quiet, batch=3, baseline=False)
-    assert state.next_seed == 3
-    assert state.counts["agreed"] == 3
+    assert state.next_seed == 6
+    assert state.counts["agreed"] == 6
     assert (state.status, state.status_reason) == (
         "stopped",
-        "SIGTERM after seed 2",
+        "SIGTERM after seed 5",
     )
     saved = json.loads((tmp_path / "out" / "state.json").read_text())
-    assert saved["status"] == "stopped" and saved["next_seed"] == 3
+    assert saved["status"] == "stopped" and saved["next_seed"] == 6
     assert list((tmp_path / "out" / "fixtures").iterdir()) == []
     assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
 
@@ -1527,10 +1529,10 @@ def test_a_stop_signal_finishes_the_batch_saves_state_and_resumes(
         monkeypatch,
         {"geth": lambda _s: False, "erigon": lambda _s: False},
         batch=3,
-        count=6,
+        count=9,
         baseline=False,
     )
-    assert resumed.next_seed == 6 and resumed.counts["agreed"] == 6
+    assert resumed.next_seed == 9 and resumed.counts["agreed"] == 9
     assert resumed.status == "done"
 
 
@@ -1539,9 +1541,9 @@ def test_a_control_gone_quiet_pauses_the_campaign(
 ) -> None:
     """
     The positive control never fires, so once the window is full the
-    control rate is below its band: the campaign pauses after that batch
-    with the reason in its state, instead of counting on. A resumed run
-    starts a fresh window.
+    control rate is below its band: the campaign pauses, draining the
+    batch the runners already had, with the reason in its state, instead
+    of counting on. A resumed run starts a fresh window.
     """
     from ..fuzzer_bridge.health import HealthPolicy
 
@@ -1552,7 +1554,7 @@ def test_a_control_gone_quiet_pauses_the_campaign(
     state = _campaign(
         tmp_path, monkeypatch, quiet, batch=3, baseline=False, health=policy
     )
-    assert state.next_seed == 3
+    assert state.next_seed == 6
     assert state.status == "paused"
     assert "control geth at 0.00%" in state.status_reason
     saved = json.loads((tmp_path / "out" / "state.json").read_text())
@@ -1564,11 +1566,11 @@ def test_a_control_gone_quiet_pauses_the_campaign(
         monkeypatch,
         firing,
         batch=3,
-        count=9,
+        count=12,
         baseline=False,
         health=policy,
     )
-    assert resumed.next_seed == 9 and resumed.status == "done"
+    assert resumed.next_seed == 12 and resumed.status == "done"
     assert resumed.health["control_rate"] == 1.0
 
 
@@ -1827,3 +1829,123 @@ def test_two_runners_split_the_same_batch_at_once(tmp_path: Path) -> None:
     }
     assert failed == {"a": ["seed_1"], "b": ["seed_6"]}
     assert sorted(p.name for p in tmp_path.iterdir()) == ["batch.json"]
+
+
+class _TimedRunner(_FakeRunner):
+    """Passes everything after `delay(batch)` seconds, logging its runs."""
+
+    log: List[Tuple[str, int, str, float]] = []
+    active: Dict[str, int] = {}
+    peak: Dict[str, int] = {}
+    delay: Any = staticmethod(lambda _name, _first: 0.0)
+
+    def run_file(self, path: Path, fixture_names: Any) -> Dict[str, Verdict]:
+        import time
+
+        names = list(fixture_names)
+        first = min(int(n.split("_")[1]) for n in names)
+        with _TIMED_LOCK:
+            _TimedRunner.active[self.name] = (
+                _TimedRunner.active.get(self.name, 0) + 1
+            )
+            _TimedRunner.peak[self.name] = max(
+                _TimedRunner.peak.get(self.name, 0),
+                _TimedRunner.active[self.name],
+            )
+            _TimedRunner.log.append((self.name, first, "start", time.time()))
+        time.sleep(_TimedRunner.delay(self.name, first))
+        with _TIMED_LOCK:
+            _TimedRunner.active[self.name] -= 1
+            _TimedRunner.log.append((self.name, first, "end", time.time()))
+        return super().run_file(path, names)
+
+
+_TIMED_LOCK = threading.Lock()
+
+
+def _timed_campaign(
+    tmp_path: Path, monkeypatch: Any, delay: Any, **kw: Any
+) -> Tuple[Any, List[str]]:
+    _TimedRunner.log, _TimedRunner.active, _TimedRunner.peak = [], {}, {}
+    monkeypatch.setattr(_TimedRunner, "delay", staticmethod(delay))
+    failing = {"fast": lambda _s: False, "slow": lambda _s: False}
+    lines: List[str] = []
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        runner=lambda name, flags: _TimedRunner(
+            name, failing[name], None, flags
+        ),
+        echo=lines.append,
+        batch=2,
+        count=8,
+        baseline=False,
+        **kw,
+    )
+    return state, lines
+
+
+def _when(client: str, first: int, event: str) -> float:
+    return next(
+        t
+        for c, f, e, t in _TimedRunner.log
+        if (c, f, e) == (client, first, event)
+    )
+
+
+def test_a_fast_client_moves_ahead_of_a_slow_one(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    There is no barrier per batch: the fast client starts the next batch
+    while the slow one is still on the current, each within its cap of 1.
+    """
+    state, _ = _timed_campaign(
+        tmp_path,
+        monkeypatch,
+        lambda name, _first: 0.2 if name == "slow" else 0.0,
+    )
+    assert state.next_seed == 8
+    assert _when("fast", 2, "start") < _when("slow", 0, "end")
+    assert _TimedRunner.peak == {"fast": 1, "slow": 1}
+
+
+def test_a_client_judges_up_to_its_cap_at_once(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A cap of 2 lets the slow client judge two batches side by side."""
+    state, _ = _timed_campaign(
+        tmp_path,
+        monkeypatch,
+        lambda name, _first: 0.2 if name == "slow" else 0.0,
+        runner_concurrency=2,
+    )
+    assert state.next_seed == 8
+    assert _TimedRunner.peak["slow"] == 2
+
+
+def test_batches_are_processed_in_seed_order(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A later batch that finishes judging first still waits its turn, so
+    state advances one contiguous seed range at a time.
+    """
+    state, lines = _timed_campaign(
+        tmp_path,
+        monkeypatch,
+        lambda _name, first: 0.3 if first == 0 else 0.0,
+        runner_concurrency=2,
+    )
+    assert _when("slow", 2, "end") < _when("slow", 0, "end")
+    processed = [
+        line.split(":")[0] for line in lines if line.startswith("seeds ")
+    ]
+    assert processed == [
+        "seeds 0..1",
+        "seeds 2..3",
+        "seeds 4..5",
+        "seeds 6..7",
+    ]
+    assert state.next_seed == 8

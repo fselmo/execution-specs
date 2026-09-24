@@ -258,6 +258,9 @@ class CampaignConfig(BaseModel):
     read: `blockchain_test` for the import lane, `blockchain_test_engine`
     for the newPayload lane, which is the route by which nethermind's
     engine loader reaches its parallel processor on our own fixtures."""
+    runner_concurrency: int = 1
+    """Batches each client judges at once; see
+    `CampaignOptions.runner_concurrency`."""
     reproduce_runs: int = 5
     """Times a new finding's case is judged again alone, and again under
     load; 0 skips it."""
