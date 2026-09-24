@@ -252,6 +252,7 @@ def write_reproducer(
     judge: Judge,
     *,
     name: str = "reproducer",
+    rule: str = "",
 ) -> Optional[Path]:
     """
     Write `reproducer_state_test.json` and `reproducer.md` into a bundle.
@@ -259,7 +260,9 @@ def write_reproducer(
     Returns the state test's path when the client still fails it, else
     None with `reproducer.md` saying why the blockchain fixture stays the
     reproducer: more than one transaction, an unfillable state test, or
-    a divergence that does not survive the framing.
+    a divergence that does not survive the framing. `rule`, when a human
+    has traced the divergence to the change that introduced it, opens the
+    comment above the narrowing table.
     """
     bundle.mkdir(parents=True, exist_ok=True)
     note = bundle / "reproducer.md"
@@ -305,6 +308,8 @@ def write_reproducer(
         else [NarrowingRow("as found", "not judged")]
     )
     table = render_table(rows)
+    if rule:
+        table = f"{rule}\n{table}"
     fixture["_info"]["comment"] = table
     path = bundle / "reproducer_state_test.json"
     path.write_text(json.dumps({name: fixture}, indent=1))
