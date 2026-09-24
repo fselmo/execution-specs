@@ -21,6 +21,27 @@ from execution_testing.tools.utility.versioning import (
 from .differential import REFERENCE
 from .generator import GENERATOR_VERSION
 
+ENV_ALLOWLIST = frozenset({"JAVA_HOME", "DOTNET_ROOT", "GOROOT"})
+"""Environment variables whose values may be written to disk or shown;
+every other variable keeps its name and loses its value, so a token put
+in a client's `env:` by mistake never lands in a manifest or on the
+status page."""
+
+REDACTED = "[redacted]"
+
+
+def redacted_env(
+    env: Mapping[str, Mapping[str, str]],
+) -> Dict[str, Dict[str, str]]:
+    """Per client, allowlisted values kept and every other value hidden."""
+    return {
+        client: {
+            key: (value if key in ENV_ALLOWLIST else REDACTED)
+            for key, value in sorted(variables.items())
+        }
+        for client, variables in env.items()
+    }
+
 
 @dataclass
 class RunManifest:
@@ -58,7 +79,9 @@ class RunManifest:
     def write(self, path: Path) -> Path:
         """Write the manifest as JSON to ``path``."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(asdict(self), indent=2) + "\n")
+        record = asdict(self)
+        record["client_env"] = redacted_env(self.client_env)
+        path.write_text(json.dumps(record, indent=2) + "\n")
         return path
 
 

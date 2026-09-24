@@ -12,7 +12,8 @@ generated input.
   for every other method. It serves no files: a bundle's path is shown
   as text.
 - The JSON is a projection of the state and manifest the campaign writes,
-  with environment values redacted outside `ENV_ALLOWLIST`, and `<`
+  with environment values redacted outside `run_manifest.ENV_ALLOWLIST`
+  (again: the manifest is already redacted on disk), and `<`
   escaped so no string in it can form a tag.
 - The page loads nothing external. Its one inline script and style run
   under a per-response nonce the Content-Security-Policy names, and it
@@ -29,14 +30,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 from urllib.parse import urlsplit
 
+from .run_manifest import redacted_env
+
 HOST = "127.0.0.1"
 """Loopback only; deliberately not configurable."""
 
-ENV_ALLOWLIST = frozenset({"JAVA_HOME", "DOTNET_ROOT", "GOROOT"})
-"""Environment variables whose values the page may show; every other
-value is replaced by `REDACTED`."""
-
-REDACTED = "[redacted]"
 
 COUNTS_SHOWN = (
     "agreed",
@@ -59,16 +57,6 @@ def _read_json(path: Path) -> Optional[Dict[str, Any]]:
         return json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-
-
-def _redacted_env(env: Mapping[str, Mapping[str, str]]) -> Dict[str, Any]:
-    return {
-        client: {
-            key: (value if key in ENV_ALLOWLIST else REDACTED)
-            for key, value in sorted(variables.items())
-        }
-        for client, variables in env.items()
-    }
 
 
 def status_view(output: Path) -> Dict[str, Any]:
@@ -111,7 +99,7 @@ def status_view(output: Path) -> Dict[str, Any]:
             "clients": manifest.get("clients", {}),
             "sources": manifest.get("sources", {}),
             "binaries": manifest.get("binaries", {}),
-            "client_env": _redacted_env(manifest.get("client_env", {})),
+            "client_env": redacted_env(manifest.get("client_env", {})),
         },
         "segments": [
             {k: s.get(k) for k in ("id", "first_seed", "last_seed")}
