@@ -1029,6 +1029,62 @@ ALERT_REASON_CHARS = 120
 client's error text, from a process fed generated input."""
 
 
+_BLOCK_FIELDS = re.compile(r"\b(block|hash)=(\S+)")
+
+
+def _invalid_blocks(
+    fixtures: Mapping[str, Any],
+) -> Tuple[Set[int], Set[str]]:
+    """Numbers and hashes of every block a fixture expects to be rejected."""
+    numbers: Set[int] = set()
+    hashes: Set[str] = set()
+    for fixture in fixtures.values():
+        headers = [
+            block.get("rlp_decoded", {}).get("blockHeader", {})
+            for block in fixture.get("blocks", [])
+            if block.get("expectException")
+        ] + [
+            payload.get("params", [{}])[0]
+            for payload in fixture.get("engineNewPayloads", [])
+            if payload.get("validationError")
+        ]
+        for header in headers:
+            number = header.get("number") or header.get("blockNumber")
+            if number is not None:
+                numbers.add(
+                    int(number, 16) if isinstance(number, str) else int(number)
+                )
+            block_hash = header.get("hash") or header.get("blockHash")
+            if block_hash:
+                hashes.add(block_hash.lower())
+    return numbers, hashes
+
+
+def expected_valid_lines(
+    tagged: Sequence[Tuple[str, str]], fixtures: Mapping[str, Any]
+) -> List[Tuple[str, str]]:
+    """
+    The tagged lines about blocks the batch expects to be valid.
+
+    A line naming a hash is matched on it exactly. One naming only a
+    number is taken as valid unless some fixture in the batch expects a
+    block at that number to be rejected, since the number alone cannot
+    say which fixture it came from.
+    """
+    invalid_numbers, invalid_hashes = _invalid_blocks(fixtures)
+    kept = []
+    for lane, line in tagged:
+        fields = dict(_BLOCK_FIELDS.findall(line))
+        if "hash" in fields:
+            if fields["hash"].lower() in invalid_hashes:
+                continue
+        elif "block" in fields and fields["block"].isdigit():
+            if int(fields["block"]) in invalid_numbers:
+                continue
+        kept.append((lane, line))
+    return kept
+
+
 def masked_failure_alert(
     campaign: str, seeds: range, tagged: Sequence[Tuple[str, str]]
 ) -> str:
@@ -1883,15 +1939,21 @@ def run_campaign(
                         f"  {len(tagged)} tagged stderr line(s) in "
                         f"{batch_file.name}; see stderr_tags.log"
                     )
-                    # Every campaign fixture holds only valid blocks, so a
-                    # retry or fallback is a parallel-path failure the
-                    # passing verdict hid. It alerts every time: there is
-                    # no failing verdict, so no digest to be new.
-                    failure = send_alert(
-                        masked_failure_alert(output.name, seeds, tagged)
+                    # A retry or fallback on a block expected to be valid is
+                    # a parallel-path failure the passing verdict hid, and
+                    # it alerts every time: there is no failing verdict, so
+                    # no digest to be new. On a block meant to be invalid
+                    # (fixtures that are not generated carry some) the
+                    # retry is correct, and it only counts.
+                    masked = expected_valid_lines(
+                        tagged, json.loads(batch_file.read_text())
                     )
-                    if failure:
-                        echo(f"alert not sent: {failure}")
+                    if masked:
+                        failure = send_alert(
+                            masked_failure_alert(output.name, seeds, masked)
+                        )
+                        if failure:
+                            echo(f"alert not sent: {failure}")
 
                 shard_fixtures: Optional[Dict[str, Any]] = None
                 if spec_tool is not None:
