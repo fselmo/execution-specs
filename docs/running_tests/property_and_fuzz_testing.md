@@ -470,9 +470,14 @@ Besu needed two hunks where reading the code said one would do; the
 by-construction reading stopped a hunk short, and only a count of blocks
 actually taking the parallel path showed it.
 
-The first four-client parallel-path shard (500 fixtures, each client
-judging every fixture twice, 2026-09-23) had no contrast mismatch on geth,
-erigon, besu or nethermind. What a parallel-path failure looks like differs
+The first four-client parallel-path contrast (2026-09-23) is half
+valid. Geth, besu and nethermind compared 40,600 cases with no mismatch.
+Erigon's contrast compared none: its verdicts were lost to a runner-output
+parser that stopped at a `[WARN]` line, so "no mismatch" said nothing about
+it. That parser is fixed, and a declared contrast that compares nothing now
+stops the campaign by name instead of reading as a clean result. A separate
+scripted run of erigon's shard 2015500-2015999 found 0 of 500 under both
+contrasts. What a parallel-path failure looks like differs
 by client, so the signal to watch does too. Geth, erigon and besu propagate
 a parallel failure, so a `contrast-mismatch` is their signal. Nethermind
 silently retries the block sequentially, so its verdict never changes and
