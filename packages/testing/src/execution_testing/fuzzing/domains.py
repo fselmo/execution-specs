@@ -205,6 +205,16 @@ class ValueDomains:
     own, so a second block is where a hash the case itself produced can be
     read back, and where a list is built on state a previous list already
     changed."""
+    failing_tx_rate: float = 0.08
+    """Share of transactions sent to the failer, a helper that reads and
+    writes its own storage and then fails on purpose. A top-level REVERT
+    was 13 of 964 transactions at v17; out of gas was 568."""
+    failing_tx_outcome_shares: Tuple[Tuple[str, float], ...] = (
+        ("revert", 0.5),
+        ("exceptional_halt", 0.5),
+    )
+    """How the failer ends. Both roll its writes back, and both must leave
+    what it read and wrote in the list as reads."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays

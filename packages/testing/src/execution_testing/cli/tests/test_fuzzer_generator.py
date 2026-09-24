@@ -7,6 +7,7 @@ from ..fuzzer_bridge.corpus import minimize
 from ..fuzzer_bridge.generator import (
     AUTHORITY_ACCOUNTS,
     DESTRUCTOR_ADDRESS,
+    FAILER_ADDRESS,
     GENERATOR_VERSION,
     INTERLEAVER_ADDRESS,
     SPILLER_ADDRESS,
@@ -55,6 +56,7 @@ def test_generated_shape() -> None:
             Address(DESTRUCTOR_ADDRESS),
             Address(SPILLER_ADDRESS),
             Address(INTERLEAVER_ADDRESS),
+            Address(FAILER_ADDRESS),
         )
     ]
     assert len(senders) <= 2

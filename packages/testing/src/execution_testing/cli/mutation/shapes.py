@@ -280,6 +280,69 @@ SHAPES: Dict[str, Shape] = {
         ),
         models_client_bug=False,
     ),
+    "failed-tx-drops-reads-on-revert": Shape(
+        name="failed-tx-drops-reads-on-revert",
+        description=(
+            "REACH PROBE, NOT A CLIENT MODEL. A transaction whose top-level "
+            "frame reverts has its storage reads dropped before they merge "
+            "into the block, as a client that discards a failed "
+            "transaction's access journal would. Its writes were already "
+            "rolled back, so the slots it read or wrote vanish from the "
+            "block access list while the state root is unchanged. No "
+            "client is known to have had this defect."
+        ),
+        edits=(
+            Edit(
+                module=f"{_AMSTERDAM}/fork.py",
+                find=(
+                    "    incorporate_tx_into_block(\n"
+                    "        tx_env.state, "
+                    "block_env.block_access_list_builder\n"
+                ),
+                replace=(
+                    '    if type(tx_output.error).__name__ == "Revert":\n'
+                    "        tx_env.state.storage_reads.clear()\n"
+                    "    incorporate_tx_into_block(\n"
+                    "        tx_env.state, "
+                    "block_env.block_access_list_builder\n"
+                ),
+            ),
+        ),
+        models_client_bug=False,
+    ),
+    "failed-tx-drops-reads-on-halt": Shape(
+        name="failed-tx-drops-reads-on-halt",
+        description=(
+            "REACH PROBE, NOT A CLIENT MODEL. A transaction whose top-level "
+            "frame halts exceptionally (not a REVERT, not out of gas) has "
+            "its storage reads dropped before they merge into the block, "
+            "as a client that discards a failed "
+            "transaction's access journal would. Its writes were already "
+            "rolled back, so the slots it read or wrote vanish from the "
+            "block access list while the state root is unchanged. No "
+            "client is known to have had this defect."
+        ),
+        edits=(
+            Edit(
+                module=f"{_AMSTERDAM}/fork.py",
+                find=(
+                    "    incorporate_tx_into_block(\n"
+                    "        tx_env.state, "
+                    "block_env.block_access_list_builder\n"
+                ),
+                replace=(
+                    "    if tx_output.error is not None and type(\n"
+                    "        tx_output.error\n"
+                    '    ).__name__ not in ("Revert", "OutOfGasError"):\n'
+                    "        tx_env.state.storage_reads.clear()\n"
+                    "    incorporate_tx_into_block(\n"
+                    "        tx_env.state, "
+                    "block_env.block_access_list_builder\n"
+                ),
+            ),
+        ),
+        models_client_bug=False,
+    ),
     "blockhash-from-history": Shape(
         name="blockhash-from-history",
         description=(

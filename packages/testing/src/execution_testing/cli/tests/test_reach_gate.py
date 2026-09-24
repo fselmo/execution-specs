@@ -103,6 +103,15 @@ def test_a_generator_version_ships_with_its_rate_records() -> None:
     assert dark == [], f"blocks drawn but never running code: {dark}"
     assert block_step_drops(previous.get("block_code", {}), blocks) == []
 
+    # Per-transaction outcomes, each measured against the transactions
+    # run: 82% of v17's transactions failed before anything counted it.
+    outcomes = current.get("tx_outcomes")
+    assert outcomes, f"v{GENERATOR_VERSION} event-rates lacks tx_outcomes"
+    before = previous.get("tx_outcomes")
+    if before:
+        ran_before, ran_now = sum(before.values()), sum(outcomes.values())
+        assert significant_drops(before, outcomes, ran_before, ran_now) == []
+
 
 def test_a_starved_later_block_is_a_regression() -> None:
     """
