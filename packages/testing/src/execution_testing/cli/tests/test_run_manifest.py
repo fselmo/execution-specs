@@ -31,3 +31,46 @@ def test_manifest_records_provenance(tmp_path: Path, monkeypatch: Any) -> None:
     assert data["count"] == 10
     assert data["generator_version"] == manifest.generator_version
     assert data["created"].endswith("Z")
+
+
+def test_a_plain_binary_is_digested_as_its_file(tmp_path: Path) -> None:
+    """The digest moves with the binary's bytes."""
+    from ..fuzzer_bridge.run_manifest import binary_digest
+
+    binary = tmp_path / "evm"
+    binary.write_bytes(b"one")
+    first = binary_digest(binary)
+    assert first.startswith("file:")
+    binary.write_bytes(b"two")
+    assert binary_digest(binary) != first
+
+
+def test_a_launcher_is_digested_with_its_whole_distribution(
+    tmp_path: Path,
+) -> None:
+    """
+    Besu's `evmtool` is a symlink to a launcher script inside
+    `evmtool.dist`; a changed jar leaves the script alone, so hashing the
+    script would report the same binary for a different client.
+    """
+    from ..fuzzer_bridge.run_manifest import binary_digest
+
+    dist = tmp_path / "evmtool.dist"
+    (dist / "bin").mkdir(parents=True)
+    (dist / "lib").mkdir()
+    (dist / "bin" / "evmtool").write_text("#!/bin/sh\nexec java ...\n")
+    (dist / "lib" / "besu.jar").write_bytes(b"v1")
+    launcher = tmp_path / "evmtool"
+    launcher.symlink_to(dist / "bin" / "evmtool")
+
+    first = binary_digest(launcher)
+    assert first.startswith("tree:")
+    (dist / "lib" / "besu.jar").write_bytes(b"v2")
+    assert binary_digest(launcher) != first
+
+
+def test_an_absent_binary_is_recorded_as_missing(tmp_path: Path) -> None:
+    """Never a guess: a binary that is not there says so."""
+    from ..fuzzer_bridge.run_manifest import binary_digest
+
+    assert binary_digest(tmp_path / "nothing") == "missing"

@@ -71,7 +71,7 @@ from .differential import _fork_by_name, is_tool_rejection
 from .generator import GENERATOR_VERSION, generate_fuzzer_output
 from .models import FuzzerOutput
 from .reproducer import client_judge, write_reproducer
-from .run_manifest import RunManifest, _eels_commit
+from .run_manifest import RunManifest, _eels_commit, binary_digest
 from .runners import FixtureRunner, Verdict, is_runner_error
 
 Signature = Tuple[str, str]
@@ -1307,6 +1307,9 @@ def run_campaign(
         case = generate_fuzzer_output(options.fork, _seed_of(fixture_name))
         fixture = fill_case(
             case,
+    binaries = dict(options.clients)
+    if options.producer is not None:
+        binaries[options.producer_name] = options.producer
             options.fork,
             spec_tool,
             fixture_format=campaign_format(options.fixture_format),
@@ -1323,6 +1326,9 @@ def run_campaign(
     end_seed = (
         options.seed_start + options.count
         if options.count is not None
+        binaries={
+            name: binary_digest(path) for name, path in binaries.items()
+        },
         else None
     )
     fill_batches = 0
