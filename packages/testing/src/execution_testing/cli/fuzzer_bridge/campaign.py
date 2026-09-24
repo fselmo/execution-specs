@@ -345,6 +345,10 @@ class CampaignState:
     last; see `health.batch_sample`."""
     health: Dict[str, Any] = field(default_factory=dict)
     """The latest window's rates, for the report and the status page."""
+    timing: Dict[str, float] = field(default_factory=dict)
+    """Seconds the loop spent, summed over batches: waiting for a fill,
+    judging (runners working), and processing afterwards. Runners sit
+    idle for the first and the last."""
     signatures_reset: bool = field(default=False, compare=False)
 
     @property
@@ -377,6 +381,24 @@ class CampaignState:
         )
         self.segment = segment
         return True
+
+    def record_timing(
+        self, fill_wait: float, judging: float, processing: float
+    ) -> None:
+        """Add one batch's time to the totals, and its runners' idle share."""
+        for key, seconds in (
+            ("fill_wait", fill_wait),
+            ("judging", judging),
+            ("processing", processing),
+        ):
+            self.timing[key] = self.timing.get(key, 0.0) + seconds
+        self.timing["batches"] = self.timing.get("batches", 0) + 1
+        total = sum(
+            self.timing[k] for k in ("fill_wait", "judging", "processing")
+        )
+        self.timing["runner_idle_fraction"] = (
+            1 - self.timing["judging"] / total if total else 0.0
+        )
 
     def record_reproduction(
         self, key: str, reproduction: Mapping[str, List[int]]
@@ -431,6 +453,7 @@ class CampaignState:
                 segment=data.get("segment", ""),
                 segments=data.get("segments", []),
                 health=data.get("health", {}),
+                timing=data.get("timing", {}),
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
             return state
@@ -464,6 +487,7 @@ class CampaignState:
                     "segment": self.segment,
                     "segments": self.segments,
                     "health": self.health,
+                    "timing": self.timing,
                     # Written for readers of the file, the status page
                     # among them, so none has to derive it.
                     "summary": {
@@ -1721,7 +1745,10 @@ def run_campaign(
                 while len(pending) > 1 and pending[-1][1].cancel():
                     pending.pop()
             seeds, future = pending.popleft()
+            waited = time.time()
             slice_result = future.result()
+            fill_wait = time.time() - waited
+            judging = 0.0
             before = health_snapshot(state, options.health)
             seen = set(state.signatures)
             names: List[str] = slice_result["names"]
@@ -1764,6 +1791,7 @@ def run_campaign(
             runner_seconds: Dict[str, float] = {}
             if names:
                 batch_file = Path(slice_result["path"])
+                judged = time.time()
                 with ThreadPoolExecutor(
                     max_workers=max(1, len(runners) + len(contrast_runners))
                 ) as tp:
@@ -1780,6 +1808,7 @@ def run_campaign(
                         lane: f.result()[0]
                         for lane, f in contrast_futures.items()
                     }
+                judging = time.time() - judged
                 results = {
                     name: verdicts for name, (verdicts, _) in timed.items()
                 }
@@ -2104,6 +2133,9 @@ def run_campaign(
                 )
                 if failure:
                     echo(f"alert not sent: {failure}")
+            state.record_timing(
+                fill_wait, judging, time.time() - waited - fill_wait - judging
+            )
             state.save()
             write_report()
             fill_batches += 1
@@ -2119,6 +2151,7 @@ def run_campaign(
                 f"({state.unique_findings()} unique) "
                 f"all-fail {counts.get('all-fail', 0)} "
                 f"fill-errors {counts.get('fill_error', 0)} "
+                f"| waited {fill_wait:.1f}s judged {judging:.1f}s "
                 f"| fill {fill_ms_case:.0f}ms/case "
                 f"rss {slice_result['rss_mb']}MB "
                 f"| {elapsed / 60:.1f} min | runners "
@@ -2220,13 +2253,18 @@ def _split(
     half = len(names) // 2
     parts = [p for p in (names[:half], names[half:]) if errored & set(p)]
     judged = []
-    for index, part in enumerate(parts):
-        part_file = batch_file.with_name(
-            f"{batch_file.stem}.{index}{batch_file.suffix}"
+    for part in parts:
+        # Every client, and every contrast lane, judges the same batch at
+        # once: a fixed name for the halves would let two splits overwrite
+        # each other's files.
+        handle, name = tempfile.mkstemp(
+            prefix=f"{batch_file.stem}.",
+            suffix=batch_file.suffix,
+            dir=batch_file.parent,
         )
-        part_file.write_text(
-            json.dumps({name: fixtures[name] for name in part})
-        )
+        part_file = Path(name)
+        with open(handle, "w") as out:
+            out.write(json.dumps({n: fixtures[n] for n in part}))
         try:
             part_verdicts = runner.run_file(part_file, part)
         finally:
