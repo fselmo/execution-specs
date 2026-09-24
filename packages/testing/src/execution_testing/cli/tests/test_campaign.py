@@ -1623,3 +1623,34 @@ def test_a_new_segment_runs_the_baseline_gate_again(
     (tmp_path / "geth").write_text("build two")
     with pytest.raises(StaleClientError):
         _campaign(tmp_path, monkeypatch, broken, batch=3, count=9)
+
+
+def test_a_new_finding_alerts_once_and_a_known_one_never(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A digest the campaign has not seen, and that `known:` does not list,
+    raises one alert in the batch it first appears; its later hits and
+    every known digest only count.
+    """
+    from ..fuzzer_bridge import campaign as campaign_module
+
+    sent: List[str] = []
+    monkeypatch.setattr(campaign_module, "send_alert", sent.append)
+    failing = {
+        "geth": lambda s: s in (0, 3),
+        "erigon": lambda s: s in (1, 4),
+    }
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        batch=3,
+        count=6,
+        baseline=False,
+        known=(("geth", "geth mismatch"),),
+    )
+    assert len(state.signatures) == 2
+    (alert,) = sent
+    assert "seeds 0..2" in alert and "1 new finding(s)" in alert
+    assert "erigon" in alert and "geth" not in alert
