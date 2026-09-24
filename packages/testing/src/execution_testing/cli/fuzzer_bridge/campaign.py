@@ -986,6 +986,24 @@ ALERT_REASON_CHARS = 120
 client's error text, from a process fed generated input."""
 
 
+def masked_failure_alert(
+    campaign: str, seeds: range, tagged: Sequence[Tuple[str, str]]
+) -> str:
+    """The alert for retry or fallback lines a batch's runners printed."""
+    by_lane: Dict[str, int] = {}
+    for lane, line in tagged:
+        key = f"{lane} {line.split()[0]}"
+        by_lane[key] = by_lane.get(key, 0) + 1
+    shown = ", ".join(
+        f"{key} x{count}" for key, count in sorted(by_lane.items())
+    )
+    return (
+        f"campaign {campaign}, seeds {seeds.start}..{seeds.stop - 1}: "
+        f"masked parallel-path failure(s), verdicts passed: {shown}; "
+        "see stderr_tags.log"
+    )
+
+
 def new_findings(state: CampaignState, seen: Set[str]) -> str:
     """
     One line naming the signatures first seen since ``seen``; empty when
@@ -1723,6 +1741,15 @@ def run_campaign(
                         f"  {len(tagged)} tagged stderr line(s) in "
                         f"{batch_file.name}; see stderr_tags.log"
                     )
+                    # Every campaign fixture holds only valid blocks, so a
+                    # retry or fallback is a parallel-path failure the
+                    # passing verdict hid. It alerts every time: there is
+                    # no failing verdict, so no digest to be new.
+                    failure = send_alert(
+                        masked_failure_alert(output.name, seeds, tagged)
+                    )
+                    if failure:
+                        echo(f"alert not sent: {failure}")
 
                 shard_fixtures: Optional[Dict[str, Any]] = None
                 if spec_tool is not None:

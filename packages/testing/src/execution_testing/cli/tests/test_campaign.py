@@ -1685,3 +1685,33 @@ def test_a_token_in_a_client_env_never_reaches_disk(
         assert json.loads(text)["client_env"] == {
             "besu": {"API_TOKEN": "[redacted]", "JAVA_HOME": "/opt/jdk-25"}
         }
+
+
+def test_a_masked_parallel_failure_alerts_though_every_verdict_passed(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A retry on a valid fixture is a failure the verdict hid, so it has
+    no digest to be new: it alerts on its own, once per batch that shows
+    one, and only in that batch.
+    """
+    from ..fuzzer_bridge import campaign as campaign_module
+
+    sent: List[str] = []
+    monkeypatch.setattr(campaign_module, "send_alert", sent.append)
+    failing = {"geth": lambda _s: False, "nethermind": lambda _s: False}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        runner=lambda name, flags: (
+            _RetryingRunner(name, failing[name], None, flags)
+            if name == "nethermind"
+            else _FakeRunner(name, failing[name], None, flags)
+        ),
+        count=6,
+        batch=3,
+    )
+    assert state.signatures == {}
+    (alert,) = sent
+    assert "seeds 3..5" in alert and "nethermind BAL-RETRY x1" in alert
