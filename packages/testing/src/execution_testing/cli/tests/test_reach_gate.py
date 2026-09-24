@@ -112,6 +112,21 @@ def test_a_generator_version_ships_with_its_rate_records() -> None:
         ran_before, ran_now = sum(before.values()), sum(outcomes.values())
         assert significant_drops(before, outcomes, ran_before, ran_now) == []
 
+    # Transactions whose writes survive, read from the fixture's list.
+    writes = current.get("tx_writes")
+    assert writes, f"v{GENERATOR_VERSION} event-rates lacks tx_writes"
+    before_writes = previous.get("tx_writes")
+    if before_writes:
+        assert (
+            significant_drops(
+                {"committed_storage": before_writes["committed_storage"]},
+                {"committed_storage": writes["committed_storage"]},
+                before_writes["txs"],
+                writes["txs"],
+            )
+            == []
+        )
+
 
 def test_a_starved_later_block_is_a_regression() -> None:
     """
