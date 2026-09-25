@@ -1,0 +1,52 @@
+From ad3e240c63a82125301f0dc1e188a7e8f13c2ac5 Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <fselmo2@gmail.com>
+Date: Thu, 24 Sep 2026 21:26:08 +0000
+Subject: [PATCH 3/3] Consensus: print the parallel-execution decision for each
+ block
+
+PrepareForProcessing decides per block whether the BAL-driven parallel
+executor runs and records nothing about it. Each non-genesis block now
+writes one line to stderr, FUZZ-PAR-DECISION with its number, hash, the
+decision, and for a sequential block the first condition that ruled out
+the parallel path (pre-amsterdam, disabled, forced, building, no-bal,
+no-scope, no-reader-pool), so a fuzzing runner can show every block that
+carried an access list ran in parallel.
+
+Not a runner change: it touches Nethermind.Consensus, so the series admits
+this one file by name.
+---
+ .../Processing/BlockAccessListManager.cs       | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/src/Nethermind/Nethermind.Consensus/Processing/BlockAccessListManager.cs b/src/Nethermind/Nethermind.Consensus/Processing/BlockAccessListManager.cs
+index 9005d9b231..4870bf5481 100644
+--- a/src/Nethermind/Nethermind.Consensus/Processing/BlockAccessListManager.cs
++++ b/src/Nethermind/Nethermind.Consensus/Processing/BlockAccessListManager.cs
+@@ -143,6 +143,24 @@ public partial class BlockAccessListManager(
+             && stateProvider.IsInScope
+             && _hasParentReaderPool;
+ 
++        // One line per executed block for a fuzzing runner: which path the block
++        // takes, and for a sequential block the first condition that ruled out
++        // the parallel one, in the order the gate above checks them.
++        if (!suggestedBlock.IsGenesis)
++        {
++            string reason =
++                ParallelExecutionEnabled ? ""
++                : !_blockAccessListsEnabled ? "pre-amsterdam"
++                : !ExecutionFlags.ParallelExecution || !blocksConfig.ParallelExecution ? "disabled"
++                : options.ContainsFlag(ProcessingOptions.ForceSequentialBlockAccessList) ? "forced"
++                : _isBuilding ? "building"
++                : suggestedBlock.BlockAccessList is null ? "no-bal"
++                : !stateProvider.IsInScope ? "no-scope"
++                : "no-reader-pool";
++            Console.Error.WriteLine(
++                $"FUZZ-PAR-DECISION block={suggestedBlock.Number} hash={suggestedBlock.Hash} decision={(ParallelExecutionEnabled ? "parallel" : "sequential")} reason={reason}");
++        }
++
+         // BAL-driven read warming: mirrors BlockCachePreWarmer.IsBalReadWarmingEnabled so
+         // HintBal honours the same opt-in config as the prewarmer path.
+         BatchReadEnabled = Enabled && blocksConfig.ParallelExecutionBatchRead;
+-- 
+2.47.3
+

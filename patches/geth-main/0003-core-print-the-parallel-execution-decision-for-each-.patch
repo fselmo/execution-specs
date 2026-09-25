@@ -1,0 +1,67 @@
+From 70c20acdd69bd6eb39cde5dcba4228429b7199a8 Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <fselmo2@gmail.com>
+Date: Thu, 24 Sep 2026 21:25:44 +0000
+Subject: [PATCH 3/3] core: print the parallel-execution decision for each
+ block
+
+Process chooses between the BAL-driven parallel processor and the
+sequential one per block, and says nothing about which it took. Each block
+now writes one line to stderr, FUZZ-PAR-DECISION with its number, hash,
+the decision, and for a sequential block the reason (forced, tracer,
+witness, no-bal, pre-amsterdam) mirroring supportsParallelExecution's
+checks in order, so a fuzzing runner can show every block that carried an
+access list ran in parallel.
+
+Not a runner change: it touches core/state_processor.go, so the series
+admits this one file by name.
+---
+ core/state_processor.go | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/core/state_processor.go b/core/state_processor.go
+index a3c62432d..76b60e2f1 100644
+--- a/core/state_processor.go
++++ b/core/state_processor.go
+@@ -20,6 +20,7 @@ import (
+ 	"context"
+ 	"fmt"
+ 	"math/big"
++	"os"
+ 	"sync/atomic"
+ 
+ 	"github.com/ethereum/go-ethereum/common"
+@@ -65,6 +66,7 @@ func (p *StateProcessor) chainConfig() *params.ChainConfig {
+ // returns the amount of gas that was used in the process. If any of the
+ // transactions failed to execute due to insufficient gas it will return an error.
+ func (p *StateProcessor) Process(ctx context.Context, block *types.Block, statedb *state.StateDB, jumpDestCache vm.JumpDestCache, precompileCache *vm.PrecompileCache, cfg vm.Config, execIndex *atomic.Int64) (*ProcessResult, error) {
++	printParallelDecision(block, p.chainConfig(), statedb.Witness() != nil, cfg.Tracer != nil, cfg.DisableParallelExecution)
+ 	if supportsParallelExecution(block, p.chainConfig(), statedb.Witness() != nil, cfg.Tracer != nil, cfg.DisableParallelExecution) {
+ 		return p.processParallel(ctx, block, statedb, jumpDestCache, precompileCache, cfg)
+ 	}
+@@ -523,3 +525,23 @@ func AssembleBlock(chain consensus.ChainHeaderReader, header *types.Header, stat
+ 	header.BlockAccessListHash = &balHash
+ 	return types.NewBlock(header, body, receipts, trie.NewStackTrie(nil)).WithAccessListUnsafe(bal)
+ }
++
++// printParallelDecision writes the path this block takes, and why, to stderr:
++// a fuzzing runner counts these lines to show a campaign ran the parallel
++// processor on every block that could take it.
++func printParallelDecision(block *types.Block, config *params.ChainConfig, wantWitness bool, wantTrace bool, disableParallel bool) {
++	decision, reason := "parallel", ""
++	switch {
++	case disableParallel:
++		decision, reason = "sequential", "forced"
++	case wantTrace:
++		decision, reason = "sequential", "tracer"
++	case wantWitness:
++		decision, reason = "sequential", "witness"
++	case block.AccessList() == nil:
++		decision, reason = "sequential", "no-bal"
++	case !config.IsAmsterdam(block.Number(), block.Time()):
++		decision, reason = "sequential", "pre-amsterdam"
++	}
++	fmt.Fprintf(os.Stderr, "FUZZ-PAR-DECISION block=%d hash=%s decision=%s reason=%s\n", block.NumberU64(), block.Hash().Hex(), decision, reason)
++}
+-- 
+2.47.3
+

@@ -1,0 +1,49 @@
+From 4b1e01df3c4dd43feab3c0a2b387c3b6247a237d Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <fselmo2@gmail.com>
+Date: Thu, 24 Sep 2026 21:31:50 +0000
+Subject: [PATCH] stagedsync: print the parallel-execution decision for each
+ block
+
+The BAL feed decides per block whether the parallel executor schedules
+from the block's access list, and the worker count decides whether it
+runs in parallel at all; neither is visible outside TRACE_BAL_FEED. Each
+block now writes one line to stderr, FUZZ-PAR-DECISION with its number,
+hash, the decision, and for a sequential block the first reason:
+pre-amsterdam, ignored (IGNORE_BAL), no-bal, or serial (one worker).
+
+Not a runner change: it touches execution/stagedsync/exec3.go, so the
+series admits this one file by name.
+---
+ execution/stagedsync/exec3.go | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/execution/stagedsync/exec3.go b/execution/stagedsync/exec3.go
+index c31f32d39d..4e37da1537 100644
+--- a/execution/stagedsync/exec3.go
++++ b/execution/stagedsync/exec3.go
+@@ -753,6 +753,22 @@ func (te *txExecutor) executeBlocks(ctx context.Context, startBlockNum uint64, m
+ 			if executionBAL == nil && !dbg.IgnoreBAL && te.cfg.chainConfig.IsAmsterdam(header.Time) && header.HasNonEmptyBAL() {
+ 				te.logger.Debug("executing block without a BAL", "blockNum", blockNum)
+ 			}
++			// One line per block for a fuzzing runner: whether this block runs
++			// on the BAL-fed parallel executor, and if not, the first reason.
++			parDecision, parReason := "parallel", ""
++			switch {
++			case !te.cfg.chainConfig.IsAmsterdam(header.Time):
++				parDecision, parReason = "sequential", "pre-amsterdam"
++			case dbg.IgnoreBAL:
++				parDecision, parReason = "sequential", "ignored"
++			case executionBAL == nil:
++				parDecision, parReason = "sequential", "no-bal"
++			case te.cfg.syncCfg.ExecWorkerCount <= 1:
++				parDecision, parReason = "sequential", "serial"
++			}
++			if blockNum > 0 { // genesis is not imported
++				fmt.Fprintf(os.Stderr, "FUZZ-PAR-DECISION block=%d hash=%s decision=%s reason=%s\n", blockNum, b.Hash().Hex(), parDecision, parReason)
++			}
+ 			if dbg.TraceBALFeed {
+ 				if executionBAL != nil {
+ 					fmt.Printf("BAL-FEED blk=%d accounts=%d\n", blockNum, len(executionBAL))
+-- 
+2.47.3
+

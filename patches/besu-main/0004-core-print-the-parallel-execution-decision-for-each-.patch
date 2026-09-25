@@ -1,0 +1,69 @@
+From 260120cebda0e7b04ef390b173b611d6304fc39a Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <fselmo2@gmail.com>
+Date: Thu, 24 Sep 2026 21:27:57 +0000
+Subject: [PATCH 4/4] core: print the parallel-execution decision for each
+ block
+
+Which path a block takes depends on two things: the processor the
+schedule built, and whether a block access list arrived for the parallel
+one to schedule from. Each block now writes one line to stderr,
+FUZZ-PAR-DECISION with its number, hash, and decision: parallel when the
+parallel processor has a list and perfect parallelization is on;
+otherwise sequential with no-bal or perfect-off from the parallel
+processor, or disabled from the sequential one. A fallback's re-entry is
+not printed again; BAL-FALLBACK covers it.
+
+Not a runner change: it touches two ethereum/core files, so the series
+admits them by name.
+---
+ .../ethereum/mainnet/AbstractBlockProcessor.java     | 10 ++++++++++
+ .../MainnetParallelBlockProcessor.java               | 12 ++++++++++++
+ 2 files changed, 22 insertions(+)
+
+diff --git a/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/AbstractBlockProcessor.java b/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/AbstractBlockProcessor.java
+index 4a8827add1..f8cb59b58d 100644
+--- a/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/AbstractBlockProcessor.java
++++ b/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/AbstractBlockProcessor.java
+@@ -198,6 +198,16 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
+       final MutableWorldState worldState,
+       final Block block,
+       final Optional<BlockAccessList> blockAccessList) {
++    // The sequential processor's entry. The parallel processor re-enters it
++    // only to fall back, and prints BAL-FALLBACK for that instead.
++    if (!getClass().getSimpleName().equals("MainnetParallelBlockProcessor")) {
++      System.err.println(
++          "FUZZ-PAR-DECISION block="
++              + block.getHeader().getNumber()
++              + " hash="
++              + block.getHash()
++              + " decision=sequential reason=disabled");
++    }
+     return processBlock(
+         protocolContext, blockchain, worldState, block, blockAccessList, new NoPreprocessing());
+   }
+diff --git a/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java b/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
+index f3e283ed4a..2dcff36e38 100644
+--- a/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
++++ b/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
+@@ -141,6 +141,18 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
+       final MutableWorldState worldState,
+       final Block block,
+       final Optional<BlockAccessList> blockAccessList) {
++    // Parallel here means BAL-driven: without a list, or with perfect
++    // parallelization off, the optimistic scheduler runs instead.
++    final boolean balDriven =
++        balConfiguration.isPerfectParallelizationEnabled() && blockAccessList.isPresent();
++    System.err.println(
++        "FUZZ-PAR-DECISION block="
++            + block.getHeader().getNumber()
++            + " hash="
++            + block.getHash()
++            + " decision="
++            + (balDriven ? "parallel reason=" : "sequential reason=")
++            + (balDriven ? "" : blockAccessList.isEmpty() ? "no-bal" : "perfect-off"));
+     final BlockProcessingResult blockProcessingResult =
+         super.processBlock(
+             protocolContext,
+-- 
+2.47.3
+
