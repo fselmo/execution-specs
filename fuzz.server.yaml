@@ -182,6 +182,82 @@ clients:
     runner_flags: [--parallelExecution, "true"]
     contrast_flags: [--parallelExecution, "false"]
 
+  # Current Glamsterdam development heads (mainline default branches,
+  # resolved 2026-09-24; no devnet past 11 has a branch of its own). Stock
+  # builds sit beside the series builds for the liveness check.
+  - name: geth-par-main
+    build:
+      recipe: geth
+      repo: ethereum/go-ethereum
+      ref: 920c07774c65ebb3023536f85df642c44478b540
+      patches:
+        - patches/geth-main/0001-cmd-evm-add-bal.sequential-to-blocktest.patch
+        - patches/geth-main/0002-tests-attach-a-fixture-s-block-access-list-to-the-bl.patch
+        - patches/geth-main/0003-core-print-the-parallel-execution-decision-for-each-.patch
+      # 0003 prints FUZZ-PAR-DECISION in core, admitted by name.
+      patch_paths: [cmd/evm/, tests/, core/state_processor.go]
+    contrast_flags: [--bal.sequential]
+  - name: geth-main
+    build: {recipe: geth, repo: ethereum/go-ethereum, ref: 920c07774c65ebb3023536f85df642c44478b540}
+  - name: erigon-par-main
+    build:
+      recipe: erigon
+      repo: erigontech/erigon
+      ref: 01c118ee1fb0f0df4bcf2b9085602f75f5607b19
+      # Its only patch prints FUZZ-PAR-DECISION at the BAL feed.
+      patches:
+        - patches/erigon-main/0001-stagedsync-print-the-parallel-execution-decision-for.patch
+      patch_paths: [cmd/evm/, execution/stagedsync/exec3.go]
+    contrasts:
+      hints-off: {env: {IGNORE_BAL: "true"}}
+      serial: {env: {EXEC3_WORKERS: "1"}}
+  - name: besu-par-main
+    build:
+      recipe: besu
+      repo: besu-eth/besu
+      ref: cf89071f9d6dddf7997f35e09929fe059f82ecd1
+      # The devnet-11 port plus 0004, the FUZZ-PAR-DECISION print.
+      patches:
+        - patches/besu-main/0001-referencetests-let-a-caller-ask-for-the-parallel-blo.patch
+        - patches/besu-main/0002-evmtool-run-block-test-on-the-parallel-path-on-the-f.patch
+        - patches/besu-main/0003-core-print-the-parallel-processor-s-sequential-fallb.patch
+        - patches/besu-main/0004-core-print-the-parallel-execution-decision-for-each-.patch
+      patch_paths:
+        - ethereum/evmtool/
+        - ethereum/referencetests/
+        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
+        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/AbstractBlockProcessor.java
+    env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
+          PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
+    contrast_flags: [--bal.sequential]
+  - name: besu-main
+    build: {recipe: besu, repo: besu-eth/besu, ref: cf89071f9d6dddf7997f35e09929fe059f82ecd1}
+    env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
+          PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
+  - name: nethermind-par-main
+    build:
+      recipe: nethermind
+      repo: NethermindEth/nethermind
+      ref: 5246d0c79940962a277c06268e8fa32ee0dbfb6a
+      # nethermind-main: the retry catch's body moved on this head.
+      patches:
+        - patches/nethermind-main/0001-Ethereum.Test.Base-attach-a-fixture-s-block-access-l.patch
+        - patches/nethermind-main/0002-Consensus-print-the-sequential-retry-of-a-parallel-B.patch
+        - patches/nethermind-main/0003-Consensus-print-the-parallel-execution-decision-for-.patch
+      patch_paths:
+        - src/Nethermind/Nethermind.Test.Runner/
+        - src/Nethermind/Ethereum.Test.Base/
+        - src/Nethermind/Nethermind.Consensus/Processing/BranchProcessor.cs
+        - src/Nethermind/Nethermind.Consensus/Processing/BlockAccessListManager.cs
+    env: {DOTNET_ROOT: /home/fselmo/.dotnet,
+          PATH: "/home/fselmo/.dotnet:/usr/local/go/bin:/usr/bin:/bin"}
+    runner_flags: [--parallelExecution, "true"]
+    contrast_flags: [--parallelExecution, "false"]
+  - name: nethermind-main
+    build: {recipe: nethermind, repo: NethermindEth/nethermind, ref: 5246d0c79940962a277c06268e8fa32ee0dbfb6a}
+    env: {DOTNET_ROOT: /home/fselmo/.dotnet,
+          PATH: "/home/fselmo/.dotnet:/usr/local/go/bin:/usr/bin:/bin"}
+
 campaigns:
   smoke:
     fork: Amsterdam
@@ -315,3 +391,119 @@ campaigns:
     producer: evmone-producer
     seed_start: 40000000
     known: []
+  # v20 gate on the devnet-11 panel: besu-gate's 2d29706a is the control;
+  # the four -par-d11 clients must agree on every case.
+  gate-v20:
+    fork: Amsterdam
+    clients: [geth-par-d11, erigon-par-d11, besu-par-d11, nethermind-par-d11, besu-gate]
+    producer: evmone-producer
+    seed_start: 210000
+    known: []
+  # v20 gate on the current-head panel: besu-gate's 2d29706a is the control.
+  gate-v20:
+    fork: Amsterdam
+    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate]
+    producer: evmone-producer
+    seed_start: 210000
+    known: []
+  # Continuous discovery on the current heads; besu-gate is the control only.
+  #
+  # Step 0 (release sources filled at forks/amsterdam 8cbd21987, 26,511
+  # tests; and tests-glamsterdam-devnet@v8.1.4, 25,028) -- known
+  # disagreements on these pins, listed here rather than in known: where
+  # their error text would also hide a genuine BAL finding:
+  #   geth-par-main: panics (runner error) on
+  #     test_system_call_execution_boundary[...history-one_over] -- a failed
+  #     EIP-2935 call must be ignored; reported separately. Test from #3484.
+  #   geth-par-main: "access list hash mismatch" on
+  #     test_bal_post_execution_calls_net_storage_at_last_index and
+  #     test_bal_withdrawals_and_dequeues_net_balance_at_last_index
+  #     [forward_all, forward_half] -- rule and tests from a9792ab73 (#3566,
+  #     2026-09-17): system calls sharing an index net against its start.
+  #   erigon-par-main: "block access list mismatch" on the five history
+  #     system-call tests (execution_boundary history exact/one_over,
+  #     execution_grant history, reservoir_boundary history x2) -- tests
+  #     from bb95255f8 (#3524, 2026-09-10); rule since 8ea50be3c (#2901).
+  #   besu-par-main: throws (no verdict; aborts its whole block-test run)
+  #     whenever an unchecked pre-block system call fails, where the spec
+  #     ignores the failure: system_call_execution_boundary history-one_over
+  #     and beacon-one_over, bal_pre_execution_call_failure_keeps_read_drops_write
+  #     out_of_gas and revert. Its messages are the two known: entries below.
+  #   besu-par-main: "Chain header mismatch" on the same three last-index
+  #     tests as geth (a9792ab73); erigon and nethermind pass them.
+  #   nethermind-par-main: none. All four pass v8.1.4 in full.
+  continuous-main:
+    fork: Amsterdam
+    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate]
+    producer: evmone-producer
+    seed_start: 50000000
+    # Measured on this box, same 2,500 seeds per cap (cases/s): 1: 4.02,
+    # 2: 5.34, 3: 5.86, 4: 6.09, 6: 6.36. Still rising slowly at 6.
+    runner_concurrency: 6
+    known:
+      - {client: besu-par-main, reason: "System call halted"}
+      - {client: besu-par-main, reason: "System call did not execute to completion"}
+    health:
+      control: {client: besu-gate, reason: "Chain header mismatch"}
+      # besu-gate's 2d29706a ran 4.9-5.6% over 4.8M cases on v15-v20.
+      control_band: [0.03, 0.08]
+      # Every client's primary is its parallel path on this panel.
+      parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main]
+      parallel_baseline_blocks: 2000
+      parallel_proof_floor: 0.9
+  # Runner-cap sweep: the continuous panel on one fixed seed range, per cap.
+  cap-sweep-1:
+    fork: Amsterdam
+    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate]
+    producer: evmone-producer
+    seed_start: 60000000
+    runner_concurrency: 1
+    known: []
+  cap-sweep-2:
+    fork: Amsterdam
+    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate]
+    producer: evmone-producer
+    seed_start: 60000000
+    runner_concurrency: 2
+    known: []
+  cap-sweep-3:
+    fork: Amsterdam
+    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate]
+    producer: evmone-producer
+    seed_start: 60000000
+    runner_concurrency: 3
+    known: []
+  cap-sweep-4:
+    fork: Amsterdam
+    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate]
+    producer: evmone-producer
+    seed_start: 60000000
+    runner_concurrency: 4
+    known: []
+  cap-sweep-6:
+    fork: Amsterdam
+    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate]
+    producer: evmone-producer
+    seed_start: 60000000
+    runner_concurrency: 6
+    known: []
+  # Second shard, disjoint seeds; the cap-8 trial against shard a's 6.
+  continuous-main-b:
+    fork: Amsterdam
+    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate]
+    producer: evmone-producer
+    seed_start: 70000000
+    # Measured on this box, same 2,500 seeds per cap (cases/s): 1: 4.02,
+    # 2: 5.34, 3: 5.86, 4: 6.09, 6: 6.36. Still rising slowly at 6.
+    runner_concurrency: 8
+    known:
+      - {client: besu-par-main, reason: "System call halted"}
+      - {client: besu-par-main, reason: "System call did not execute to completion"}
+    health:
+      control: {client: besu-gate, reason: "Chain header mismatch"}
+      # besu-gate's 2d29706a ran 4.9-5.6% over 4.8M cases on v15-v20.
+      control_band: [0.03, 0.08]
+      # Every client's primary is its parallel path on this panel.
+      parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main]
+      parallel_baseline_blocks: 2000
+      parallel_proof_floor: 0.9
