@@ -287,6 +287,21 @@ SIG_VERSION = 2
 """Bumped when the signature scheme changes; a stale state recounts."""
 
 
+def _running_seconds(data: Mapping[str, Any]) -> float:
+    """
+    A saved state's running time.
+
+    States written before it was recorded fall back to the loop's own
+    per-batch timing, which sums only time spent running batches.
+    """
+    if "running_seconds" in data:
+        return float(data["running_seconds"])
+    timing = data.get("timing", {})
+    return float(
+        sum(timing.get(k, 0.0) for k in ("fill_wait", "judging", "processing"))
+    )
+
+
 @dataclass
 class CampaignState:
     """Everything a campaign needs to resume."""
@@ -354,7 +369,18 @@ class CampaignState:
     """Seconds the loop spent, summed over batches: waiting for a fill,
     judging (runners working), and processing afterwards. Runners sit
     idle for the first and the last."""
+    running_seconds: float = 0.0
+    """Seconds the campaign has spent running, summed over its runs. Time
+    since `started` also counts every stretch it sat stopped, so a rate
+    over it reads a stopped day as a slow one."""
+    run_started: Optional[float] = field(default=None, compare=False)
+    """When the current run began, if one is in progress; not saved."""
     signatures_reset: bool = field(default=False, compare=False)
+
+    def active_seconds(self) -> float:
+        """Running time so far, the run in progress included."""
+        current = time.time() - self.run_started if self.run_started else 0.0
+        return self.running_seconds + current
 
     @property
     def cases(self) -> int:
@@ -493,6 +519,7 @@ class CampaignState:
                 path=path,
                 next_seed=data["next_seed"],
                 started=data.get("started", time.time()),
+                running_seconds=_running_seconds(data),
                 counts=data.get("counts", {}),
                 client_failures=data.get("client_failures", {}),
                 rejections=data.get("rejections", {}),
@@ -547,13 +574,15 @@ class CampaignState:
                     "segments": self.segments,
                     "health": self.health,
                     "timing": self.timing,
+                    "running_seconds": self.active_seconds(),
                     "parallel": self.parallel,
                     # Written for readers of the file, the status page
                     # among them, so none has to derive it.
                     "summary": {
                         "cases": self.cases,
                         "cases_per_second": self.cases
-                        / max(time.time() - self.started, 1e-9),
+                        / max(self.active_seconds(), 1e-9),
+                        "running_seconds": self.active_seconds(),
                         "saved_at": time.time(),
                     },
                 },
@@ -1851,6 +1880,7 @@ def run_campaign(
             "recounting signatures from scratch (counts and seeds kept)"
         )
     run_started = time.time()
+    state.run_started = run_started
     deadline = run_started + options.hours * 3600 if options.hours else None
     end_seed = (
         options.seed_start + options.count
