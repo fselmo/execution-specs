@@ -71,6 +71,48 @@ def test_state_round_trips_and_resumes(tmp_path: Path) -> None:
     assert entry["count"] == 2 and entry["first_seed"] == 5
 
 
+def test_the_rate_counts_only_time_spent_running(tmp_path: Path) -> None:
+    """
+    A campaign stopped for a day then resumed is not a slow one: its rate
+    divides by the time it ran, not by the time since it first started.
+    """
+    import time
+
+    state = CampaignState.load(tmp_path / "state.json", seed_start=0)
+    state.started = time.time() - 24 * 3600
+    state.running_seconds = 100.0
+    state.counts["agreed"] = 200
+    state.save()
+    summary = json.loads((tmp_path / "state.json").read_text())["summary"]
+    assert summary["running_seconds"] == 100.0
+    assert summary["cases_per_second"] == 2.0
+
+    again = CampaignState.load(tmp_path / "state.json", seed_start=0)
+    again.run_started = time.time() - 50
+    assert 149 < again.active_seconds() < 152
+
+
+def test_an_older_state_takes_its_running_time_from_its_timing(
+    tmp_path: Path,
+) -> None:
+    """Before running time was saved, the per-batch timing summed it."""
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "next_seed": 10,
+                "started": 1.0,
+                "timing": {
+                    "fill_wait": 5.0,
+                    "judging": 30.0,
+                    "processing": 5.0,
+                },
+            }
+        )
+    )
+    assert CampaignState.load(path, seed_start=0).running_seconds == 40.0
+
+
 def test_report_lists_signatures_and_versions(tmp_path: Path) -> None:
     """The report is self-contained: versions, throughput, signatures."""
     state = CampaignState.load(tmp_path / "state.json", seed_start=0)

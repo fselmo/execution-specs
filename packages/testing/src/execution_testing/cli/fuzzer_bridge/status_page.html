@@ -87,7 +87,9 @@ function render(s) {
   const summary = s.summary || {};
   const seg = s.segment || {};
   const run = [];
-  if (s.started) run.push(row("uptime", ago(s.served_at - s.started)));
+  // Run time counts only time spent running; since-start includes every stop.
+  if (summary.running_seconds !== undefined) run.push(row("run time", ago(summary.running_seconds)));
+  if (s.started) run.push(row("first started", ago(s.served_at - s.started) + " ago"));
   run.push(row("cases", summary.cases === undefined ? "-" : summary.cases));
   run.push(row("cases/s", summary.cases_per_second === undefined ? "-" : summary.cases_per_second.toFixed(1)));
   run.push(row("next seed", s.next_seed));
