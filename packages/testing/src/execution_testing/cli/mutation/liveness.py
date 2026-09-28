@@ -288,11 +288,41 @@ def run_liveness(
                     path.write_text(text)
             return json.loads(out.read_text())
 
-    probed = {
-        root / module: instrument(originals[root / module], sites)
-        for module, sites in by_module.items()
-    }
-    data = measure("probe", probed, f"{seeds.start}:{seeds.stop}")
+    # A probe cannot sit inside another, so nested sites go to separate
+    # runs: each run probes, per module, sites that do not overlap.
+    rounds: List[Dict[str, Dict[int, Mutant]]] = []
+
+    def span(starts: List[int], m: Mutant) -> Tuple[int, int]:
+        return (
+            starts[m.lineno - 1] + m.col_offset,
+            starts[m.end_lineno - 1] + m.end_col_offset,
+        )
+
+    for module, sites in by_module.items():
+        starts = _line_start_offsets(originals[root / module])
+
+        for key, mutant in sorted(sites.items()):
+            a, b = span(starts, mutant)
+            for placed in rounds:
+                others = placed.get(module, {})
+                if all(
+                    b <= span(starts, o)[0] or span(starts, o)[1] <= a
+                    for o in others.values()
+                ):
+                    placed.setdefault(module, {})[key] = mutant
+                    break
+            else:
+                rounds.append({module: {key: mutant}})
+    data: Dict[str, Any] = {"failed": 0, "per_seed": {}}
+    for placed in rounds:
+        probed = {
+            root / module: instrument(originals[root / module], sites)
+            for module, sites in placed.items()
+        }
+        part = measure("probe", probed, f"{seeds.start}:{seeds.stop}")
+        data["failed"] = max(data["failed"], part["failed"])
+        for seed, counts in part["per_seed"].items():
+            data["per_seed"].setdefault(seed, {}).update(counts)
     tallies = tally(data, list(mutants))
 
     differing = {
