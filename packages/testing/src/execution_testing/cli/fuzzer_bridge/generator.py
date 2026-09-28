@@ -49,7 +49,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 20
+GENERATOR_VERSION = 21
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -308,6 +308,56 @@ def state_exhauster_code() -> bytes:
     assert body.count(exit_push) == 1
     body = body.replace(exit_push, bytes(Op.PUSH2(final)))
     return body + bytes(Op.JUMPDEST + Op.SSTORE(2**255, 1))
+
+
+EXACT_CHARGER_ADDRESS = 0x1FFF8
+"""Helper that gives a child frame exactly the gas its one fresh-slot
+store needs, give or take the drawn margin.
+
+The transaction carries no reservoir, so the child's state charge comes
+out of execution gas alone. With a margin of zero the store's execution
+cost leaves exactly its state cost: `state_gas_left + gas_left` equals
+the charge, the one input on which `>=` and `>` part ways. The helper
+counts its calls in slot 0, hands the count to the child as the slot to
+write, so each call's slot is fresh, and records the call's result plus
+one under that count."""
+
+EXACT_CHARGE_CHILD_ADDRESS = 0x1FFF7
+"""The child: one store of 1 to the slot its calldata names."""
+
+EXACT_CHARGE_TX_GAS = 1_000_000
+"""Gas for a transaction to the charger: under the cap, so no reservoir,
+and enough for its own two fresh stores and the child's forwarded gas."""
+
+
+def exact_charge_child_code() -> Bytecode:
+    """The child's code, priced as a first write of a fresh slot."""
+    return Op.SSTORE(
+        Op.CALLDATALOAD(0), 1, key_warm=False, original_value=0, new_value=1
+    )
+
+
+def exact_charger_code() -> bytes:
+    """Forward calldata word 0 as gas to the child, keyed by a counter."""
+    return bytes(
+        Op.SSTORE(0, Op.ADD(Op.SLOAD(0), 1))
+        + Op.MSTORE(0, Op.SLOAD(0))
+        + Op.SSTORE(
+            Op.SLOAD(0),
+            Op.ADD(
+                1,
+                Op.CALL(
+                    Op.CALLDATALOAD(0),
+                    EXACT_CHARGE_CHILD_ADDRESS,
+                    0,
+                    0,
+                    32,
+                    0,
+                    0,
+                ),
+            ),
+        )
+    )
 
 
 RESERVOIR_TX_RATE = 0.35
@@ -676,6 +726,17 @@ def generate_fuzzer_output(
         nonce=HexNumber(1),
         code=Bytes(bytes(Op.INVALID)),
     )
+    accounts[Address(EXACT_CHARGER_ADDRESS)] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(1),
+        code=Bytes(exact_charger_code()),
+    )
+    accounts[Address(EXACT_CHARGE_CHILD_ADDRESS)] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(1),
+        code=Bytes(bytes(exact_charge_child_code())),
+    )
+    exact_need = exact_charge_child_code().gas_cost(fork)
     fresh_store_state = Op.SSTORE(
         key_warm=False, original_value=0, new_value=1
     ).state_cost(fork)
@@ -702,6 +763,7 @@ def generate_fuzzer_output(
         to = Address(rng.choice(tx_targets))
         gas_need_fraction = None
         exhaust: Optional[Tuple[int, int]] = None
+        exact_gas: Optional[int] = None
         if rng.random() < domains.failing_tx_rate:
             to = Address(FAILER_ADDRESS)
         elif rng.random() < domains.toucher_tx_rate:
@@ -723,6 +785,12 @@ def generate_fuzzer_output(
                     tx_gas_cap + reservoir,
                     -(-reservoir // fresh_store_state),
                 )
+        elif (
+            rng.random() < domains.exact_charge_tx_rate
+            and EXACT_CHARGE_TX_GAS <= min(tx_gas_cap, budgets[block])
+        ):
+            to = Address(EXACT_CHARGER_ADDRESS)
+            exact_gas = exact_need + rng.choice(domains.exact_charge_margins)
         choices = tx_gas_choices
         if domains.reservoir_tx_gas and rng.random() < RESERVOIR_TX_RATE:
             choices = domains.reservoir_tx_gas + tx_gas_choices
@@ -745,6 +813,12 @@ def generate_fuzzer_output(
             gas, stores = exhaust
             tx_type = 2
             data = Bytes(stores.to_bytes(32, "big"))
+        elif exact_gas is not None:
+            # No authorizations: their intrinsic state gas would give the
+            # transaction a reservoir the child could draw on.
+            gas = EXACT_CHARGE_TX_GAS
+            tx_type = 2
+            data = Bytes(exact_gas.to_bytes(32, "big"))
         budgets[block] -= gas
         # Read before building authorizations: an authorization whose
         # authority is this sender advances `nonces[sender]`, and the

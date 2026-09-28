@@ -283,6 +283,28 @@ def _tally_state_exhaust(
             tally["state_exhaust_reservoir"]["several"] += 1
 
 
+def _tally_exact_charge(
+    case: Any, fork: "Fork", tally: Dict[str, Counter]
+) -> None:
+    """Count the exact charger's presence and the margins it was given."""
+    from execution_testing.base_types import Address
+
+    from .generator import EXACT_CHARGER_ADDRESS, exact_charge_child_code
+
+    charger = Address(EXACT_CHARGER_ADDRESS)
+    owned = [tx for tx in case.transactions if tx.to == charger]
+    tally["exact_charge_tx"]["present" if owned else "absent"] += 1
+    need = exact_charge_child_code().gas_cost(fork)
+    for tx in owned:
+        margin = int.from_bytes(bytes(tx.data)[:32], "big") - need
+        if margin == 0:
+            tally["exact_charge_margin"]["exact"] += 1
+        elif margin < 0:
+            tally["exact_charge_margin"]["short"] += 1
+        else:
+            tally["exact_charge_margin"]["over"] += 1
+
+
 def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     """
     Share of draws holding each value of every multi-valued input axis.
@@ -320,6 +342,8 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "toucher_target": Counter(),
         "state_exhaust_tx": Counter(),
         "state_exhaust_reservoir": Counter(),
+        "exact_charge_tx": Counter(),
+        "exact_charge_margin": Counter(),
     }
     reads = _blockhash_signatures()
 
@@ -402,6 +426,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
             tally["failing_tx"]["absent"] += 1
         _tally_toucher(case, tally)
         _tally_state_exhaust(case, fork, tally)
+        _tally_exact_charge(case, fork, tally)
         for tx in case.transactions:
             target = (
                 int.from_bytes(bytes(tx.to), "big")
@@ -539,6 +564,8 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "toucher_target": ("self", "pool", "other_tx"),
     "state_exhaust_tx": ("present", "absent"),
     "state_exhaust_reservoir": ("under_one_store", "one_store", "several"),
+    "exact_charge_tx": ("present", "absent"),
+    "exact_charge_margin": ("exact", "short", "over"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""

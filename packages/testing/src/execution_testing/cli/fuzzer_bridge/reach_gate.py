@@ -44,25 +44,22 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 20
+BASELINE_GENERATOR_VERSION = 21
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    174,
-    255,
-    312,
-    677,
-    766,
-    1132,
-    1174,
-    1312,
-    1709,
-    3064,
-    3218,
-    4035,
-    4423,
+    341,
+    444,
+    616,
+    797,
+    1469,
+    2239,
+    2826,
+    2940,
+    2959,
+    3672,
 )
-"""Greedy cover over a 5000-seed baseline at v20: together these fire
+"""Greedy cover over a 5000-seed baseline at v21: together these fire
 every target below.
 
 Re-baseline over at least `GATE_BASELINE_SEEDS`, which is measured
@@ -73,6 +70,13 @@ reports its own sampling as a regression: at 400 seeds this map lost
 
 GATE_BASELINE_SEEDS = 4700
 """Baseline window, from the rarest gated cell's measured rate.
+
+At v21 the rarest gated target is `(3, "halt", "StackOverflowError")`,
+10 in 5000, which needs 2303 seeds; `OutOfBoundsRead` at depth 3 no
+longer bounds it. The narrower window raises the BAL floor to 10, so four
+create and extcodecopy cells seen 1 to 9 times move to
+`BAL_CELLS_BELOW_WINDOW`. The window stays at 4700 until a version needs
+more.
 
 `(3, "halt", "OutOfBoundsRead")` occurs 5 times in 5000 cases at v20,
 a rate of 0.0010, which needs 4606 seeds to clear a 1% miss probability.
@@ -327,11 +331,6 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "revert",
         ),
         (
-            "vm.instructions.environment.extcodecopy",
-            "touched_account",
-            "success",
-        ),
-        (
             "vm.instructions.environment.extcodehash",
             "touched_account",
             "exceptional_halt",
@@ -433,8 +432,6 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "exceptional_halt",
         ),
         ("vm.instructions.system.create", "touched_account", "out_of_gas"),
-        ("vm.instructions.system.create", "touched_account", "revert"),
-        ("vm.instructions.system.create", "touched_account", "success"),
         (
             "vm.instructions.system.delegatecall",
             "touched_account",
@@ -517,7 +514,6 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
         ("vm.interpreter.process_call", "touched_account", "out_of_gas"),
         ("vm.interpreter.process_call", "touched_account", "revert"),
         ("vm.interpreter.process_call", "touched_account", "success"),
-        ("vm.interpreter.process_create", "code_change", "success"),
         ("vm.interpreter.process_create", "nonce_change", "exceptional_halt"),
         ("vm.interpreter.process_create", "nonce_change", "out_of_gas"),
         ("vm.interpreter.process_create", "nonce_change", "revert"),
@@ -532,16 +528,24 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
         ("vm.interpreter.process_create", "touched_account", "success"),
     }
 )
-"""BAL cells the baseline window samples reliably: 145 of the
-146 reached over 5000 seeds at v20, each seen at least
-`bal_gate_floor` = 5 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
+"""BAL cells the baseline window samples reliably: 141 of the
+146 reached over 5000 seeds at v21, each seen at least
+`bal_gate_floor` = 10 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
 
 BAL_CELLS_BELOW_WINDOW: Dict[Tuple[str, str, str], int] = {
+    (
+        "vm.instructions.environment.extcodecopy",
+        "touched_account",
+        "success",
+    ): 1,
+    ("vm.instructions.system.create", "touched_account", "revert"): 4,
+    ("vm.instructions.system.create", "touched_account", "success"): 9,
     (
         "vm.instructions.system.selfdestruct",
         "touched_account",
         "out_of_gas",
     ): 1,
+    ("vm.interpreter.process_create", "code_change", "success"): 6,
 }
 """Reached in the 5000-seed baseline but fewer than `bal_gate_floor` times,
 with their occurrence counts. Listed so they stay visible rather than gated:

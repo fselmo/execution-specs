@@ -251,6 +251,13 @@ class ValueDomains:
     """The reservoir, in fresh-slot stores' worth of state gas. A
     fraction leaves one store paying partly from the reservoir and partly
     from execution gas."""
+    exact_charge_tx_rate: float = 0.04
+    """Share of transactions sent to the exact charger, whose child makes
+    a state charge equal to all the gas it has left. At v20 no generated
+    state charge in 300 seeds met that equality: 0 of 9,205."""
+    exact_charge_margins: Tuple[int, ...] = (0, 0, -1, 1)
+    """Gas the child is given beyond its store's exact need. Zero is the
+    equality; one either side is its near miss, out of gas and not."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays

@@ -36,8 +36,13 @@ def _fill_with(recipient: Address, amount: int) -> Tuple[Dict, Any]:
     fork, eels = mod._FILL["fork"], mod._FILL["eels"]
     eels.bal_reach = observer_spec(fork)
     eels.last_bal_observation = None
-    case = generate_fuzzer_output(fork, 0).model_copy(
+    case = generate_fuzzer_output(fork, 0)
+    # One block, whatever the seed draws: the withdrawal's index and entry
+    # are read from the block the case ends on.
+    case = case.model_copy(
         update={
+            "block_count": 1,
+            "transactions": [tx for tx in case.transactions if tx.block == 0],
             "withdrawals": [
                 FuzzerWithdrawalInput(
                     index=HexNumber(0),
@@ -45,7 +50,7 @@ def _fill_with(recipient: Address, amount: int) -> Tuple[Dict, Any]:
                     address=recipient,
                     amount=HexNumber(amount),
                 )
-            ]
+            ],
         }
     )
     with contextlib.redirect_stdout(io.StringIO()):

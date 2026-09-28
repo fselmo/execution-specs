@@ -60,8 +60,13 @@ def _send_to_failer(code: bytes, storage: Dict) -> FuzzerOutput:
         storage=storage,
     )
     transactions = list(case.transactions)
+    # A drawn need fraction would have its gas derived again at fill.
     transactions[0] = transactions[0].model_copy(
-        update={"to": FAILER, "gas": HexNumber(SMALLEST_GAS)}
+        update={
+            "to": FAILER,
+            "gas": HexNumber(SMALLEST_GAS),
+            "gas_need_fraction": None,
+        }
     )
     return case.model_copy(
         update={"accounts": accounts, "transactions": transactions}
