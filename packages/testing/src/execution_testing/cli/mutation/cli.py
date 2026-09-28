@@ -1,5 +1,6 @@
 """Command-line interface for spec mutation testing."""
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -161,6 +162,20 @@ from .shapes import SHAPES
     show_default=True,
     help="Mutants per stratum when freezing a held-out set.",
 )
+@click.option(
+    "--held-out-index",
+    "held_out_indices",
+    type=int,
+    multiple=True,
+    help="Run only the held-out mutant at this position (repeatable).",
+)
+@click.option(
+    "--held-out-summaries",
+    "held_out_summaries",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Write each held-out mutant's `fuzz diff` summary here as NN.json.",
+)
 def mutate(
     module_path: Optional[Path],
     shape_names: Sequence[str],
@@ -182,6 +197,8 @@ def mutate(
     held_out_path: Optional[Path],
     held_out_check_path: Optional[Path],
     held_out_per_stratum: int,
+    held_out_indices: Sequence[int],
+    held_out_summaries: Optional[Path],
 ) -> None:
     """
     Mutation-test a spec module: measure how many small spec errors the
@@ -234,7 +251,17 @@ def mutate(
                 config=config_path,
             ),
             timeout=timeout,
+            only=set(held_out_indices) or None,
         )
+        if held_out_summaries is not None:
+            held_out_summaries.mkdir(parents=True, exist_ok=True)
+            for held_result in held_out_results:
+                if held_result.summary is not None:
+                    (
+                        held_out_summaries / f"{held_result.index:02d}.json"
+                    ).write_text(
+                        json.dumps(held_result.summary, indent=2) + "\n"
+                    )
         click.echo(held_out_report(held_out_results))
         return
     oracle_choice = Oracle(oracle)

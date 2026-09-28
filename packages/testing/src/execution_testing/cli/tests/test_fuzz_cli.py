@@ -51,6 +51,7 @@ campaigns:
             tool_rejected=0,
             runner_error=0,
             not_compared=0,
+            crashed=0,
             eels_runs=0,
         )
 
@@ -105,6 +106,7 @@ campaigns:
             tool_rejected=0,
             runner_error=0,
             not_compared=0,
+            crashed=0,
             eels_runs=0,
         )
 
@@ -237,6 +239,8 @@ def test_diff_writes_summary_and_exits_nonzero_on_divergence(
         rejections={},
         asymmetric_failure=False,
         diverged=True,
+        category="diverged",
+        crashed=None,
         eels_ran=True,
         post_state_diff={},
     )
@@ -251,6 +255,7 @@ def test_diff_writes_summary_and_exits_nonzero_on_divergence(
             tool_rejected=0,
             runner_error=0,
             not_compared=0,
+            crashed=0,
             eels_runs=len(seeds),
             fork=fork.name(),
             generator_version=4,

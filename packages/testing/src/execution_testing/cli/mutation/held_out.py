@@ -17,7 +17,16 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Collection,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from .mutations import Mutant, apply_mutant, enumerate_mutants
 from .reach_log import summary_data
@@ -198,14 +207,48 @@ def check_held_out(path: Path) -> DriftReport:
     return DriftReport(tuple(valid), tuple(drifted))
 
 
+OUTCOMES = ("killed", "survived", "invalid", "not tested")
+"""How a held-out mutant scores; only the first two were tested."""
+
+
+def score(summary: Optional[Mapping[str, Any]]) -> str:
+    """
+    Score one mutant's run from its `fuzz diff` summary, seed by seed.
+
+    A seed the mutated spec crashed on compared nothing there, so it is
+    neither a kill nor a survival: a mutant is killed when some seed it
+    did not crash on diverged, and survived when seeds were compared and
+    none diverged. One that crashed on every seed is invalid: it measures
+    nothing. A run that left no summary, or compared nothing for another
+    reason (every seed refused or errored), was not tested.
+    """
+    if summary is None:
+        return "not tested"
+    if summary.get("crashed", 0) >= summary["seeds"]:
+        return "invalid"
+    if summary["diverged"]:
+        return "killed"
+    if summary.get("compared", 0):
+        return "survived"
+    return "not tested"
+
+
 @dataclass
 class HeldOutResult:
-    """A held-out mutant paired with whether the fuzzer killed it."""
+    """A held-out mutant paired with how the fuzzer scored it."""
 
     held: HeldOutMutant
-    killed: bool
+    outcome: str
     first_kill_seed: Optional[int]
     seconds: float
+    summary: Optional[Dict[str, Any]] = None
+    index: int = 0
+    """Position in the frozen set."""
+
+    @property
+    def killed(self) -> bool:
+        """Whether some seed the spec ran diverged."""
+        return self.outcome == "killed"
 
 
 def run_held_out(
@@ -213,8 +256,14 @@ def run_held_out(
     differential: DifferentialOptions,
     *,
     timeout: int,
+    only: Optional[Collection[int]] = None,
 ) -> List[HeldOutResult]:
-    """Apply each frozen mutant, run the differential oracle, score it."""
+    """
+    Apply each frozen mutant, run the differential oracle, score it.
+
+    ``only`` runs the mutants at those positions in the frozen set, to
+    re-measure part of it without reshaping it.
+    """
     drift = check_held_out(path)
     if drift.drifted:
         modules = ", ".join(sorted({h.module for h in drift.drifted}))
@@ -228,7 +277,9 @@ def run_held_out(
     results: List[HeldOutResult] = []
     with tempfile.TemporaryDirectory() as tmp:
         summary = Path(tmp) / "summary.json"
-        for held in load_held_out(path):
+        for index, held in enumerate(load_held_out(path)):
+            if only is not None and index not in only:
+                continue
             if held.module not in cache:
                 cache[held.module] = (root / held.module).read_text()
             source = cache[held.module]
@@ -238,35 +289,48 @@ def run_held_out(
             original = target.read_text()
             target.write_text(apply_mutant(original, mutant))
             start = time.monotonic()
+            # A run that dies before writing its summary must not inherit
+            # the previous mutant's.
+            summary.unlink(missing_ok=True)
             try:
                 with restore_on_signal({target: original}):
-                    process = _run_differential(differential, summary, timeout)
+                    _run_differential(differential, summary, timeout)
             finally:
                 target.write_text(original)
-            data = summary_data(summary) if summary.exists() else None
-            killed = process is not None and process.returncode != 0
+            # The summary decides, never the exit code: `fuzz diff` exits
+            # nonzero on a crash too, and a crash is not a kill.
+            data = summary_data(summary)
             results.append(
                 HeldOutResult(
                     held,
-                    killed,
+                    score(data),
                     (data or {}).get("first_divergent_seed"),
                     time.monotonic() - start,
+                    data,
+                    index,
                 )
             )
     return results
 
 
 def held_out_report(results: Sequence[HeldOutResult]) -> str:
-    """Render stratified kill-rate over the held-out set."""
+    """
+    Render the stratified kill rate over the tested mutants, with the
+    survived, invalid and untested counts beside it.
+    """
     by: Dict[str, List[HeldOutResult]] = {}
     for result in results:
         by.setdefault(result.held.stratum, []).append(result)
-    lines: List[str] = []
-    total_killed = 0
-    for stratum in sorted(by):
-        group = by[stratum]
-        killed = sum(1 for r in group if r.killed)
-        total_killed += killed
-        lines.append(f"{stratum}: kill-rate {killed}/{len(group)}")
-    lines.append(f"overall: {total_killed}/{len(results)}")
+
+    def line(name: str, group: Sequence[HeldOutResult]) -> str:
+        counts = {o: sum(r.outcome == o for r in group) for o in OUTCOMES}
+        tested = counts["killed"] + counts["survived"]
+        return (
+            f"{name}: kill-rate {counts['killed']}/{tested} tested "
+            f"({counts['survived']} survived, {counts['invalid']} invalid, "
+            f"{counts['not tested']} not tested)"
+        )
+
+    lines = [line(stratum, by[stratum]) for stratum in sorted(by)]
+    lines.append(line("overall", results))
     return "\n".join(lines)

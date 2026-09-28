@@ -169,8 +169,9 @@ def differential(
     generated cases, and report consensus-relevant divergences.
 
     A campaign supplies the defaults; explicit flags override it. Exits 1
-    when any seed diverged, so scripts and the mutation oracle can branch
-    on it.
+    when any seed diverged or crashed, so scripts can branch on it; the
+    mutation oracle reads the summary instead, since a crash is not a
+    kill.
     """
     config = load_config_or_fail(config_path)
     campaign = campaign_or_fail(config, campaign_name)
@@ -249,6 +250,7 @@ def differential(
         "tool-rejected": report.tool_rejected,
         "runner-error": report.runner_error,
         "not-compared": report.not_compared,
+        "crashed": report.crashed,
     }
     if any(uncompared.values()):
         click.echo(
@@ -261,6 +263,8 @@ def differential(
             f"tool-rejected (refused the input, not a divergence): {summary}"
         )
     for outcome in report.outcomes:
+        if outcome.crashed is not None:
+            click.echo(f"  seed {outcome.seed}: {outcome.crashed}")
         if outcome.asymmetric_failure:
             for tool, error in outcome.errors.items():
                 click.echo(f"  seed {outcome.seed}: {tool} failed: {error}")
@@ -281,13 +285,14 @@ def differential(
         click.echo(f"\ndivergent cases saved to {corpus_dir}")
     if summary_path is not None:
         write_summary(report, seeds, summary_path)
-    if report.diverged:
+    if report.diverged or report.crashed:
         raise SystemExit(1)
 
 
 def write_summary(report: Any, seeds: range, path: Path) -> Path:
     """Write the run's counts, first divergent seed, and field tally."""
-    divergent = [o for o in report.outcomes if o.diverged]
+    divergent = [o for o in report.outcomes if o.category == "diverged"]
+    crashes = [o for o in report.outcomes if o.crashed is not None]
     fields: Dict[str, int] = {}
     for outcome in divergent:
         for divergence in outcome.divergences:
@@ -306,6 +311,12 @@ def write_summary(report: Any, seeds: range, path: Path) -> Path:
         "tool_rejected": report.tool_rejected,
         "runner_error": report.runner_error,
         "not_compared": report.not_compared,
+        "crashed": report.crashed,
+        "first_crash": (
+            {"seed": crashes[0].seed, "reason": crashes[0].crashed}
+            if crashes
+            else None
+        ),
         "rejected_by": dict(
             Counter(tool for o in report.outcomes for tool in o.rejections)
         ),

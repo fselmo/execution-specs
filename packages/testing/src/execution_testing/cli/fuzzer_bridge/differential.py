@@ -45,6 +45,27 @@ from .models import FuzzerOutput
 REFERENCE = "eels"
 
 
+class SpecCrashError(Exception):
+    """
+    The reference raised out of its state transition instead of returning
+    a verdict on the case.
+
+    The spec rejects a block or transaction by reporting it in the
+    transition's result; an exception that escapes the transition is the
+    spec failing, not judging. A case it crashes on compared nothing.
+    """
+
+
+class ReferenceTransitionTool(ExecutionSpecsTransitionTool):
+    """EELS, with an exception out of its transition raised as a crash."""
+
+    def _evaluate(self, **kwargs: Any) -> Any:
+        try:
+            return super()._evaluate(**kwargs)
+        except Exception as exc:
+            raise SpecCrashError(f"{type(exc).__name__}: {exc}") from exc
+
+
 def _fork_by_name(name: str) -> Fork:
     for fork in get_forks():
         if fork.name() == name:
@@ -90,6 +111,9 @@ class CaseOutcome:
     divergence -- see TOOL_REJECTION_PATTERNS."""
     compared: int = 0
     """How many tools produced a result to compare."""
+    crashed: Optional[str] = None
+    """Why the case could not be evaluated at all: the reference crashed
+    (see `SpecCrashError`), or the harness raised. Nothing was compared."""
 
     @property
     def asymmetric_failure(self) -> bool:
@@ -119,6 +143,8 @@ class CaseOutcome:
         counting it as agreement made a run that compared nothing read as
         a clean one.
         """
+        if self.crashed is not None:
+            return "crashed"
         if self.diverged:
             return "diverged"
         if self.rejections:
@@ -136,6 +162,7 @@ OUTCOME_CATEGORIES = (
     "tool_rejected",
     "runner_error",
     "not_compared",
+    "crashed",
 )
 """Every case lands in exactly one; only the first two were compared."""
 
@@ -154,6 +181,7 @@ class DifferentialReport:
     tool_rejected: int = 0
     runner_error: int = 0
     not_compared: int = 0
+    crashed: int = 0
     baseline: Dict[str, int] = field(default_factory=dict)
     manifest: Optional[Any] = None
 
@@ -330,7 +358,15 @@ def run_tools(
     Run ``case`` through each tool, collecting results, failures, and the
     post-state each tool produced.
     """
-    prepared = _prepare(_resolve(case, fork, tools), fork)
+    try:
+        resolved = _resolve(case, fork, tools)
+    except Exception as exc:
+        # The measuring fill is the reference running the case; a case it
+        # cannot run has no limits for any tool to run.
+        raise SpecCrashError(
+            f"measuring fill: {type(exc).__name__}: {exc}"
+        ) from exc
+    prepared = _prepare(resolved, fork)
     results: Dict[str, List[Result]] = {}
     errors: Dict[str, str] = {}
     rejections: Dict[str, str] = {}
@@ -339,6 +375,8 @@ def run_tools(
         try:
             with client_environment(getattr(tool, _CLIENT_ENV, {})):
                 results[name], alloc = _transition(tool, prepared)
+        except SpecCrashError:
+            raise
         except Exception as exc:  # noqa: BLE001
             message = f"{type(exc).__name__}: {exc}"
             if is_tool_rejection(message):
@@ -463,7 +501,10 @@ def still_diverges(
     tiered: bool = False,
 ) -> bool:
     """Minimization predicate: the reduced case shows the same bug."""
-    outcome = evaluate_case(tools, case, fork, tiered=tiered)
+    try:
+        outcome = evaluate_case(tools, case, fork, tiered=tiered)
+    except SpecCrashError:
+        return False
     return signature <= divergence_signature(outcome)
 
 
@@ -490,9 +531,7 @@ def build_tools(
     envs: Optional[Mapping[str, Mapping[str, str]]] = None,
 ) -> Dict[str, TransitionTool]:
     """Build the reference tool plus one tool per named client binary."""
-    tools: Dict[str, TransitionTool] = {
-        REFERENCE: ExecutionSpecsTransitionTool()
-    }
+    tools: Dict[str, TransitionTool] = {REFERENCE: ReferenceTransitionTool()}
     for name, path in clients.items():
         tools[name] = build_client_tool(path, (envs or {}).get(name))
     return tools
@@ -519,17 +558,55 @@ def _init_worker(
     _WORKER["domains"] = domains
 
 
-def _detect_in_worker(seed: int) -> CaseOutcome:
-    """Evaluate one seed using the worker's tools (runs in a subprocess)."""
-    fork = _WORKER["fork"]
-    outcome = evaluate_case(
-        _WORKER["tools"],
-        generate_fuzzer_output(fork, seed, domains=_WORKER["domains"]),
-        fork,
-        tiered=_WORKER["tiered"],
-    )
+CRASH_TEXT_LIMIT = 500
+"""Characters of a crash's message kept: a spec exception's text can
+carry a whole state."""
+
+
+def evaluate_seed(
+    tools: Dict[str, Any],
+    fork: Fork,
+    seed: int,
+    *,
+    tiered: bool,
+    domains: Optional[ValueDomains],
+) -> CaseOutcome:
+    """
+    Generate and evaluate one seed; an exception crashes only that seed.
+
+    One crashing seed used to end the whole run, and under a process pool
+    before anything was printed. A crash is recorded on the seed's outcome
+    and counted apart: it compared nothing, so it is neither a divergence
+    nor an agreement.
+    """
+    try:
+        outcome = evaluate_case(
+            tools,
+            generate_fuzzer_output(fork, seed, domains=domains),
+            fork,
+            tiered=tiered,
+        )
+    except SpecCrashError as exc:
+        outcome = CaseOutcome(seed, crashed=f"{REFERENCE} crashed: {exc}")
+    except Exception as exc:  # noqa: BLE001 - one seed, never the run
+        outcome = CaseOutcome(
+            seed, crashed=f"harness raised: {type(exc).__name__}: {exc}"
+        )
+    if outcome.crashed is not None:
+        outcome.crashed = outcome.crashed[:CRASH_TEXT_LIMIT]
     outcome.seed = seed
     return outcome
+
+
+def _detect_in_worker(seed: int) -> CaseOutcome:
+    """Evaluate one seed using the worker's tools (runs in a subprocess)."""
+    return evaluate_seed(
+        _WORKER["tools"],
+        _WORKER["fork"],
+        seed,
+        tiered=_WORKER["tiered"],
+        domains=_WORKER["domains"],
+    )
 
 
 def differential_fuzz(
@@ -597,19 +674,15 @@ def differential_fuzz(
         ) as executor:
             outcomes = list(executor.map(_detect_in_worker, seeds))
     else:
-        outcomes = []
-        for seed in seeds:
-            outcome = evaluate_case(
-                tools,
-                generate_fuzzer_output(fork, seed, domains=domains),
-                fork,
-                tiered=tiered,
-            )
-            outcome.seed = seed
-            outcomes.append(outcome)
+        outcomes = [
+            evaluate_seed(tools, fork, seed, tiered=tiered, domains=domains)
+            for seed in seeds
+        ]
 
     for outcome in outcomes:
-        if outcome.diverged:
+        if outcome.category == "crashed":
+            report.crashed += 1
+        elif outcome.diverged:
             report.diverged += 1
             if corpus_dir is not None:
                 case = generate_fuzzer_output(

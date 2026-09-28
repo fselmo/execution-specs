@@ -53,6 +53,9 @@ class Verdict(str, Enum):
     """The differential run compared nothing: every seed was refused,
     raised, or had no second result, or the run left no summary. Such a
     mutant was never exposed, so it neither survived nor died."""
+    INVALID = "invalid (spec crashed on every seed)"
+    """The mutated spec crashed on every seed the differential run gave
+    it. It measures nothing about the generator."""
 
 
 @dataclass
@@ -102,7 +105,8 @@ class MutationReport:
         return sum(
             1
             for r in self.results
-            if r.verdict not in (Verdict.SURVIVED, Verdict.NOT_TESTED)
+            if r.verdict
+            not in (Verdict.SURVIVED, Verdict.NOT_TESTED, Verdict.INVALID)
         )
 
     @property
@@ -373,7 +377,11 @@ def _classify(
         return Verdict.KILLED_TIMEOUT
     if oracle is Oracle.DIFFERENTIAL:
         # The summary decides, not the exit code: `fuzz diff` also exits
-        # nonzero when it crashes, and a crash compared nothing.
+        # nonzero when a seed crashes, and a crashed seed compared nothing.
+        if summary is not None and summary.get("crashed", 0) >= summary.get(
+            "seeds", 1
+        ):
+            return Verdict.INVALID
         if summary is None or summary.get("compared", 0) == 0:
             return Verdict.NOT_TESTED
         if summary["diverged"]:

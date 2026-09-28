@@ -445,3 +445,79 @@ def test_only_a_case_compared_in_full_counts_as_agreed() -> None:
         "runner_error",
         "not_compared",
     ]
+
+
+def test_a_reference_exception_out_of_its_transition_is_a_crash(
+    monkeypatch: Any,
+) -> None:
+    """
+    The spec rejects input through its transition's result; an exception
+    escaping the transition is the spec crashing, raised as `SpecCrashError`
+    rather than scored as a failure that disagrees with the clients.
+    """
+    from execution_testing.client_clis.clis.execution_specs import (
+        ExecutionSpecsTransitionTool,
+    )
+
+    from ..fuzzer_bridge.differential import (
+        ReferenceTransitionTool,
+        SpecCrashError,
+    )
+
+    def crash(*_: Any, **__: Any) -> Any:
+        raise KeyError(b"beacon roots")
+
+    monkeypatch.setattr(ExecutionSpecsTransitionTool, "_evaluate", crash)
+    with pytest.raises(SpecCrashError, match="KeyError"):
+        ReferenceTransitionTool()._evaluate(transition_tool_data=None)
+
+
+@pytest.mark.parametrize(
+    "where",
+    ["reference transition", "measuring fill", "harness"],
+)
+def test_a_crash_ends_only_its_own_seed(monkeypatch: Any, where: str) -> None:
+    """
+    A seed that crashes is recorded as crashed, compared nothing, and is
+    neither a divergence nor an agreement; the next seed runs as usual.
+    """
+    from ..fuzzer_bridge.differential import SpecCrashError, evaluate_seed
+
+    def generate(_fork: Any, seed: int, domains: Any = None) -> Any:
+        del domains
+        if where == "harness" and seed == 0:
+            raise RuntimeError("generator broke")
+        return seed
+
+    def resolve(case: Any, _fork: Any, _tools: Any) -> Any:
+        if where == "measuring fill" and case == 0:
+            raise OverflowError("int too large")
+        return case
+
+    def transition(tool: Any, case: Any) -> Any:
+        if where == "reference transition" and tool == "eels" and case == 0:
+            raise SpecCrashError("KeyError: b'x'")
+        return _result(), None
+
+    monkeypatch.setattr(differential, "generate_fuzzer_output", generate)
+    monkeypatch.setattr(differential, "_resolve", resolve)
+    monkeypatch.setattr(differential, "_transition", transition)
+    tools: Any = {"eels": "eels", "geth": "geth"}
+
+    crashed = evaluate_seed(tools, NO_FORK, 0, tiered=False, domains=None)
+    after = evaluate_seed(tools, NO_FORK, 1, tiered=False, domains=None)
+    assert crashed.seed == 0 and crashed.category == "crashed"
+    assert not crashed.diverged and crashed.compared == 0
+    if where == "reference transition":
+        assert crashed.crashed == "eels crashed: KeyError: b'x'"
+    elif where == "measuring fill":
+        assert crashed.crashed == (
+            "eels crashed: measuring fill: OverflowError: int too large"
+        )
+    elif where == "harness":
+        assert crashed.crashed == (
+            "harness raised: RuntimeError: generator broke"
+        )
+    else:
+        raise ValueError(where)
+    assert after.seed == 1 and after.category == "agreed"

@@ -139,6 +139,27 @@ def test_classify_differential_reads_the_summary_not_the_exit() -> None:
     assert verdict(1, None) is Verdict.NOT_TESTED
 
 
+def test_a_mutant_that_crashes_every_seed_is_invalid() -> None:
+    """
+    Crashes on some seeds leave the rest to decide; crashes on every seed
+    measure nothing, and a crash is never counted as a kill.
+    """
+
+    def verdict(summary: Any) -> Verdict:
+        process = subprocess.CompletedProcess([], 1, "", "")
+        return _classify(
+            process, 0, oracle=Oracle.DIFFERENTIAL, summary=summary
+        )
+
+    partial = {"seeds": 300, "crashed": 40, "compared": 260, "diverged": 0}
+    everywhere = {"seeds": 300, "crashed": 300, "compared": 0, "diverged": 0}
+    assert verdict(partial) is Verdict.SURVIVED
+    assert verdict(everywhere) is Verdict.INVALID
+    report = runner_mod.MutationReport(module="m", total=1)
+    report.results = [runner_mod.MutantResult(None, Verdict.INVALID)]  # type: ignore[arg-type]
+    assert report.killed == 0
+
+
 def test_a_not_tested_mutant_is_not_counted_killed() -> None:
     """The report's kill count leaves out mutants nothing exposed."""
     report = runner_mod.MutationReport(module="m", total=2)
