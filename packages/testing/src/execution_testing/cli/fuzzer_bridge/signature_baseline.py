@@ -480,6 +480,8 @@ def _rates_and_blocks(
     Dict[str, int],
     Dict[str, int],
     Dict[str, int],
+    Dict[str, int],
+    Dict[str, int],
 ]:
     """
     Fill each seed once and return its event rates and block execution.
@@ -512,6 +514,8 @@ def _rates_and_blocks(
     outcomes: Dict[str, int] = {}
     writes = {"txs": 0, "committed_storage": 0}
     oog: Dict[str, int] = {}
+    creates: Dict[str, int] = {}
+    create_cases = {"creating": 0, "deployed": 0}
     for seed in seeds:
         eels.last_signature = None
         case = generate_fuzzer_output(fork, seed)
@@ -547,7 +551,14 @@ def _rates_and_blocks(
             outcomes[outcome] = outcomes.get(outcome, 0) + count
         for kind, count in signature.tx_oog:
             oog[kind] = oog.get(kind, 0) + count
-    return rates, blocks, outcomes, writes, oog
+        for outcome, count in signature.create_outcomes:
+            creates[outcome] = creates.get(outcome, 0) + count
+        if signature.create_outcomes:
+            create_cases["creating"] += 1
+            create_cases["deployed"] += bool(
+                dict(signature.create_outcomes).get("deployed")
+            )
+    return rates, blocks, outcomes, writes, oog, creates, create_cases
 
 
 def event_rates(fork: "Fork", seeds: range) -> Dict[str, Dict[str, int]]:
@@ -569,6 +580,26 @@ weight change from dark, and the reach gate (which proves existence, not
 rate) cannot see it. Below this the trend warns -- it never auto-corrects.
 Fixing a sub-floor rate by hand-tuning weights would contaminate the
 distribution-arms comparison; that experiment is where weights are set."""
+
+
+CREATE_DEPLOYED_FLOOR = 0.2
+"""Share of the cases running a CREATE or CREATE2 that must keep at least
+one deployment. Random creations mostly cannot afford their charge, and
+their frames mostly halt: at v25 6 of 160 such cases in 400 seeds kept
+one, and nothing counted it. At v26, with the deployer, 62 of 184."""
+
+
+def create_floor_warning(record: Dict[str, Any]) -> Optional[str]:
+    """Whether too few creating cases keep a deployment, or None."""
+    cases = record.get("create_cases") or {}
+    creating = cases.get("creating", 0)
+    deployed = cases.get("deployed", 0)
+    if creating and deployed / creating < CREATE_DEPLOYED_FLOOR:
+        return (
+            f"{deployed} of {creating} creating cases kept a deployment, "
+            f"below {CREATE_DEPLOYED_FLOOR:.0%}"
+        )
+    return None
 
 
 def rate_floor_warnings(record: Dict[str, Any]) -> List[str]:
@@ -606,6 +637,8 @@ def event_rate_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
         record["tx_outcomes"],
         record["tx_writes"],
         record["tx_oog"],
+        record["create_outcomes"],
+        record["create_cases"],
     ) = _rates_and_blocks(fork, seeds)
     record["below_floor"] = rate_floor_warnings(record)
     return record

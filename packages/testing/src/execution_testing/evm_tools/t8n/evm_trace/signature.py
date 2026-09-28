@@ -231,6 +231,10 @@ class Signature:
     """`(kind, transactions)` pairs for top-level out-of-gas halts, one of
     `TX_OOG_KINDS`: which gas ran out, and whether the transaction carried
     a state reservoir. Telemetry, not novelty."""
+    create_outcomes: Tuple[Tuple[str, int], ...] = ()
+    """`(outcome, count)` pairs for CREATE and CREATE2 opcodes, one of
+    `CREATE_OUTCOMES`. Telemetry, not novelty. At v25 every frame that ran
+    a CREATE ended in an exceptional halt."""
 
     def is_empty(self) -> bool:
         """Return whether nothing was observed."""
@@ -252,6 +256,7 @@ def merge_signatures(a: Signature, b: Signature) -> Signature:
         _sum_steps(a.block_steps, b.block_steps),
         _sum_counts(a.tx_outcomes, b.tx_outcomes),
         _sum_counts(a.tx_oog, b.tx_oog),
+        _sum_counts(a.create_outcomes, b.create_outcomes),
     )
 
 
@@ -279,6 +284,15 @@ state gas, and whether the transaction carried a state reservoir. A state
 charge fails only once the reservoir and execution gas together fall
 short of it; a halt with no charge event (memory expansion, a gas check)
 is execution."""
+
+
+CREATE_OUTCOMES = ("deployed", "rolled_back", "returned_zero", "halted")
+"""How a CREATE or CREATE2 opcode ended. `deployed` pushed an address in a
+frame that then ended normally; `rolled_back` pushed one in a frame that
+then reverted or halted, taking the deployment with it; `returned_zero`
+pushed zero (the initcode failed, the address collided, or the creator
+could not pay the endowment); `halted` is the frame halting at the
+opcode itself, most often unable to afford its charge."""
 
 
 def tx_outcome(error: object) -> str:
@@ -362,6 +376,11 @@ class SignatureTracer:
         self._reservoir_at: dict = {}
         self._interleavings: Set[Tuple[int, int]] = set()
         self._seen_txs: Set[int] = set()
+        # Depth of each frame with a CREATE awaiting its result, and the
+        # deployments per depth that its frame may yet roll back.
+        self._create_pending: Set[int] = set()
+        self._deployed_at: Dict[int, int] = {}
+        self._create_outcomes: Dict[str, int] = {}
 
     def _fold_transaction_level_state_gas(self, evm: object) -> None:
         """
@@ -442,6 +461,16 @@ class SignatureTracer:
             self._last_charge = _top_frame_charge(
                 evm, event, self._last_charge
             )
+        if depth in self._create_pending and isinstance(
+            event, (OpStart, EvmStop)
+        ):
+            # Back in the creating frame: the opcode's result is on top.
+            self._create_pending.discard(depth)
+            stack = getattr(evm, "stack", None) or [0]
+            if int(stack[-1]):
+                self._deployed_at[depth] = self._deployed_at.get(depth, 0) + 1
+            else:
+                self._count_create("returned_zero")
         if isinstance(event, OpStart):
             if tx_index is not None:
                 number = _block_number(evm)
@@ -472,6 +501,7 @@ class SignatureTracer:
                 self._call_pending = True
                 if name in ("CREATE", "CREATE2"):
                     self._events.add("create")
+                    self._create_pending.add(depth)
                 if depth >= _STACK_DEPTH_LIMIT:
                     self._events.add("call-depth-limit")
             elif name == "SSTORE":
@@ -479,6 +509,7 @@ class SignatureTracer:
                 if gas_left is not None and gas_left <= _CALL_STIPEND:
                     self._events.add("sstore-stipend")
         elif isinstance(event, EvmStop):
+            self._settle_deployments(depth, rolled_back=False)
             self._frames.add((_bucket(depth), "halt", event.op.name))
             self._call_pending = False
             if event.op.name == "REVERT":
@@ -489,6 +520,10 @@ class SignatureTracer:
             # A REVERT reaches the tracer as OpException(Revert), never as
             # EvmStop(REVERT) -- the unreached map exposed the dead path.
             error_kind = type(event.error).__name__
+            if depth in self._create_pending:
+                self._create_pending.discard(depth)
+                self._count_create("halted")
+            self._settle_deployments(depth, rolled_back=True)
             self._frames.add((_bucket(depth), "halt", error_kind))
             if (
                 tx_index is not None
@@ -539,6 +574,19 @@ class SignatureTracer:
             if _refund_is_clamped(evm):
                 self._events.add("refund-clamp")
 
+    def _count_create(self, outcome: str, count: int = 1) -> None:
+        self._create_outcomes[outcome] = (
+            self._create_outcomes.get(outcome, 0) + count
+        )
+
+    def _settle_deployments(self, depth: int, *, rolled_back: bool) -> None:
+        """Count the deployments of the frame ending at ``depth``."""
+        deployed = self._deployed_at.pop(depth, 0)
+        if deployed:
+            self._count_create(
+                "rolled_back" if rolled_back else "deployed", deployed
+            )
+
     def _entry_oog(self, error_kind: str) -> bool:
         """
         Whether this exception is a call op that died charging its entry
@@ -565,4 +613,5 @@ class SignatureTracer:
             ),
             tx_outcomes=tuple(sorted(self._tx_outcomes.items())),
             tx_oog=tuple(sorted(self._tx_oog.items())),
+            create_outcomes=tuple(sorted(self._create_outcomes.items())),
         )

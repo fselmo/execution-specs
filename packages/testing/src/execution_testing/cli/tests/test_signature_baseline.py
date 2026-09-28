@@ -180,3 +180,25 @@ def test_rate_floor_flags_the_near_dark_events() -> None:
     warnings = rate_floor_warnings(record)
     assert warnings == ["rare 1/400"]
     assert "below floor" in render_event_rates(record)
+
+
+def test_too_few_kept_deployments_is_a_warning() -> None:
+    """
+    The v25 share, 6 of 160 creating cases, is below the floor; the v26
+    share, 62 of 184, is not; a version with no creations says nothing.
+    """
+    from ..fuzzer_bridge.signature_baseline import create_floor_warning
+
+    assert (
+        create_floor_warning(
+            {"create_cases": {"creating": 160, "deployed": 6}}
+        )
+        == "6 of 160 creating cases kept a deployment, below 20%"
+    )
+    assert (
+        create_floor_warning(
+            {"create_cases": {"creating": 184, "deployed": 62}}
+        )
+        is None
+    )
+    assert create_floor_warning({"create_cases": {"creating": 0}}) is None
