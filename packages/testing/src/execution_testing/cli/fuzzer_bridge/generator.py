@@ -32,7 +32,7 @@ from execution_testing.fuzzing import (
     interleaving_spill_code,
     mixed_address_pool,
 )
-from execution_testing.test_types import Environment
+from execution_testing.test_types import Environment, compute_create_address
 from execution_testing.test_types.account_types import EOA
 from execution_testing.vm import Bytecode
 from execution_testing.vm import Opcodes as Op
@@ -49,7 +49,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 22
+GENERATOR_VERSION = 23
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -381,6 +381,36 @@ per transaction so each is still dead when it is paid."""
 EMPTY_BENEFICIARY_ADDRESS = 0x2E0FF
 """An account in the pre-state with nothing in it: it exists, and is not
 alive, until something pays it."""
+
+
+CREATION_TX_GAS = 1_000_000
+"""Gas for a creation transaction: enough for the new account's state
+charge and the one fresh slot its initcode writes."""
+
+
+def creation_initcode() -> bytes:
+    """Initcode that writes slot 0 and deploys one byte of code."""
+    return bytes(Op.SSTORE(0, 1) + Op.RETURN(0, 1))
+
+
+def creation_target_account(kind: str) -> Optional[FuzzerAccountInput]:
+    """
+    What the pre-state holds where a creation transaction deploys.
+
+    Only an account with code or a nonce collides; one with only a balance
+    is deployable, and pays no new-account charge since it already exists.
+    """
+    if kind == "fresh":
+        return None
+    if kind == "balance_only":
+        return FuzzerAccountInput(balance=HexNumber(1))
+    if kind == "nonce":
+        return FuzzerAccountInput(balance=HexNumber(0), nonce=HexNumber(1))
+    if kind == "code":
+        return FuzzerAccountInput(
+            balance=HexNumber(0), nonce=HexNumber(0), code=Bytes(b"\x00")
+        )
+    raise ValueError(f"unknown creation target {kind!r}")
 
 
 RESERVOIR_TX_RATE = 0.35
@@ -797,6 +827,7 @@ def generate_fuzzer_output(
         exhaust: Optional[Tuple[int, int]] = None
         exact_gas: Optional[int] = None
         grave: Optional[Tuple[Address, int]] = None
+        creation: Optional[str] = None
         if rng.random() < domains.failing_tx_rate:
             to = Address(FAILER_ADDRESS)
         elif rng.random() < domains.toucher_tx_rate:
@@ -838,6 +869,11 @@ def generate_fuzzer_output(
             else:
                 raise ValueError(f"unknown beneficiary kind {kind!r}")
             grave = (beneficiary, rng.choice(domains.graver_values))
+        elif (
+            rng.random() < domains.creation_tx_rate
+            and CREATION_TX_GAS <= min(tx_gas_cap, budgets[block])
+        ):
+            creation = rng.choice(domains.creation_targets)
         choices = tx_gas_choices
         if domains.reservoir_tx_gas and rng.random() < RESERVOIR_TX_RATE:
             choices = domains.reservoir_tx_gas + tx_gas_choices
@@ -871,11 +907,26 @@ def generate_fuzzer_output(
             gas = GRAVER_TX_GAS
             data = Bytes(bytes(grave[0]).rjust(32, b"\0"))
             value = grave[1]
+        tx_to: Optional[Address] = to
+        if creation is not None:
+            # A creation cannot carry authorizations, and its address is
+            # the sender's at this nonce, which is known here.
+            gas = CREATION_TX_GAS
+            tx_type = 2
+            data = Bytes(creation_initcode())
+            tx_to = None
         budgets[block] -= gas
         # Read before building authorizations: an authorization whose
         # authority is this sender advances `nonces[sender]`, and the
         # transaction's own nonce is the value from before that.
         tx_nonce = nonces[sender]
+        if creation is not None:
+            occupant = creation_target_account(creation)
+            if occupant is not None:
+                created = compute_create_address(
+                    address=sender, nonce=tx_nonce
+                )
+                accounts[created] = occupant
         fields: Dict[str, Any] = {}
         if tx_type == 0:
             fields["gas_price"] = HexNumber(2 * base_fee)
@@ -895,7 +946,7 @@ def generate_fuzzer_output(
             FuzzerTransactionInput(
                 **{"from": sender},
                 block=block,
-                to=to,
+                to=tx_to,
                 gas=HexNumber(gas),
                 nonce=HexNumber(tx_nonce),
                 value=HexNumber(value),

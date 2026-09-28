@@ -267,6 +267,18 @@ class ValueDomains:
     graver_values: Tuple[int, ...] = (1, 10**15, 0)
     """The transaction's value, which is the graver's balance when it
     self-destructs: the surcharge needs it non-zero."""
+    creation_tx_rate: float = 0.04
+    """Share of transactions that create a contract. At v20 the generator
+    sent none, so the creation-transaction path, its address-collision
+    check among it, never ran."""
+    creation_targets: Tuple[str, ...] = (
+        "fresh",
+        "balance_only",
+        "nonce",
+        "code",
+    )
+    """What the pre-state holds at the address a creation deploys to: the
+    last two collide, the first two do not."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays

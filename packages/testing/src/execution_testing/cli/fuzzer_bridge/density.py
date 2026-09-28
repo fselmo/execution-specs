@@ -329,6 +329,26 @@ def _tally_graver(case: Any, tally: Dict[str, Counter]) -> None:
         tally["graver_value"]["nonzero" if int(tx.value) else "zero"] += 1
 
 
+def _tally_creation(case: Any, tally: Dict[str, Counter]) -> None:
+    """Count creation transactions and what their target address holds."""
+    from execution_testing.test_types import compute_create_address
+
+    creations = [tx for tx in case.transactions if tx.to is None]
+    tally["creation_tx"]["present" if creations else "absent"] += 1
+    for tx in creations:
+        target = compute_create_address(address=tx.from_, nonce=int(tx.nonce))
+        occupant = case.accounts.get(target)
+        if occupant is None:
+            kind = "fresh"
+        elif occupant.code:
+            kind = "code"
+        elif int(occupant.nonce or 0):
+            kind = "nonce"
+        else:
+            kind = "balance_only"
+        tally["creation_target"][kind] += 1
+
+
 def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     """
     Share of draws holding each value of every multi-valued input axis.
@@ -371,6 +391,8 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "graver_tx": Counter(),
         "graver_beneficiary": Counter(),
         "graver_value": Counter(),
+        "creation_tx": Counter(),
+        "creation_target": Counter(),
     }
     reads = _blockhash_signatures()
 
@@ -455,6 +477,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         _tally_state_exhaust(case, fork, tally)
         _tally_exact_charge(case, fork, tally)
         _tally_graver(case, tally)
+        _tally_creation(case, tally)
         for tx in case.transactions:
             target = (
                 int.from_bytes(bytes(tx.to), "big")
@@ -597,6 +620,8 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "graver_tx": ("present", "absent"),
     "graver_beneficiary": ("nonexistent", "empty", "alive"),
     "graver_value": ("nonzero", "zero"),
+    "creation_tx": ("present", "absent"),
+    "creation_target": ("fresh", "balance_only", "nonce", "code"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""
