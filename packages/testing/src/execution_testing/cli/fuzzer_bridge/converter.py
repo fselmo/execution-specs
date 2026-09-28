@@ -94,6 +94,7 @@ def fuzzer_authorization_to_eest(
 def fuzzer_transaction_to_eest_transaction(
     fuzzer_tx: FuzzerTransactionInput,
     sender_eoa: EOA,
+    chain_id: int = 1,
 ) -> Transaction:
     """
     Convert fuzzer transaction DTO to EEST Transaction domain model.
@@ -109,6 +110,7 @@ def fuzzer_transaction_to_eest_transaction(
     Args:
         fuzzer_tx: Raw transaction data from fuzzer
         sender_eoa: EOA object created from private key (prevents TestAddress)
+        chain_id: The case's chain, signed into the transaction
 
     Returns:
         EEST Transaction ready for block generation
@@ -126,6 +128,9 @@ def fuzzer_transaction_to_eest_transaction(
     # This prevents Transaction.model_post_init from injecting TestAddress
     return Transaction(
         sender=sender_eoa,  # ✓ Set explicitly to prevent TestAddress
+        # The case's chain, never the process-wide default, which a test
+        # run in the same process may have changed.
+        chain_id=chain_id,
         to=fuzzer_tx.to,
         gas_limit=fuzzer_tx.gas,  # ✓ Explicit mapping: gas → gas_limit
         gas_price=fuzzer_tx.gas_price,
@@ -265,6 +270,7 @@ def blockchain_test_from_fuzzer(
         eest_tx = fuzzer_transaction_to_eest_transaction(
             fuzzer_tx,
             sender_eoa=sender_eoa_map[fuzzer_tx.from_],
+            chain_id=int(fuzzer_output.chain_id),
         )
         eest_transactions.append(eest_tx)
 
@@ -334,12 +340,12 @@ def state_test_from_fuzzer(
     reproducer format for a minimized case with exactly one transaction.
     The environment is the one the case's block would have had.
     """
-    require_resolved_gas(fuzzer_output)
     if len(fuzzer_output.transactions) != 1:
         raise ValueError(
             "a state test carries one transaction; this case has "
             f"{len(fuzzer_output.transactions)}"
         )
+    require_resolved_gas(fuzzer_output)
     (fuzzer_tx,) = fuzzer_output.transactions
     pre = Alloc(
         {
@@ -349,7 +355,9 @@ def state_test_from_fuzzer(
     )
     sender_eoa_map = create_sender_eoa_map(fuzzer_output.accounts)
     tx = fuzzer_transaction_to_eest_transaction(
-        fuzzer_tx, sender_eoa=sender_eoa_map[fuzzer_tx.from_]
+        fuzzer_tx,
+        sender_eoa=sender_eoa_map[fuzzer_tx.from_],
+        chain_id=int(fuzzer_output.chain_id),
     )
     env = fuzzer_output.env
     number = 1
