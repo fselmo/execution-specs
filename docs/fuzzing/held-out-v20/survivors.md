@@ -22,7 +22,7 @@ The second level matters because a value can differ without the execution changi
 | 09 | `create_evm`: `not account_deployable(...)` → `account_deployable(...)` | never evaluated | — | motif: CREATE collision onto code or a nonce |
 | 18 | `create`: `+ init_code_gas` → `-` | 103 of 110 (22 seeds) | 12 of 22 seeds | **observability**: the charge changes the execution, and nothing compared shows it |
 | 19 | `generic_create`: nonce cap `2**64 - 1` → `2**64 + 1` | 1,898 of 1,898 (101 seeds) | 0 of 101 seeds | maximum nonces (out of scope) |
-| 20 | `selfdestruct`: `gas_cost + account_write_gas` → `-` | 0 of 665 (78 seeds) | — | motif: SELFDESTRUCT that pays the account-write surcharge (dead beneficiary, nonzero balance) |
+| 20 | `selfdestruct`: `gas_cost + account_write_gas` → `-` | 0 of 665 (78 seeds) | — | its own category, crashes wherever reached (found once v22's motif reached it): the subtraction underflows an unsigned `Uint`, raising `OverflowError` on 16 of 16 reached seeds at v25 |
 | 23 | `create`: `b"\x00" * expand_by` → `//` | 91 of 91 (14 seeds) | crashes on all 14 | its own category, crashes wherever reached: no case can kill it, and it stays out of the motif work |
 
 ## Corrections to the first report
@@ -30,3 +30,7 @@ The second level matters because a value can differ without the execution changi
 - **20 is SELFDESTRUCT, not a call.** The surcharge is non-zero only when the beneficiary is dead and the frame's balance is not zero. None of the 78 seeds that reach the site met that condition.
 - **18 is reached.** A motif alone will not kill it. On 12 seeds the smaller charge changes the traced execution, and still no compared field differs. That fits a creating frame that ends by consuming all its gas. The fix is a witness that survives the frame, such as a `GAS` reading stored after the `CREATE` returns.
 - **06 is reached, but its decision never flips.** The value is computed in every block. The comparison it feeds decides nothing unless the block is close to its state-gas limit.
+
+## Update after v22
+
+Mutant 20 joins 23 as crashing wherever reached. Once the v22 motif sent balances to dead beneficiaries, every SELFDESTRUCT that paid the surcharge made the mutated `gas_cost - account_write_gas` underflow an unsigned `Uint`: 16 of 16 reached seeds raised `OverflowError` at v25. It needed reaching to be diagnosed, and now that it is reached, no case can kill it.

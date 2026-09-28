@@ -50,3 +50,7 @@ uv run mutate --held-out docs/fuzzing/held-out-v20/held_out_v20.json \
   --fork Amsterdam --client <geth evm> --diff-count 300 --workers 8 \
   --held-out-summaries <dir>
 ```
+
+## Update after v22
+
+Mutant 20, a survivor here, crashes wherever it is reached. That became visible once v22 reached it: 16 of 16 reached seeds raised `OverflowError` at v25, because the mutated subtraction underflows an unsigned `Uint`. It is now counted beside 23. See `progress.md`.
