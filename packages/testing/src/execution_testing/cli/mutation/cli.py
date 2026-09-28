@@ -15,6 +15,7 @@ from .held_out import (
     load_held_out,
     run_held_out,
 )
+from .liveness import liveness_report, run_liveness
 from .reach_log import (
     append_reach_log,
     eels_commit,
@@ -170,6 +171,14 @@ from .shapes import SHAPES
     help="Run only the held-out mutant at this position (repeatable).",
 )
 @click.option(
+    "--liveness",
+    is_flag=True,
+    help=(
+        "With --held-out: instead of the oracle, count how often each "
+        "mutant's expression evaluates differently on generated cases."
+    ),
+)
+@click.option(
     "--held-out-summaries",
     "held_out_summaries",
     type=click.Path(file_okay=False, path_type=Path),
@@ -198,6 +207,7 @@ def mutate(
     held_out_check_path: Optional[Path],
     held_out_per_stratum: int,
     held_out_indices: Sequence[int],
+    liveness: bool,
     held_out_summaries: Optional[Path],
 ) -> None:
     """
@@ -238,6 +248,16 @@ def mutate(
     if held_out_path is not None:
         if not fork:
             raise click.UsageError("--fork is required for --held-out")
+        if liveness:
+            frozen = load_held_out(held_out_path)
+            picked = {
+                i: frozen[i] for i in (held_out_indices or range(len(frozen)))
+            }
+            tallies, failed = run_liveness(
+                picked, fork, range(diff_count), timeout=timeout
+            )
+            click.echo(liveness_report(picked, tallies, diff_count, failed))
+            return
         if campaign is None and not clients:
             raise click.UsageError("--held-out needs --campaign or --client")
         held_out_results = run_held_out(

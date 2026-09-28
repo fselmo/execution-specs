@@ -278,3 +278,56 @@ def test_mutate_freeze_and_check_cli(
     )
     assert checked.exit_code == 0, checked.output
     assert "valid" in checked.output
+
+
+def test_a_probed_site_behaves_as_the_original_and_counts_differences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The probe returns the original value, so the instrumented spec runs
+    unmutated, and counts only evaluations where the mutant differs.
+    """
+    import builtins
+
+    from execution_testing.cli.mutation.liveness import (
+        PROBE,
+        Probe,
+        instrument,
+    )
+    from execution_testing.cli.mutation.mutations import enumerate_mutants
+
+    source = "def f(a, b):\n    return a >= b\n"
+    (mutant,) = [m for m in enumerate_mutants(source) if m.mutated == "a > b"]
+    namespace: dict = {}
+    exec(instrument(source, {7: mutant}), namespace)
+    probe = Probe()
+    monkeypatch.setattr(builtins, PROBE, probe, raising=False)
+    probe.on = True
+    assert [namespace["f"](a, b) for a, b in ((1, 2), (2, 2), (3, 2))] == [
+        False,
+        True,
+        True,
+    ]
+    assert probe.evaluations[7] == 3 and probe.differing[7] == 1
+
+
+def test_liveness_splits_survivors_by_the_remedy_they_need() -> None:
+    """
+    Never differing needs a case that reaches the mutant; differing
+    without a kill needs the difference made visible.
+    """
+    from execution_testing.cli.mutation.liveness import tally
+
+    data = {"per_seed": {"0": {"1": [4, 0], "2": [3, 1]}, "1": {"2": [2, 0]}}}
+    tallies = tally(data, [1, 2, 3])
+    assert tallies[1].verdict.startswith("unreached (evaluated")
+    assert (tallies[2].differing, tallies[2].evaluations) == (1, 5)
+    assert (tallies[2].seeds_differing, tallies[2].seeds_reached) == (1, 2)
+    assert tallies[3].verdict.startswith("unreached (never")
+    # A differing value alone is not a differing execution.
+    assert tallies[2].verdict.startswith("value differs, execution never")
+    tallies[2].executions_differing = 1
+    assert tallies[2].verdict.startswith("reached, not killed")
+    tallies[2].executions_differing = 0
+    tallies[2].crashed = 1
+    assert tallies[2].verdict.startswith("reached, crashes")
