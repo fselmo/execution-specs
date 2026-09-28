@@ -19,6 +19,7 @@ import pytest
 from execution_testing.base_types import Address, Bytes, HexNumber
 from execution_testing.forks import Amsterdam
 from execution_testing.test_types import compute_create_address
+from execution_testing.vm import Opcodes as Op
 
 from ..fuzzer_bridge import campaign as mod
 from ..fuzzer_bridge.density import axis_collapse_warnings, axis_coverage
@@ -202,10 +203,160 @@ def test_gas_stored_after_a_creation_shows_its_initcode_charge() -> None:
     assert one_word - two_words == word
 
 
+def _run(to: Address, data: bytes, gas: int, code: bytes = b"") -> Any:
+    """
+    One transaction to ``to``, filled with signatures on; ``code`` is
+    installed at ``to`` when given. Returns the fixture and the signature.
+    """
+    from ..fuzzer_bridge.models import FuzzerAccountInput
+
+    case = generate_fuzzer_output(Amsterdam, 0)
+    accounts = dict(case.accounts)
+    if code:
+        accounts[to] = FuzzerAccountInput(
+            balance=HexNumber(0), nonce=HexNumber(1), code=Bytes(code)
+        )
+    (first, *_) = case.transactions
+    tx = first.model_copy(
+        update={
+            "to": to,
+            "gas": HexNumber(gas),
+            "data": Bytes(data),
+            "value": HexNumber(0),
+            "authorization_list": None,
+            "gas_need_fraction": None,
+            "block": 0,
+        }
+    )
+    mod._init_fill_worker("Amsterdam")
+    fork, eels = mod._FILL["fork"], mod._FILL["eels"]
+    eels.compute_signature = True
+    eels.last_signature = None
+    case = case.model_copy(
+        update={
+            "accounts": accounts,
+            "transactions": [tx],
+            "block_count": 1,
+            "withdrawals": [],
+        }
+    )
+    with contextlib.redirect_stdout(io.StringIO()):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fixture = mod.fill_case(case, fork, eels)
+    return fixture, eels.last_signature
+
+
+def _stores(fixture: Dict[str, Any], address: Address) -> Dict[int, int]:
+    (block,) = fixture["blocks"]
+    entry = next(
+        e
+        for e in block["blockAccessList"]
+        if e["address"].lower() == str(address).lower()
+    )
+    return {
+        int(c["slot"], 16): int(c["slotChanges"][-1]["postValue"], 16)
+        for c in entry["storageChanges"]
+    }
+
+
+@pytest.mark.parametrize("opcode", ["CREATE", "CREATE2"])
+@pytest.mark.parametrize(
+    "words,deployed",
+    [
+        pytest.param(1, 1, id="one_word_one_byte"),
+        pytest.param(4, 32, id="four_words_a_word_of_code"),
+        pytest.param(0, 0, id="empty_initcode"),
+    ],
+)
+def test_a_deployer_creation_lands_and_is_kept(
+    opcode: str, words: int, deployed: int
+) -> None:
+    """
+    The deployer's creation pushes an address, stores it and the gas left,
+    and stops, so the deployment is kept: the new account's code is a
+    change in the list when there is code to deploy, and the tracer counts
+    one deployment. Empty initcode is the near miss of the initcode charge:
+    it deploys an empty account and costs no initcode gas.
+    """
+    from ..fuzzer_bridge.generator import (
+        DEPLOYER_ADDRESSES,
+        DEPLOYER_GAS_SLOT_OFFSET,
+        DEPLOYER_TX_GAS,
+        deployer_initcode,
+    )
+
+    deployer = Address(DEPLOYER_ADDRESSES[opcode])
+    fixture, signature = _run(
+        deployer, deployer_initcode(words, deployed), DEPLOYER_TX_GAS
+    )
+    stores = _stores(fixture, deployer)
+    created = Address(stores[1])
+    assert int.from_bytes(bytes(created), "big") != 0
+    assert set(stores) == {0, 1, 1 + DEPLOYER_GAS_SLOT_OFFSET}
+    (block,) = fixture["blocks"]
+    entry = next(
+        e
+        for e in block["blockAccessList"]
+        if e["address"].lower() == str(created).lower()
+    )
+    assert len(entry["codeChanges"]) == (1 if deployed else 0)
+    assert dict(signature.create_outcomes) == {"deployed": 1}
+
+
+@pytest.mark.parametrize(
+    "outcome,code,gas",
+    [
+        pytest.param(
+            "returned_zero",
+            bytes(
+                Op.MSTORE(
+                    0, Op.PUSH32(bytes(Op.REVERT(0, 0)).ljust(32, b"\0"))
+                )
+                + Op.SSTORE(0, Op.CREATE(0, 0, 32))
+            ),
+            1_000_000,
+            id="initcode_reverts",
+        ),
+        pytest.param(
+            "halted",
+            bytes(Op.SSTORE(0, Op.CREATE(0, 0, 32))),
+            40_000,
+            id="charge_unaffordable",
+        ),
+        pytest.param(
+            "rolled_back",
+            bytes(Op.POP(Op.CREATE(0, 0, 0)) + Op.REVERT(0, 0)),
+            1_000_000,
+            id="creator_reverts",
+        ),
+    ],
+)
+def test_every_other_creation_outcome_is_told_apart(
+    outcome: str, code: bytes, gas: int
+) -> None:
+    """
+    Initcode that reverts pushes zero; a creator short of the charge halts
+    at the opcode; one that reverts after deploying takes the deployment
+    with it.
+    """
+    _, signature = _run(CREATOR, b"", gas, code)
+    assert dict(signature.create_outcomes) == {outcome: 1}
+
+
 def test_every_creation_axis_keeps_all_its_values() -> None:
     """Presence and every target kind stay drawn."""
     coverage = axis_coverage(Amsterdam, range(0, 400))
     warnings_ = [
         w for w in axis_collapse_warnings(coverage) if w.startswith("creation")
+    ]
+    assert warnings_ == []
+
+
+def test_every_deployer_axis_keeps_all_its_values() -> None:
+    """Presence, both opcodes, and empty and non-empty initcode stay drawn."""
+    coverage = axis_coverage(Amsterdam, range(0, 400))
+    warnings_ = [
+        w for w in axis_collapse_warnings(coverage) if w.startswith("deployer")
     ]
     assert warnings_ == []

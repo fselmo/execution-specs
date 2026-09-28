@@ -7,6 +7,7 @@ from ..fuzzer_bridge.corpus import minimize
 from ..fuzzer_bridge.generator import (
     AUTHORITY_ACCOUNTS,
     BURNER_ADDRESS,
+    DEPLOYER_ADDRESSES,
     DESTRUCTOR_ADDRESS,
     EMPTY_BENEFICIARY_ADDRESS,
     EXACT_CHARGE_CHILD_ADDRESS,
@@ -73,6 +74,7 @@ def test_generated_shape() -> None:
             Address(GRAVER_ADDRESS),
             Address(EMPTY_BENEFICIARY_ADDRESS),
             Address(STATE_FILLER_ADDRESS),
+            *(Address(a) for a in DEPLOYER_ADDRESSES.values()),
         )
     ]
     assert len(senders) <= 2

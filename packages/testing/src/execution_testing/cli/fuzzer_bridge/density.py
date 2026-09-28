@@ -373,6 +373,23 @@ def _tally_near_full(
         tally["near_full_margin"]["exact" if margin == 0 else "over"] += 1
 
 
+def _tally_deployer(case: Any, tally: Dict[str, Counter]) -> None:
+    """Count deployer transactions, their opcode and initcode size."""
+    from execution_testing.base_types import Address
+
+    from .generator import DEPLOYER_ADDRESSES
+
+    by_address = {Address(a): op for op, a in DEPLOYER_ADDRESSES.items()}
+    owned = [tx for tx in case.transactions if tx.to in by_address]
+    tally["deployer_tx"]["present" if owned else "absent"] += 1
+    for tx in owned:
+        assert tx.to is not None
+        tally["deployer_opcode"][by_address[tx.to]] += 1
+        tally["deployer_initcode"][
+            "empty" if not bytes(tx.data) else "nonempty"
+        ] += 1
+
+
 def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     """
     Share of draws holding each value of every multi-valued input axis.
@@ -420,6 +437,9 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "near_full_block": Counter(),
         "near_full_stores": Counter(),
         "near_full_margin": Counter(),
+        "deployer_tx": Counter(),
+        "deployer_opcode": Counter(),
+        "deployer_initcode": Counter(),
     }
     reads = _blockhash_signatures()
 
@@ -506,6 +526,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         _tally_graver(case, tally)
         _tally_creation(case, tally)
         _tally_near_full(case, fork, tally)
+        _tally_deployer(case, tally)
         for tx in case.transactions:
             target = (
                 int.from_bytes(bytes(tx.to), "big")
@@ -653,6 +674,9 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "near_full_block": ("present", "absent"),
     "near_full_stores": ("150", "160"),
     "near_full_margin": ("exact", "over"),
+    "deployer_tx": ("present", "absent"),
+    "deployer_opcode": ("CREATE", "CREATE2"),
+    "deployer_initcode": ("empty", "nonempty"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""

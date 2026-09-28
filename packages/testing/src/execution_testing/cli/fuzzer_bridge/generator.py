@@ -49,7 +49,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 25
+GENERATOR_VERSION = 26
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -447,6 +447,57 @@ def state_filler_code() -> bytes:
     return bytes(assemble(len(assemble(0)) - 1))
 
 
+DEPLOYER_ADDRESSES = {"CREATE": 0x1FFF4, "CREATE2": 0x1FFF3}
+"""Helpers that deploy from the initcode their calldata carries, one per
+creation opcode. Random creations mostly cannot afford their own charge:
+at v25, of 35 CREATEs in 300 seeds, 27 halted at the opcode and none
+kept a deployment."""
+
+DEPLOYER_TX_GAS = 1_000_000
+"""Gas for a transaction to a deployer: enough for the new account, its
+code and the helper's own fresh slots."""
+
+DEPLOYER_GAS_SLOT_OFFSET = 0x10000
+"""The deployer stores GAS at this offset from the slot of its result."""
+
+
+def deployer_code(opcode: str) -> bytes:
+    """
+    Deploy from calldata with ``opcode``, then store the result and the gas
+    left, keyed by a call counter, and stop.
+
+    The counter keeps every slot fresh and is CREATE2's salt, so repeated
+    calls do not collide.
+    """
+    count = Op.SLOAD(0)
+    if opcode == "CREATE":
+        create = Op.CREATE(0, 0, Op.CALLDATASIZE)
+    elif opcode == "CREATE2":
+        create = Op.CREATE2(0, 0, Op.CALLDATASIZE, count)
+    else:
+        raise ValueError(f"unknown creation opcode {opcode!r}")
+    return bytes(
+        Op.SSTORE(0, Op.ADD(count, 1))
+        + Op.CALLDATACOPY(0, 0, Op.CALLDATASIZE)
+        + Op.SSTORE(count, create)
+        + Op.SSTORE(Op.ADD(count, DEPLOYER_GAS_SLOT_OFFSET), Op.GAS)
+        + Op.STOP
+    )
+
+
+def deployer_initcode(words: int, deployed: int) -> bytes:
+    """
+    Initcode of ``words`` words that deploys ``deployed`` zero bytes; zero
+    words is empty initcode, which deploys nothing and costs no initcode
+    gas.
+    """
+    if words == 0:
+        return b""
+    code = bytes(Op.RETURN(0, deployed))
+    assert len(code) <= 32 * words
+    return code.ljust(32 * words, b"\0")
+
+
 RESERVOIR_TX_RATE = 0.35
 """Fraction of transactions drawn above the execution-gas cap, so the
 transaction carries a non-empty state gas reservoir.
@@ -824,6 +875,12 @@ def generate_fuzzer_output(
         code=Bytes(bytes(exact_charge_child_code())),
     )
     exact_need = exact_charge_child_code().gas_cost(fork)
+    for opcode, deployer in DEPLOYER_ADDRESSES.items():
+        accounts[Address(deployer)] = FuzzerAccountInput(
+            balance=HexNumber(0),
+            nonce=HexNumber(1),
+            code=Bytes(deployer_code(opcode)),
+        )
     accounts[Address(STATE_FILLER_ADDRESS)] = FuzzerAccountInput(
         balance=HexNumber(0),
         nonce=HexNumber(1),
@@ -867,6 +924,7 @@ def generate_fuzzer_output(
         exact_gas: Optional[int] = None
         grave: Optional[Tuple[Address, int]] = None
         creation: Optional[str] = None
+        initcode: Optional[bytes] = None
         if rng.random() < domains.failing_tx_rate:
             to = Address(FAILER_ADDRESS)
         elif rng.random() < domains.toucher_tx_rate:
@@ -913,6 +971,17 @@ def generate_fuzzer_output(
             and CREATION_TX_GAS <= min(tx_gas_cap, budgets[block])
         ):
             creation = rng.choice(domains.creation_targets)
+        elif (
+            rng.random() < domains.deployer_tx_rate
+            and DEPLOYER_TX_GAS <= min(tx_gas_cap, budgets[block])
+        ):
+            to = Address(
+                DEPLOYER_ADDRESSES[rng.choice(domains.deployer_opcodes)]
+            )
+            initcode = deployer_initcode(
+                rng.choice(domains.deployer_initcode_words),
+                rng.choice(domains.deployer_code_sizes),
+            )
         choices = tx_gas_choices
         if domains.reservoir_tx_gas and rng.random() < RESERVOIR_TX_RATE:
             choices = domains.reservoir_tx_gas + tx_gas_choices
@@ -946,6 +1015,12 @@ def generate_fuzzer_output(
             gas = GRAVER_TX_GAS
             data = Bytes(bytes(grave[0]).rjust(32, b"\0"))
             value = grave[1]
+        if initcode is not None:
+            # No authorizations: they would come out of the deployer's gas.
+            gas = DEPLOYER_TX_GAS
+            tx_type = 2
+            data = Bytes(initcode)
+            value = 0
         tx_to: Optional[Address] = to
         if creation is not None:
             # A creation cannot carry authorizations, and its address is

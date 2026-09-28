@@ -291,6 +291,17 @@ class ValueDomains:
     near_full_margins: Tuple[int, ...] = (0, 1)
     """Gas the last transaction asks beyond the state gas left: zero fits
     exactly, one is rejected."""
+    deployer_tx_rate: float = 0.05
+    """Share of transactions sent to a deployer, which creates from a
+    small initcode and stops. At v25, of 35 CREATEs in 300 seeds, none
+    kept a deployment."""
+    deployer_opcodes: Tuple[str, ...] = ("CREATE", "CREATE2")
+    """Which creation opcode the deployer uses."""
+    deployer_initcode_words: Tuple[int, ...] = (0, 1, 2, 4)
+    """Initcode size in words: zero is empty initcode, with no initcode
+    charge; the rest are affordable."""
+    deployer_code_sizes: Tuple[int, ...] = (0, 1, 32)
+    """Bytes of code the initcode deploys."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays

@@ -170,6 +170,27 @@ def test_a_generator_version_ships_with_its_rate_records() -> None:
             == []
         )
 
+    # Creations that keep their deployment, per case running one: at v25
+    # every random CREATE's frame halted, and nothing counted it.
+    from execution_testing.cli.fuzzer_bridge.signature_baseline import (
+        create_floor_warning,
+    )
+
+    creates = current.get("create_cases")
+    assert creates, f"v{GENERATOR_VERSION} event-rates lacks create_cases"
+    assert create_floor_warning(current) is None
+    before_creates = previous.get("create_cases")
+    if before_creates:
+        assert (
+            significant_drops(
+                {"deployed": before_creates["deployed"]},
+                {"deployed": creates["deployed"]},
+                before_creates["creating"],
+                creates["creating"],
+            )
+            == []
+        )
+
     # Transactions whose writes survive, read from the fixture's list.
     writes = current.get("tx_writes")
     assert writes, f"v{GENERATOR_VERSION} event-rates lacks tx_writes"
