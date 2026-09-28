@@ -5,7 +5,7 @@ import json
 import re
 import threading
 from pathlib import Path
-from typing import Any, Iterator, Tuple
+from typing import Any, Iterator, List, Tuple
 
 import pytest
 
@@ -54,7 +54,11 @@ def served(tmp_path: Path) -> Iterator[Tuple[str, int]]:
             }
         )
     )
-    server = serve(output, 0)
+    yield from _serving([output])
+
+
+def _serving(outputs: List[Path]) -> Iterator[Tuple[str, int]]:
+    server = serve(outputs, 0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         host, port = server.server_address[:2]
@@ -202,14 +206,8 @@ setTimeout(() => {
 """
 
 
-def test_a_hostile_finding_renders_as_literal_text(
-    served: Tuple[str, int], tmp_path: Path
-) -> None:
-    """
-    The page's own script, run against the served JSON on a stand-in DOM,
-    puts the hostile reason into a text node verbatim and never touches
-    an HTML-parsing sink.
-    """
+def _render(served: Tuple[str, int], tmp_path: Path) -> Any:
+    """Run the page's own script against the served JSON on a stand-in DOM."""
     import shutil
     import subprocess
 
@@ -231,6 +229,89 @@ def test_a_hostile_finding_renders_as_literal_text(
         timeout=30,
     )
     assert run.returncode == 0, run.stderr
-    result = json.loads(run.stdout)
+    return json.loads(run.stdout)
+
+
+def test_a_hostile_finding_renders_as_literal_text(
+    served: Tuple[str, int], tmp_path: Path
+) -> None:
+    """
+    The hostile reason lands in a text node verbatim, and the page never
+    touches an HTML-parsing sink.
+    """
+    result = _render(served, tmp_path)
     assert result["sinks"] == []
     assert HOSTILE in result["texts"]
+
+
+def _shard(
+    root: Path, name: str, status: str, cases: int, rate: float, hits: int
+) -> Path:
+    output = root / name
+    output.mkdir()
+    (output / "state.json").write_text(
+        json.dumps(
+            {
+                "next_seed": cases,
+                "started": 1.0,
+                "status": status,
+                "summary": {"cases": cases, "cases_per_second": rate},
+                "counts": {"agreed": cases - hits, "divergence": hits},
+                "client_failures": {"geth": hits},
+                "health": {"window": 2000, "window_cases": 2000},
+                "signatures": {
+                    "deadbeef": {
+                        "client": "geth",
+                        "reason": "gas mismatch",
+                        "count": hits,
+                        "first_seed": cases - 1,
+                        "first_seen": float(cases),
+                    }
+                },
+            }
+        )
+    )
+    return output
+
+
+@pytest.fixture
+def two_shards(tmp_path: Path) -> Iterator[Tuple[str, int]]:
+    """Two shards of one run, one of them paused, served together."""
+    yield from _serving(
+        [
+            _shard(tmp_path, "main", "running", 3000, 5.0, 3),
+            _shard(tmp_path, "main-b", "paused", 1000, 4.0, 1),
+        ]
+    )
+
+
+def test_shards_are_shown_together_with_their_totals(
+    two_shards: Tuple[str, int],
+) -> None:
+    """
+    Cases, rates and counts add across shards and a finding seen on both
+    is one finding; health stays per shard, and the view takes the status
+    most in need of attention, naming the shard it came from.
+    """
+    _, _, body = _request(two_shards, "GET", "/status.json")
+    view = json.loads(body)
+    assert [s["campaign"] for s in view["shards"]] == ["main", "main-b"]
+    assert view["status"] == "paused"
+    assert view["status_reason"] == "main-b paused"
+    assert view["summary"] == {"cases": 4000, "cases_per_second": 9.0}
+    assert view["counts"]["divergence"] == 4
+    assert view["clients"]["geth"]["failures"] == 4
+    (finding,) = view["findings"]
+    assert finding["count"] == 4 and finding["rate"] == 0.001
+    assert finding["shards"] == ["main", "main-b"]
+    assert finding["first_seed"] == 999
+    assert view["health"] == {}
+
+
+def test_the_page_has_a_row_per_shard(
+    two_shards: Tuple[str, int], tmp_path: Path
+) -> None:
+    """Each shard gets its own row and its own health lines."""
+    texts = _render(two_shards, tmp_path)["texts"]
+    assert "main-b" in texts and "main" in texts
+    assert "main-b window" in texts and "main window" in texts

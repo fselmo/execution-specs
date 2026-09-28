@@ -46,6 +46,7 @@
 </head>
 <body>
 <div id="health">Loading...</div>
+<h2 id="shards-title">Shards</h2><div class="card" id="shards"></div>
 <h2>Run</h2><div class="card" id="run"></div>
 <h2>Health</h2><div class="card" id="checks"></div>
 <h2>Clients</h2><div class="card" id="clients"></div>
@@ -80,6 +81,28 @@ function ago(seconds) {
   if (seconds < 172800) return (seconds / 3600).toFixed(1) + " h";
   return (seconds / 86400).toFixed(1) + " d";
 }
+function healthRows(s, prefix) {
+  const h = s.health || {};
+  const checks = [row(prefix + "window", (h.window_cases || 0) + " / " + (h.window || "-") + " cases")];
+  if (h.control_client) {
+    const band = h.control_band || [0, 1];
+    const rate = h.control_rate;
+    const out = rate !== undefined && (rate < band[0] || rate > band[1]);
+    checks.push(row(prefix + "control " + h.control_client, pct(rate) + " (band " + pct(band[0]) + "-" + pct(band[1]) + ")", out));
+  }
+  if (h.runner_error_rate !== undefined) checks.push(row(prefix + "runner errors", pct(h.runner_error_rate) + " (max " + pct(h.max_runner_error_rate) + ")", h.runner_error_rate > h.max_runner_error_rate));
+  if (h.producer_disagreement_rate !== undefined) checks.push(row(prefix + "producer disagreement", pct(h.producer_disagreement_rate) + " (max " + pct(h.max_producer_disagreement_rate) + ")", h.producer_disagreement_rate > h.max_producer_disagreement_rate));
+  for (const [lane, g] of Object.entries(h.parallel || {})) {
+    if (!prefix) continue;  // a single campaign shows these on its parallel card
+    let text = pct(g.fraction) + (g.baseline !== null ? " (baseline " + pct(g.baseline) + ")" : "");
+    if (g.note) text += "; " + g.note;
+    checks.push(row(prefix + "parallel " + lane, text, g.baseline !== null && g.fraction !== null && g.fraction < g.baseline));
+  }
+  const counts = s.counts || {};
+  checks.push(row(prefix + "retries / fallbacks", (counts["BAL-RETRY"] || 0) + " / " + (counts["BAL-FALLBACK"] || 0)));
+  checks.push(row(prefix + "agreed / divergent / all-fail", (counts.agreed || 0) + " / " + (counts.divergence || 0) + " / " + (counts["all-fail"] || 0)));
+  return checks;
+}
 function render(s) {
   const health = document.getElementById("health");
   health.className = s.status;
@@ -92,7 +115,7 @@ function render(s) {
   if (s.started) run.push(row("first started", ago(s.served_at - s.started) + " ago"));
   run.push(row("cases", summary.cases === undefined ? "-" : summary.cases));
   run.push(row("cases/s", summary.cases_per_second === undefined ? "-" : summary.cases_per_second.toFixed(1)));
-  run.push(row("next seed", s.next_seed));
+  if (s.next_seed !== null && s.next_seed !== undefined) run.push(row("next seed", s.next_seed));
   if (seg.id) {
     run.push(row("segment", seg.id + " (generator v" + seg.generator_version + ", " + seg.fork + ")"));
     run.push(row("spec", seg.eels_commit));
@@ -101,25 +124,25 @@ function render(s) {
     }
   }
   fill("run", run);
-  const h = s.health || {};
-  const checks = [row("window", (h.window_cases || 0) + " / " + (h.window || "-") + " cases")];
-  if (h.control_client) {
-    const band = h.control_band || [0, 1];
-    const rate = h.control_rate;
-    const out = rate !== undefined && (rate < band[0] || rate > band[1]);
-    checks.push(row("control " + h.control_client, pct(rate) + " (band " + pct(band[0]) + "-" + pct(band[1]) + ")", out));
+  const shards = s.shards || [];
+  const several = shards.length > 1;
+  document.getElementById("shards-title").hidden = !several;
+  document.getElementById("shards").hidden = !several;
+  if (several) {
+    fill("shards", shards.map((shard) => {
+      const sum = shard.summary || {};
+      const rate = sum.cases_per_second === undefined ? "-" : sum.cases_per_second.toFixed(1);
+      return row(shard.campaign, shard.status + ", " + (sum.cases || 0) + " cases, " + rate + "/s, next seed " + shard.next_seed + ", segment " + ((shard.segment || {}).id || "-"), shard.status !== "running");
+    }));
   }
-  if (h.runner_error_rate !== undefined) checks.push(row("runner errors", pct(h.runner_error_rate) + " (max " + pct(h.max_runner_error_rate) + ")", h.runner_error_rate > h.max_runner_error_rate));
-  if (h.producer_disagreement_rate !== undefined) checks.push(row("producer disagreement", pct(h.producer_disagreement_rate) + " (max " + pct(h.max_producer_disagreement_rate) + ")", h.producer_disagreement_rate > h.max_producer_disagreement_rate));
-  const counts = s.counts || {};
-  checks.push(row("retries / fallbacks", (counts["BAL-RETRY"] || 0) + " / " + (counts["BAL-FALLBACK"] || 0)));
-  checks.push(row("agreed / divergent / all-fail", (counts.agreed || 0) + " / " + (counts.divergence || 0) + " / " + (counts["all-fail"] || 0)));
-  fill("checks", checks);
+  // Health is judged per shard, over its own window, so it is shown per shard.
+  const judged = several ? shards : [s];
+  fill("checks", judged.flatMap((shard) => healthRows(shard, several ? shard.campaign + " " : "")));
   fill("clients", Object.entries(s.clients || {}).map(([name, c]) =>
     row(name, c.failures + " failed, " + c.refused + " refused, " + c.runner_errors + " runner errors", c.runner_errors > 0)));
   fill("contrast", Object.entries(s.contrast || {}).map(([lane, c]) =>
     row(lane, (c.compared || 0) + " compared, " + (c.mismatches || 0) + " mismatches", !c.compared)));
-  const guarded = (s.health || {}).parallel || {};
+  const guarded = several ? {} : (s.health || {}).parallel || {};
   fill("parallel", Object.entries(s.parallel || {}).map(([lane, p]) => {
     const g = guarded[lane];
     const fraction = p.bal_blocks ? p.parallel / p.bal_blocks : null;
@@ -132,7 +155,7 @@ function render(s) {
   }));
   fill("findings", (s.findings || []).map((f) => {
     const node = el("div", "finding");
-    node.append(el("div", "", f.digest + "  " + f.client + (f.known ? "  (known)" : "") + (f.triage ? "  (" + f.triage + ")" : "")));
+    node.append(el("div", "", f.digest + "  " + f.client + (f.known ? "  (known)" : "") + (f.triage ? "  (" + f.triage + ")" : "") + (several && f.shards ? "  [" + f.shards.join(", ") + "]" : "")));
     node.append(el("div", "reason", f.reason));
     const first = f.first_seen ? ago(s.served_at - f.first_seen) + " ago" : "-";
     node.append(el("div", "meta", f.count + " hits, " + pct(f.rate) + " of cases, first " + first + " (seed " + f.first_seed + "), " + (f.minimized ? "minimized" : "not minimized")));

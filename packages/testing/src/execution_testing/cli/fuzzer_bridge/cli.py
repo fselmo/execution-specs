@@ -349,12 +349,12 @@ def campaign(
 
 
 @fuzz.command("status")
-@click.argument("name")
+@click.argument("names", nargs=-1, required=True)
 @click.option(
     "--output",
     type=click.Path(path_type=Path, file_okay=False),
     default=None,
-    help="Campaign directory [default: campaigns/NAME].",
+    help="Campaign directory, for a single NAME [default: campaigns/NAME].",
 )
 @click.option(
     "--serve",
@@ -362,25 +362,36 @@ def campaign(
     help="Serve a read-only status page on 127.0.0.1 until interrupted.",
 )
 @click.option("--port", type=int, default=8787, show_default=True)
-def status(name: str, output: Optional[Path], serve: bool, port: int) -> None:
+def status(
+    names: Sequence[str], output: Optional[Path], serve: bool, port: int
+) -> None:
     """
-    Show a campaign's status: one line, or with --serve a read-only page
-    on loopback for a proxy (Tailscale) to expose. It binds 127.0.0.1
-    only, answers GET for the page and its JSON, and serves no files.
+    Show campaigns' status: one line each, or with --serve a read-only
+    page on loopback for a proxy (Tailscale) to expose. Several NAMEs are
+    shards of one run: the page shows a row per shard and totals over
+    them. It binds 127.0.0.1 only, answers GET for the page and its JSON,
+    and serves no files.
     """
-    output = output or Path("campaigns") / name
-    view = status_view(output)
-    summary = view.get("summary", {})
-    click.echo(
-        f"{name}: {view['status']}"
-        + (f" ({view['status_reason']})" if view.get("status_reason") else "")
-        + f", {summary.get('cases', 0)} cases, "
-        f"{len(view.get('findings', []))} finding(s), "
-        f"segment {view.get('segment', {}).get('id') or '-'}"
-    )
+    if output is not None and len(names) > 1:
+        raise click.UsageError("--output names one campaign's directory")
+    outputs = [output or Path("campaigns") / name for name in names]
+    for name, path in zip(names, outputs, strict=True):
+        view = status_view(path)
+        summary = view.get("summary", {})
+        click.echo(
+            f"{name}: {view['status']}"
+            + (
+                f" ({view['status_reason']})"
+                if view.get("status_reason")
+                else ""
+            )
+            + f", {summary.get('cases', 0)} cases, "
+            f"{len(view.get('findings', []))} finding(s), "
+            f"segment {view.get('segment', {}).get('id') or '-'}"
+        )
     if not serve:
         return
-    server = serve_status(output, port)
+    server = serve_status(outputs, port)
     click.echo(f"serving http://127.0.0.1:{server.server_address[1]}/")
     try:
         server.serve_forever()

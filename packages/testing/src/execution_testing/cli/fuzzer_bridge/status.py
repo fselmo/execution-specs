@@ -11,7 +11,8 @@ generated input.
 - It answers GET for exactly two paths, the page and its JSON, and 405
   for every other method. It serves no files: a bundle's path is shown
   as text.
-- The JSON is a projection of the state and manifest the campaign writes,
+- The JSON is a projection of the state and manifest each campaign writes
+  (one campaign, or several shards of one run shown together),
   with environment values redacted outside `run_manifest.ENV_ALLOWLIST`
   (again: the manifest is already redacted on disk), and `<`
   escaped so no string in it can form a tag.
@@ -27,7 +28,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
 from .run_manifest import redacted_env
@@ -145,6 +146,108 @@ def status_view(output: Path) -> Dict[str, Any]:
     }
 
 
+SEVERITY = ("absent", "paused", "stopped", "running", "done")
+"""Statuses from most to least in need of attention: shards shown together
+take the first any of them has."""
+
+
+def _add(into: Dict[str, Any], values: Mapping[str, Any]) -> None:
+    """Sum ``values`` into ``into``, field by field, recursing into maps."""
+    for key, value in values.items():
+        if isinstance(value, Mapping):
+            _add(into.setdefault(key, {}), value)
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            into[key] = into.get(key, 0) + value
+
+
+def _merged_findings(shards: Sequence[Mapping[str, Any]]) -> List[Any]:
+    """One entry per signature across shards, with its hits summed."""
+    merged: Dict[str, Dict[str, Any]] = {}
+    for shard in shards:
+        for finding in shard.get("findings", []):
+            entry = merged.get(finding["digest"])
+            if entry is None:
+                entry = merged[finding["digest"]] = dict(finding, shards=[])
+                entry["count"] = 0
+            entry["count"] += finding.get("count", 0)
+            entry["shards"].append(shard["campaign"])
+            seen = finding.get("first_seen")
+            if seen is not None and (
+                entry.get("first_seen") is None or seen < entry["first_seen"]
+            ):
+                entry["first_seen"] = seen
+                entry["first_seed"] = finding.get("first_seed")
+                entry["bundle"] = finding.get("bundle")
+            entry["minimized"] = entry.get("minimized") or finding.get(
+                "minimized", False
+            )
+    cases = sum(s.get("summary", {}).get("cases", 0) for s in shards)
+    for entry in merged.values():
+        entry["rate"] = entry["count"] / cases if cases else None
+    return sorted(merged.values(), key=lambda f: -f["count"])
+
+
+def combined_view(outputs: Sequence[Path]) -> Dict[str, Any]:
+    """
+    Several shards of one run as one view: each shard's own view under
+    ``shards``, and totals over them in the fields a single view has.
+
+    Shards run side by side, so cases and rates add. Health is judged per
+    shard, over its own window, and is shown per shard, never summed.
+    """
+    shards = [status_view(output) for output in outputs]
+    if len(shards) == 1:
+        return dict(shards[0], shards=shards)
+    status = min(
+        (s["status"] for s in shards),
+        key=lambda x: SEVERITY.index(x) if x in SEVERITY else 0,
+    )
+    reasons = [
+        f"{s['campaign']} {s['status']}"
+        + (f" ({s['status_reason']})" if s.get("status_reason") else "")
+        for s in shards
+        if s["status"] != "running"
+    ]
+    summary: Dict[str, Any] = {}
+    counts: Dict[str, Any] = {}
+    clients: Dict[str, Any] = {}
+    contrast: Dict[str, Any] = {}
+    parallel: Dict[str, Any] = {}
+    for shard in shards:
+        _add(
+            summary,
+            {
+                k: v
+                for k, v in shard.get("summary", {}).items()
+                if k in ("cases", "cases_per_second")
+            },
+        )
+        _add(counts, shard.get("counts", {}))
+        _add(clients, shard.get("clients", {}))
+        _add(contrast, shard.get("contrast", {}))
+        _add(parallel, shard.get("parallel", {}))
+    segments = {s.get("segment", {}).get("id") for s in shards}
+    started = [s["started"] for s in shards if s.get("started")]
+    return {
+        "campaign": " + ".join(s["campaign"] for s in shards),
+        "served_at": time.time(),
+        "status": status,
+        "status_reason": "; ".join(reasons),
+        "started": min(started) if started else None,
+        "next_seed": None,
+        "summary": summary,
+        "health": {},
+        "segment": shards[0].get("segment", {}) if len(segments) == 1 else {},
+        "segments": [],
+        "counts": counts,
+        "clients": clients,
+        "contrast": contrast,
+        "parallel": parallel,
+        "findings": _merged_findings(shards),
+        "shards": shards,
+    }
+
+
 def encode_view(view: Mapping[str, Any]) -> bytes:
     """JSON with `<`, `>` and `&` escaped, so no string can form a tag."""
     text = json.dumps(view)
@@ -170,8 +273,10 @@ _COMMON_HEADERS = (
 )
 
 
-def handler_for(output: Path) -> Callable[..., BaseHTTPRequestHandler]:
-    """A request handler serving ``output``'s page and nothing else."""
+def handler_for(
+    outputs: Sequence[Path],
+) -> Callable[..., BaseHTTPRequestHandler]:
+    """A request handler serving the shards' page and nothing else."""
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "fuzz-status"
@@ -207,7 +312,7 @@ def handler_for(output: Path) -> Callable[..., BaseHTTPRequestHandler]:
                 self._send(
                     200,
                     "application/json",
-                    encode_view(status_view(output)),
+                    encode_view(combined_view(outputs)),
                     locked,
                 )
             else:
@@ -234,6 +339,6 @@ def handler_for(output: Path) -> Callable[..., BaseHTTPRequestHandler]:
     return Handler
 
 
-def serve(output: Path, port: int) -> ThreadingHTTPServer:
-    """A loopback-only server for ``output``; the caller runs it."""
-    return ThreadingHTTPServer((HOST, port), handler_for(output))
+def serve(outputs: Sequence[Path], port: int) -> ThreadingHTTPServer:
+    """A loopback-only server for ``outputs``; the caller runs it."""
+    return ThreadingHTTPServer((HOST, port), handler_for(outputs))
