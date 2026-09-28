@@ -16,6 +16,7 @@ Key Responsibilities:
 from typing import Dict, List, Optional
 
 from execution_testing.base_types import Account, Address, Hash, HexNumber
+from execution_testing.exceptions import TransactionException
 from execution_testing.forks import Fork
 from execution_testing.fuzzing import (
     blockhash_history,
@@ -137,6 +138,11 @@ def fuzzer_transaction_to_eest_transaction(
         blob_versioned_hashes=fuzzer_tx.blob_versioned_hashes,
         max_fee_per_blob_gas=fuzzer_tx.max_fee_per_blob_gas,
         authorization_list=auth_list,
+        error=(
+            TransactionException[fuzzer_tx.error]
+            if fuzzer_tx.error is not None
+            else None
+        ),
     )
 
 
@@ -313,6 +319,8 @@ def blockchain_test_from_fuzzer(
         post={},  # Post-state verification can be added later
         genesis_environment=genesis_env,
         chain_id=fuzzer_output.chain_id,
+        # A case that draws a rejection says so, as a written test would.
+        is_exception_test=any(b.exception is not None for b in blocks),
     )
 
 
@@ -442,20 +450,27 @@ def _distribute_transactions_to_blocks(
 
     # Create blocks with incrementing timestamps
     base_timestamp = int(base_env.timestamp)
+    exceptions = [
+        next((tx.error for tx in block_txs if tx.error), None)
+        for block_txs in tx_distribution
+    ]
+    # Withdrawals go on the last block expected to be valid, after every
+    # transaction the case drew there: a rejected block imports nothing.
+    valid = [i for i, exception in enumerate(exceptions) if exception is None]
+    withdrawals_at = valid[-1] if valid else None
     blocks = []
     for i, block_txs in enumerate(tx_distribution):
         blocks.append(
             Block(
                 txs=block_txs,
+                exception=exceptions[i],
                 timestamp=base_timestamp + (i * block_time),
                 fee_recipient=base_env.fee_recipient,
                 parent_beacon_block_root=parent_beacon_block_root
                 if i == 0
                 else None,
-                # Withdrawals go on the last block, after every transaction
-                # the case drew, which is where the spec processes them.
                 withdrawals=withdrawals
-                if withdrawals and i == len(tx_distribution) - 1
+                if withdrawals and i == withdrawals_at
                 else None,
             )
         )

@@ -49,7 +49,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 23
+GENERATOR_VERSION = 24
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -411,6 +411,40 @@ def creation_target_account(kind: str) -> Optional[FuzzerAccountInput]:
             balance=HexNumber(0), nonce=HexNumber(0), code=Bytes(b"\x00")
         )
     raise ValueError(f"unknown creation target {kind!r}")
+
+
+STATE_FILLER_ADDRESS = 0x1FFF5
+"""Helper that writes slots 1..n, n from its calldata, and nothing else,
+so the state gas it uses is exactly n fresh-slot stores."""
+
+REJECTED_BY_STATE_GAS = "GAS_ALLOWANCE_EXCEEDED"
+"""The exception a transaction gets for asking more gas than the block's
+state gas has left."""
+
+
+def state_filler_code() -> bytes:
+    """Write 1 to slots 1..n, n from calldata word 0."""
+
+    def assemble(done: int) -> Bytecode:
+        return (
+            Op.PUSH0
+            + Op.JUMPDEST  # loop at 1, stack: [i]
+            + Op.DUP1
+            + Op.CALLDATALOAD(0)
+            + Op.GT
+            + Op.ISZERO
+            + Op.PUSH2(done)
+            + Op.JUMPI
+            # The counter sits under the value and the addend: DUP3.
+            + Op.SSTORE(Op.ADD(Op.DUP3, 1), 1)
+            + Op.PUSH1(1)
+            + Op.ADD
+            + Op.PUSH2(1)
+            + Op.JUMP
+            + Op.JUMPDEST
+        )
+
+    return bytes(assemble(len(assemble(0)) - 1))
 
 
 RESERVOIR_TX_RATE = 0.35
@@ -790,6 +824,11 @@ def generate_fuzzer_output(
         code=Bytes(bytes(exact_charge_child_code())),
     )
     exact_need = exact_charge_child_code().gas_cost(fork)
+    accounts[Address(STATE_FILLER_ADDRESS)] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(1),
+        code=Bytes(state_filler_code()),
+    )
     accounts[Address(GRAVER_ADDRESS)] = FuzzerAccountInput(
         balance=HexNumber(0),
         nonce=HexNumber(1),
@@ -956,6 +995,50 @@ def generate_fuzzer_output(
             )
         )
         nonces[sender] = max(nonces[sender], tx_nonce) + 1
+
+    if (
+        domains.reservoir_tx_gas
+        and rng.random() < domains.near_full_block_rate
+    ):
+        # A block of its own, last: a filler whose state gas is exactly its
+        # stores, then one transaction asking the state gas left, or one
+        # more. The filler's gas is the cap plus those stores, so its
+        # reservoir pays for them all and nothing spills.
+        block = block_count
+        block_count += 1
+        base_fee = _highest_base_fee(fork, domains, block)
+        stores = rng.choice(domains.near_full_stores)
+        state_used = stores * fresh_store_state
+        margin = rng.choice(domains.near_full_margins)
+        for gas, to, data, error in (
+            (
+                tx_gas_cap + state_used,
+                Address(STATE_FILLER_ADDRESS),
+                Bytes(stores.to_bytes(32, "big")),
+                None,
+            ),
+            (
+                domains.block_gas_limit - state_used + margin,
+                rng.choice(sender_addresses),
+                Bytes(b""),
+                REJECTED_BY_STATE_GAS if margin > 0 else None,
+            ),
+        ):
+            sender = rng.choice(sender_addresses)
+            transactions.append(
+                FuzzerTransactionInput(
+                    **{"from": sender},
+                    block=block,
+                    to=to,
+                    gas=HexNumber(gas),
+                    nonce=HexNumber(nonces[sender]),
+                    value=HexNumber(0),
+                    data=data,
+                    error=error,
+                    **_fee_market_fields(rng, base_fee),
+                )
+            )
+            nonces[sender] += 1
 
     # The toucher is drawn once the transactions are, so its "other
     # transaction" targets are the senders and targets of transactions

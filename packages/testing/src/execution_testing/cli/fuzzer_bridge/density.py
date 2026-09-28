@@ -349,6 +349,30 @@ def _tally_creation(case: Any, tally: Dict[str, Counter]) -> None:
         tally["creation_target"][kind] += 1
 
 
+def _tally_near_full(
+    case: Any, fork: "Fork", tally: Dict[str, Counter]
+) -> None:
+    """Count near-full blocks, their filler sizes and the last margin."""
+    from execution_testing.base_types import Address
+    from execution_testing.vm import Opcodes as Op
+
+    from .generator import STATE_FILLER_ADDRESS
+
+    filler = Address(STATE_FILLER_ADDRESS)
+    fills = [tx for tx in case.transactions if tx.to == filler]
+    tally["near_full_block"]["present" if fills else "absent"] += 1
+    store = Op.SSTORE(key_warm=False, original_value=0, new_value=1)
+    for tx in fills:
+        stores = int.from_bytes(bytes(tx.data)[:32], "big")
+        tally["near_full_stores"][str(stores)] += 1
+        (last,) = [
+            t for t in case.transactions if t.block == tx.block and t is not tx
+        ]
+        left = int(case.env.gas_limit) - stores * store.state_cost(fork)
+        margin = int(last.gas) - left
+        tally["near_full_margin"]["exact" if margin == 0 else "over"] += 1
+
+
 def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     """
     Share of draws holding each value of every multi-valued input axis.
@@ -393,6 +417,9 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "graver_value": Counter(),
         "creation_tx": Counter(),
         "creation_target": Counter(),
+        "near_full_block": Counter(),
+        "near_full_stores": Counter(),
+        "near_full_margin": Counter(),
     }
     reads = _blockhash_signatures()
 
@@ -478,6 +505,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         _tally_exact_charge(case, fork, tally)
         _tally_graver(case, tally)
         _tally_creation(case, tally)
+        _tally_near_full(case, fork, tally)
         for tx in case.transactions:
             target = (
                 int.from_bytes(bytes(tx.to), "big")
@@ -622,6 +650,9 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "graver_value": ("nonzero", "zero"),
     "creation_tx": ("present", "absent"),
     "creation_target": ("fresh", "balance_only", "nonce", "code"),
+    "near_full_block": ("present", "absent"),
+    "near_full_stores": ("150", "160"),
+    "near_full_margin": ("exact", "over"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""

@@ -73,6 +73,9 @@ def fixture_filler(fork: Fork, t8n: Any) -> Filler:
 def _gas_used(fixture: Dict[str, Any], sender: str, nonce: int) -> int:
     """The gas a transaction's receipt shows used, by sender and nonce."""
     for block in fixture["blocks"]:
+        if "expectException" in block:
+            # A block drawn to be rejected imports nothing to measure.
+            continue
         previous = 0
         for tx, receipt in zip(
             block["transactions"], block["receipts"], strict=True

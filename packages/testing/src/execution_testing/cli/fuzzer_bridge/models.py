@@ -109,6 +109,9 @@ class FuzzerTransactionInput(BaseModel):
     authorization_list: List[FuzzerAuthorizationInput] | None = Field(
         None, alias="authorizationList"
     )
+    error: str | None = Field(None, alias="expectedError")
+    """The `TransactionException` the transaction must be rejected with.
+    It goes last in its block, and the block is then expected invalid."""
     gas_need_fraction: float | None = Field(None, alias="gasNeedFraction")
     """A declared draw: this transaction's gas limit is its measured need
     times this fraction. `resolve_measured_gas` sets `gas` from it before

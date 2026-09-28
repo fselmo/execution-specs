@@ -17,6 +17,7 @@ from ..fuzzer_bridge.generator import (
     INTERLEAVER_ADDRESS,
     SPILLER_ADDRESS,
     STATE_EXHAUSTER_ADDRESS,
+    STATE_FILLER_ADDRESS,
     TOUCHER_ADDRESS,
     generate_fuzzer_output,
 )
@@ -71,6 +72,7 @@ def test_generated_shape() -> None:
             Address(EXACT_CHARGE_CHILD_ADDRESS),
             Address(GRAVER_ADDRESS),
             Address(EMPTY_BENEFICIARY_ADDRESS),
+            Address(STATE_FILLER_ADDRESS),
         )
     ]
     assert len(senders) <= 2

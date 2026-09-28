@@ -16,6 +16,7 @@ import pytest
 
 from execution_testing.base_types import Address, Bytes, HexNumber
 from execution_testing.forks import Amsterdam
+from execution_testing.vm import Opcodes as Op
 
 from ..fuzzer_bridge import campaign as mod
 from ..fuzzer_bridge.density import axis_collapse_warnings, axis_coverage
@@ -23,6 +24,8 @@ from ..fuzzer_bridge.generator import (
     EXACT_CHARGE_CHILD_ADDRESS,
     EXACT_CHARGE_TX_GAS,
     EXACT_CHARGER_ADDRESS,
+    REJECTED_BY_STATE_GAS,
+    STATE_FILLER_ADDRESS,
     exact_charge_child_code,
     generate_fuzzer_output,
 )
@@ -110,6 +113,77 @@ def test_a_state_charge_equal_to_the_gas_left_is_paid(
         assert witness == {0: 1, 1: 1}
 
 
+def _near_full(margin: int, stores: int = 150) -> FuzzerOutput:
+    """
+    A block of a filler making ``stores`` fresh stores from its reservoir,
+    then a transfer asking the block's state gas left plus ``margin``.
+    """
+    case = generate_fuzzer_output(Amsterdam, 0)
+    cap = Amsterdam.transaction_gas_limit_cap()
+    assert cap is not None
+    store = Op.SSTORE(key_warm=False, original_value=0, new_value=1)
+    state_used = stores * store.state_cost(Amsterdam)
+    limit = int(case.env.gas_limit)
+    (first, *_) = case.transactions
+    sender = first.from_
+    fields = {
+        "value": HexNumber(0),
+        "authorization_list": None,
+        "gas_need_fraction": None,
+        "block": 0,
+    }
+    filler = first.model_copy(
+        update={
+            **fields,
+            "to": Address(STATE_FILLER_ADDRESS),
+            "gas": HexNumber(cap + state_used),
+            "nonce": HexNumber(0),
+            "data": Bytes(stores.to_bytes(32, "big")),
+        }
+    )
+    last = first.model_copy(
+        update={
+            **fields,
+            "to": sender,
+            "gas": HexNumber(limit - state_used + margin),
+            "nonce": HexNumber(1),
+            "data": Bytes(b""),
+            "error": REJECTED_BY_STATE_GAS if margin > 0 else None,
+        }
+    )
+    return case.model_copy(
+        update={
+            "transactions": [filler, last],
+            "block_count": 1,
+            "withdrawals": [],
+        }
+    )
+
+
+def test_asking_exactly_the_state_gas_left_fits_the_block() -> None:
+    """
+    After the filler, a transaction whose gas is exactly the block's state
+    gas left passes the capacity check and is included; the filler's
+    stores are all changes.
+    """
+    fixture = _fill(_near_full(0))
+    (block,) = fixture["blocks"]
+    assert "expectException" not in block
+    first, last = block["receipts"]
+    assert first["status"] and last["status"]
+    filler = _entry(fixture, Address(STATE_FILLER_ADDRESS))
+    assert len(filler["storageChanges"]) == 150
+
+
+def test_asking_one_more_than_the_state_gas_left_is_rejected() -> None:
+    """The near miss: one more gas and the block is invalid."""
+    fixture = _fill(_near_full(1))
+    (block,) = fixture["blocks"]
+    assert block["expectException"] == (
+        f"TransactionException.{REJECTED_BY_STATE_GAS}"
+    )
+
+
 def test_every_exact_charge_axis_keeps_all_its_values() -> None:
     """Presence and every margin, the exact one above all, stay drawn."""
     coverage = axis_coverage(Amsterdam, range(0, 400))
@@ -117,5 +191,16 @@ def test_every_exact_charge_axis_keeps_all_its_values() -> None:
         w
         for w in axis_collapse_warnings(coverage)
         if w.startswith("exact_charge")
+    ]
+    assert warnings_ == []
+
+
+def test_every_near_full_axis_keeps_all_its_values() -> None:
+    """Presence, both filler sizes and both margins stay drawn."""
+    coverage = axis_coverage(Amsterdam, range(0, 400))
+    warnings_ = [
+        w
+        for w in axis_collapse_warnings(coverage)
+        if w.startswith("near_full")
     ]
     assert warnings_ == []

@@ -36,11 +36,19 @@ def _fill(case: FuzzerOutput) -> Dict[str, Any]:
 
 
 def _multi_block_case() -> FuzzerOutput:
-    """A generated case with a transaction in its second block."""
+    """
+    A generated case with a transaction in its second block, and no block
+    drawn to be rejected: the tests edit transactions, and the rejection
+    rests on the exact gas the drawn ones use.
+    """
     for seed in range(200):
         case = generate_fuzzer_output(Amsterdam, seed)
-        if case.block_count >= 2 and any(
-            tx.block == 1 and tx.to is not None for tx in case.transactions
+        if (
+            case.block_count >= 2
+            and any(
+                tx.block == 1 and tx.to is not None for tx in case.transactions
+            )
+            and not any(tx.error for tx in case.transactions)
         ):
             return case
     raise AssertionError("no two-block case in range; widen the seeds")

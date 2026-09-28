@@ -520,6 +520,8 @@ def _rates_and_blocks(
         except Exception:  # noqa: BLE001 - unfillable is data
             continue
         for block in fixture["blocks"]:
+            if "expectException" in block:
+                continue  # rejected: none of its transactions ran
             ran = len(block["transactions"])
             writes["txs"] += ran
             writes["committed_storage"] += len(

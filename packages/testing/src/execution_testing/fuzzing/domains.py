@@ -279,6 +279,18 @@ class ValueDomains:
     )
     """What the pre-state holds at the address a creation deploys to: the
     last two collide, the first two do not."""
+    near_full_block_rate: float = 0.08
+    """Share of cases ending in a block of their own that fills the
+    block's state gas and then asks for what is left, or one more. At v20
+    the state-gas capacity check never decided a transaction: 1,468
+    checks in 300 seeds, none near the limit."""
+    near_full_stores: Tuple[int, ...] = (150, 160)
+    """Fresh-slot stores the filler makes, its state gas in stores' worth:
+    over half the block's gas, so the state-gas check binds before the
+    execution-gas one."""
+    near_full_margins: Tuple[int, ...] = (0, 1)
+    """Gas the last transaction asks beyond the state gas left: zero fits
+    exactly, one is rejected."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays
