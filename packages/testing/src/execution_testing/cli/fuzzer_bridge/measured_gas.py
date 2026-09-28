@@ -131,7 +131,16 @@ def resolve_measured_gas(
             probe[later] = probe[later].model_copy(
                 update={"gas_need_fraction": None}
             )
-        fixture = fill(case.model_copy(update={"transactions": probe}))
+        # Later blocks cannot change this transaction's need, and one may
+        # be drawn to be rejected: the probe stops at the measured block.
+        fixture = fill(
+            case.model_copy(
+                update={
+                    "transactions": [t for t in probe if t.block <= tx.block],
+                    "block_count": tx.block + 1,
+                }
+            )
+        )
         need = _gas_used(fixture, str(tx.from_), int(tx.nonce))
         gas = min(ample, math.ceil(need * fraction))
         transactions[index] = tx.model_copy(
