@@ -1,0 +1,28 @@
+{
+  "fork": "Amsterdam",
+  "generator_version": 24,
+  "clients": [
+    "geth"
+  ],
+  "eels_commit": "60f29b3fe827ad4034dbc4848d022698655da525",
+  "seed_start": 0,
+  "seeds": 300,
+  "agreed": 287,
+  "diverged": 7,
+  "compared": 294,
+  "tool_rejected": 0,
+  "runner_error": 0,
+  "not_compared": 0,
+  "crashed": 6,
+  "first_crash": {
+    "seed": 30,
+    "reason": "eels crashed: measuring fill: UnexpectedExecutionSuccessError: \nUnexpected success for Transaction ({'index': 1, 'nonce': 3}):\n  What: Transaction unexpectedly succeeded!"
+  },
+  "rejected_by": {},
+  "errored": {
+    "eels": 7
+  },
+  "eels_runs": 300,
+  "first_divergent_seed": 1,
+  "fields": {}
+}

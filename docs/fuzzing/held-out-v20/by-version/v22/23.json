@@ -1,0 +1,26 @@
+{
+  "fork": "Amsterdam",
+  "generator_version": 22,
+  "clients": [
+    "geth"
+  ],
+  "eels_commit": "44531391ad453419034b45c2bfcbd7b15de5a664",
+  "seed_start": 0,
+  "seeds": 300,
+  "agreed": 269,
+  "diverged": 0,
+  "compared": 269,
+  "tool_rejected": 0,
+  "runner_error": 0,
+  "not_compared": 0,
+  "crashed": 31,
+  "first_crash": {
+    "seed": 18,
+    "reason": "eels crashed: TypeError: unsupported operand type(s) for //: 'bytes' and 'Uint'"
+  },
+  "rejected_by": {},
+  "errored": {},
+  "eels_runs": 300,
+  "first_divergent_seed": null,
+  "fields": {}
+}
