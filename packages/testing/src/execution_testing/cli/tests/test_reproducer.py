@@ -23,7 +23,10 @@ from ..fuzzer_bridge.reproducer import (
 def _single_tx_case(seed: int = 3) -> Any:
     """A generated case cut down to its first transaction."""
     case = generate_fuzzer_output(Amsterdam, seed)
-    case.transactions = case.transactions[:1]
+    # A drawn need fraction would have its gas derived at fill.
+    case.transactions = [
+        case.transactions[0].model_copy(update={"gas_need_fraction": None})
+    ]
     return case
 
 

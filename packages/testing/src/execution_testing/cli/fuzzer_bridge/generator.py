@@ -49,7 +49,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 26
+GENERATOR_VERSION = 27
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -447,11 +447,23 @@ def state_filler_code() -> bytes:
     return bytes(assemble(len(assemble(0)) - 1))
 
 
-DEPLOYER_ADDRESSES = {"CREATE": 0x1FFF4, "CREATE2": 0x1FFF3}
-"""Helpers that deploy from the initcode their calldata carries, one per
-creation opcode. Random creations mostly cannot afford their own charge:
-at v25, of 35 CREATEs in 300 seeds, 27 halted at the opcode and none
-kept a deployment."""
+MAX_NONCE = 2**64 - 1
+"""The highest nonce an account can hold (EIP-2681)."""
+
+DEPLOYERS: Dict[str, Tuple[int, str, int]] = {
+    "CREATE": (0x1FFF4, "CREATE", 1),
+    "CREATE2": (0x1FFF3, "CREATE2", 1),
+    "near_max_nonce": (0x1FFF2, "CREATE", MAX_NONCE - 1),
+    "max_nonce": (0x1FFF1, "CREATE", MAX_NONCE),
+}
+"""Helpers that deploy from the initcode their calldata carries: kind to
+address, creation opcode and starting nonce. Random creations mostly
+cannot afford their own charge: at v25, of 35 CREATEs in 300 seeds, 27
+halted at the opcode and none kept a deployment. A creator at the
+highest nonce must fail its CREATE without deploying; one below it
+deploys once, and is then at the highest itself."""
+
+DEPLOYER_ADDRESSES = {kind: spec[0] for kind, spec in DEPLOYERS.items()}
 
 DEPLOYER_TX_GAS = 1_000_000
 """Gas for a transaction to a deployer: enough for the new account, its
@@ -875,10 +887,10 @@ def generate_fuzzer_output(
         code=Bytes(bytes(exact_charge_child_code())),
     )
     exact_need = exact_charge_child_code().gas_cost(fork)
-    for opcode, deployer in DEPLOYER_ADDRESSES.items():
+    for deployer, opcode, nonce in DEPLOYERS.values():
         accounts[Address(deployer)] = FuzzerAccountInput(
             balance=HexNumber(0),
-            nonce=HexNumber(1),
+            nonce=HexNumber(nonce),
             code=Bytes(deployer_code(opcode)),
         )
     accounts[Address(STATE_FILLER_ADDRESS)] = FuzzerAccountInput(
@@ -976,12 +988,20 @@ def generate_fuzzer_output(
             and DEPLOYER_TX_GAS <= min(tx_gas_cap, budgets[block])
         ):
             to = Address(
-                DEPLOYER_ADDRESSES[rng.choice(domains.deployer_opcodes)]
+                DEPLOYER_ADDRESSES[rng.choice(domains.deployer_kinds)]
             )
             initcode = deployer_initcode(
                 rng.choice(domains.deployer_initcode_words),
                 rng.choice(domains.deployer_code_sizes),
             )
+        elif (
+            rng.random() < domains.max_nonce_deployer_rate
+            and DEPLOYER_TX_GAS <= min(tx_gas_cap, budgets[block])
+        ):
+            to = Address(
+                DEPLOYER_ADDRESSES[rng.choice(("near_max_nonce", "max_nonce"))]
+            )
+            initcode = deployer_initcode(1, 1)
         choices = tx_gas_choices
         if domains.reservoir_tx_gas and rng.random() < RESERVOIR_TX_RATE:
             choices = domains.reservoir_tx_gas + tx_gas_choices
@@ -1071,6 +1091,7 @@ def generate_fuzzer_output(
         )
         nonces[sender] = max(nonces[sender], tx_nonce) + 1
 
+    max_nonce_block = False
     if (
         domains.reservoir_tx_gas
         and rng.random() < domains.near_full_block_rate
@@ -1114,6 +1135,40 @@ def generate_fuzzer_output(
                 )
             )
             nonces[sender] += 1
+
+    elif rng.random() < domains.max_nonce_block_rate:
+        max_nonce_block = True
+    if max_nonce_block:
+        # A block of its own, last: an account one below the highest nonce
+        # sends a transaction, which is valid; when drawn, one at the
+        # highest then sends one, which must be rejected. Never both this
+        # and a near-full block: a case rejects at most one block, its last.
+        block = block_count
+        block_count += 1
+        base_fee = _highest_base_fee(fork, domains, block)
+        senders: List[Tuple[int, Optional[str]]] = [(MAX_NONCE - 1, None)]
+        if rng.random() < domains.max_nonce_rejected_share:
+            senders.append((MAX_NONCE, "NONCE_IS_MAX"))
+        for nonce, error in senders:
+            key = _derive_key(rng)
+            sender = Address(EOA(key=key))
+            accounts[sender] = FuzzerAccountInput(
+                balance=HexNumber(10**20),
+                nonce=HexNumber(nonce),
+                private_key=key,
+            )
+            transactions.append(
+                FuzzerTransactionInput(
+                    **{"from": sender},
+                    block=block,
+                    to=rng.choice(sender_addresses),
+                    gas=HexNumber(tx_gas_choices[0]),
+                    nonce=HexNumber(nonce),
+                    value=HexNumber(1),
+                    error=error,
+                    **_fee_market_fields(rng, base_fee),
+                )
+            )
 
     # The toucher is drawn once the transactions are, so its "other
     # transaction" targets are the senders and targets of transactions

@@ -204,3 +204,141 @@ def test_every_near_full_axis_keeps_all_its_values() -> None:
         if w.startswith("near_full")
     ]
     assert warnings_ == []
+
+
+def _max_nonce_case(nonces: "list[int]") -> FuzzerOutput:
+    """A block of transfers, one from a fresh account at each nonce."""
+    from execution_testing.test_types.account_types import EOA
+
+    from ..fuzzer_bridge.generator import MAX_NONCE
+    from ..fuzzer_bridge.models import FuzzerAccountInput
+
+    case = generate_fuzzer_output(Amsterdam, 0)
+    accounts = dict(case.accounts)
+    (first, *_) = case.transactions
+    transactions = []
+    for i, nonce in enumerate(nonces):
+        key = 0x1000 + i
+        sender = Address(EOA(key=key))
+        accounts[sender] = FuzzerAccountInput(
+            balance=HexNumber(10**20),
+            nonce=HexNumber(nonce),
+            private_key=key,
+        )
+        transactions.append(
+            first.model_copy(
+                update={
+                    "from_": sender,
+                    "to": first.from_,
+                    "gas": HexNumber(100_000),
+                    "nonce": HexNumber(nonce),
+                    "value": HexNumber(1),
+                    "data": Bytes(b""),
+                    "authorization_list": None,
+                    "gas_need_fraction": None,
+                    "block": 0,
+                    "error": "NONCE_IS_MAX" if nonce == MAX_NONCE else None,
+                }
+            )
+        )
+    return case.model_copy(
+        update={
+            "accounts": accounts,
+            "transactions": transactions,
+            "block_count": 1,
+            "withdrawals": [],
+        }
+    )
+
+
+def test_one_below_the_highest_nonce_sends_and_reaches_it() -> None:
+    """
+    An account one below the highest nonce sends; its nonce is then the
+    highest.
+    """
+    from ..fuzzer_bridge.generator import MAX_NONCE
+
+    fixture = _fill(_max_nonce_case([MAX_NONCE - 1]))
+    (block,) = fixture["blocks"]
+    (receipt,) = block["receipts"]
+    assert receipt["status"]
+    nonces = [
+        int(change["postNonce"], 16)
+        for entry in block["blockAccessList"]
+        for change in entry["nonceChanges"]
+    ]
+    assert nonces == [MAX_NONCE]
+
+
+def test_an_account_at_the_highest_nonce_cannot_send() -> None:
+    """The near miss: one more and the transaction is rejected."""
+    from ..fuzzer_bridge.generator import MAX_NONCE
+
+    fixture = _fill(_max_nonce_case([MAX_NONCE - 1, MAX_NONCE]))
+    (block,) = fixture["blocks"]
+    assert block["expectException"] == "TransactionException.NONCE_IS_MAX"
+
+
+@pytest.mark.parametrize(
+    "kind,deploys",
+    [
+        pytest.param("near_max_nonce", True, id="one_below_the_highest"),
+        pytest.param("max_nonce", False, id="at_the_highest"),
+    ],
+)
+def test_a_creator_at_the_highest_nonce_cannot_create(
+    kind: str, deploys: bool
+) -> None:
+    """
+    A creator one below the highest nonce deploys, and is then at it; one
+    at the highest nonce pushes zero and keeps its nonce.
+    """
+    from ..fuzzer_bridge.generator import (
+        DEPLOYER_ADDRESSES,
+        DEPLOYER_TX_GAS,
+        MAX_NONCE,
+        deployer_initcode,
+    )
+
+    creator = Address(DEPLOYER_ADDRESSES[kind])
+    case = generate_fuzzer_output(Amsterdam, 0)
+    (first, *_) = case.transactions
+    tx = first.model_copy(
+        update={
+            "to": creator,
+            "gas": HexNumber(DEPLOYER_TX_GAS),
+            "data": Bytes(deployer_initcode(1, 1)),
+            "value": HexNumber(0),
+            "authorization_list": None,
+            "gas_need_fraction": None,
+            "block": 0,
+        }
+    )
+    fixture = _fill(
+        case.model_copy(
+            update={"transactions": [tx], "block_count": 1, "withdrawals": []}
+        )
+    )
+    entry = _entry(fixture, creator)
+    stored = {
+        int(c["slot"], 16): int(c["slotChanges"][-1]["postValue"], 16)
+        for c in entry["storageChanges"]
+    }
+    nonces = [int(c["postNonce"], 16) for c in entry["nonceChanges"]]
+    if deploys:
+        assert stored[1] != 0
+        assert nonces == [MAX_NONCE]
+    else:
+        assert stored.get(1, 0) == 0
+        assert nonces == []
+
+
+def test_every_max_nonce_axis_keeps_all_its_values() -> None:
+    """Presence, one below alone, and with the rejection stay drawn."""
+    coverage = axis_coverage(Amsterdam, range(0, 400))
+    warnings_ = [
+        w
+        for w in axis_collapse_warnings(coverage)
+        if w.startswith("max_nonce")
+    ]
+    assert warnings_ == []

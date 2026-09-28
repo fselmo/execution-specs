@@ -295,13 +295,24 @@ class ValueDomains:
     """Share of transactions sent to a deployer, which creates from a
     small initcode and stops. At v25, of 35 CREATEs in 300 seeds, none
     kept a deployment."""
-    deployer_opcodes: Tuple[str, ...] = ("CREATE", "CREATE2")
+    deployer_kinds: Tuple[str, ...] = ("CREATE", "CREATE2")
     """Which creation opcode the deployer uses."""
+    max_nonce_deployer_rate: float = 0.03
+    """Share of transactions sent to a CREATE deployer one below or at the
+    highest nonce, where CREATE must fail without deploying. Drawn apart
+    from the other deployers, so their kept deployments are not diluted."""
     deployer_initcode_words: Tuple[int, ...] = (0, 1, 2, 4)
     """Initcode size in words: zero is empty initcode, with no initcode
     charge; the rest are affordable."""
     deployer_code_sizes: Tuple[int, ...] = (0, 1, 32)
     """Bytes of code the initcode deploys."""
+    max_nonce_block_rate: float = 0.08
+    """Share of cases ending in a block where an account one below the
+    highest nonce sends a transaction. At v20 generated nonces started at
+    0, 1 or 3, so the nonce cap was never near."""
+    max_nonce_rejected_share: float = 0.5
+    """Share of those blocks where an account at the highest nonce then
+    sends one, which must be rejected."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays

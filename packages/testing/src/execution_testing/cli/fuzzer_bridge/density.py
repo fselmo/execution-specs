@@ -379,12 +379,12 @@ def _tally_deployer(case: Any, tally: Dict[str, Counter]) -> None:
 
     from .generator import DEPLOYER_ADDRESSES
 
-    by_address = {Address(a): op for op, a in DEPLOYER_ADDRESSES.items()}
+    by_address = {Address(a): k for k, a in DEPLOYER_ADDRESSES.items()}
     owned = [tx for tx in case.transactions if tx.to in by_address]
     tally["deployer_tx"]["present" if owned else "absent"] += 1
     for tx in owned:
         assert tx.to is not None
-        tally["deployer_opcode"][by_address[tx.to]] += 1
+        tally["deployer_kind"][by_address[tx.to]] += 1
         tally["deployer_initcode"][
             "empty" if not bytes(tx.data) else "nonempty"
         ] += 1
@@ -438,7 +438,9 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "near_full_stores": Counter(),
         "near_full_margin": Counter(),
         "deployer_tx": Counter(),
-        "deployer_opcode": Counter(),
+        "deployer_kind": Counter(),
+        "max_nonce_block": Counter(),
+        "max_nonce_rejected": Counter(),
         "deployer_initcode": Counter(),
     }
     reads = _blockhash_signatures()
@@ -527,6 +529,11 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         _tally_creation(case, tally)
         _tally_near_full(case, fork, tally)
         _tally_deployer(case, tally)
+        maxed = [tx for tx in case.transactions if int(tx.nonce) >= 2**64 - 2]
+        tally["max_nonce_block"]["present" if maxed else "absent"] += 1
+        if maxed:
+            rejected = any(tx.error for tx in maxed)
+            tally["max_nonce_rejected"]["yes" if rejected else "no"] += 1
         for tx in case.transactions:
             target = (
                 int.from_bytes(bytes(tx.to), "big")
@@ -675,7 +682,9 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "near_full_stores": ("150", "160"),
     "near_full_margin": ("exact", "over"),
     "deployer_tx": ("present", "absent"),
-    "deployer_opcode": ("CREATE", "CREATE2"),
+    "deployer_kind": ("CREATE", "CREATE2", "near_max_nonce", "max_nonce"),
+    "max_nonce_block": ("present", "absent"),
+    "max_nonce_rejected": ("yes", "no"),
     "deployer_initcode": ("empty", "nonempty"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
