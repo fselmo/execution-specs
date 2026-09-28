@@ -8,6 +8,7 @@ from typing import List, Optional, Sequence
 import click
 
 from .held_out import (
+    AMSTERDAM_STRATA,
     DEFAULT_STRATA,
     check_held_out,
     freeze_held_out,
@@ -164,6 +165,16 @@ from .shapes import SHAPES
     help="Mutants per stratum when freezing a held-out set.",
 )
 @click.option(
+    "--held-out-strata",
+    type=click.Choice(["v20", "amsterdam"]),
+    default="v20",
+    show_default=True,
+    help=(
+        "Strata to freeze from: v20's four modules, or the Amsterdam "
+        "surfaces with a classic slice."
+    ),
+)
+@click.option(
     "--held-out-index",
     "held_out_indices",
     type=int,
@@ -206,6 +217,7 @@ def mutate(
     held_out_path: Optional[Path],
     held_out_check_path: Optional[Path],
     held_out_per_stratum: int,
+    held_out_strata: str,
     held_out_indices: Sequence[int],
     liveness: bool,
     held_out_summaries: Optional[Path],
@@ -235,7 +247,11 @@ def mutate(
         return
     if freeze_held_out_path is not None:
         freeze_held_out(
-            list(DEFAULT_STRATA),
+            list(
+                AMSTERDAM_STRATA
+                if held_out_strata == "amsterdam"
+                else DEFAULT_STRATA
+            ),
             freeze_held_out_path,
             per_stratum=held_out_per_stratum,
             seed=seed,

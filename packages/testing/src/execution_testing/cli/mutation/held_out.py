@@ -11,10 +11,12 @@ silent empty set. This mirrors the loud-anchor rule the named shapes use.
 
 from __future__ import annotations
 
+import ast
 import json
 import random
 import tempfile
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -39,11 +41,17 @@ _AMSTERDAM = "src/ethereum/forks/amsterdam"
 
 @dataclass(frozen=True)
 class Stratum:
-    """A named spec module to draw held-out mutants from."""
+    """A named spec module, or some of its functions, to draw from."""
 
     name: str
     module: str
     operators: Tuple[str, ...]
+    functions: Optional[Tuple[str, ...]] = None
+    """Draw only from constructs inside these top-level functions; the
+    whole module when None. Used only when freezing: a frozen mutant is
+    anchored on its construct, never on the function it was drawn from."""
+    count: Optional[int] = None
+    """Mutants to draw from this stratum; `per_stratum` when None."""
 
 
 @dataclass(frozen=True)
@@ -76,6 +84,144 @@ DEFAULT_STRATA: Tuple[Stratum, ...] = (
     ),
 )
 
+_OPERATORS = ("binop", "compare", "boolop", "unary-not")
+
+AMSTERDAM_STRATA: Tuple[Stratum, ...] = (
+    # The fork's own surfaces.
+    Stratum(
+        "bal-builder",
+        f"{_AMSTERDAM}/block_access_lists.py",
+        _OPERATORS,
+        count=14,
+    ),
+    Stratum(
+        "bal-tracker", f"{_AMSTERDAM}/state_tracker.py", _OPERATORS, count=12
+    ),
+    Stratum(
+        "state-gas",
+        f"{_AMSTERDAM}/vm/gas.py",
+        _OPERATORS,
+        functions=(
+            "charge_state_gas_from_meter",
+            "charge_state_gas",
+            "commit_state_gas",
+            "restore_state_gas",
+            "restore_state_gas_to_entry",
+            "tx_state_gas_used",
+            "credit_state_gas_refund",
+            "repay_state_gas_spill",
+            "forfeit_remaining_gas",
+            "withhold_create_gas",
+            "drain_state_gas_reservoir",
+            "restore_child_gas",
+            "allocate_evm_gas",
+            "settle_transaction_gas",
+            "check_block_gas_capacity",
+        ),
+        count=14,
+    ),
+    Stratum(
+        "transaction",
+        f"{_AMSTERDAM}/fork.py",
+        _OPERATORS,
+        functions=(
+            "check_transaction",
+            "process_transaction",
+            "disburse_gas_fees",
+            "update_sender_state",
+            "make_receipt",
+        ),
+        count=8,
+    ),
+    Stratum(
+        "system-calls",
+        f"{_AMSTERDAM}/fork.py",
+        _OPERATORS,
+        functions=(
+            "process_checked_system_transaction",
+            "process_unchecked_system_transaction",
+            "process_general_purpose_requests",
+            "apply_body",
+        ),
+        count=8,
+    ),
+    Stratum("requests", f"{_AMSTERDAM}/requests.py", _OPERATORS, count=4),
+    Stratum(
+        "delegation",
+        f"{_AMSTERDAM}/vm/eoa_delegation.py",
+        _OPERATORS,
+        count=10,
+    ),
+    Stratum(
+        "blocks-withdrawals",
+        f"{_AMSTERDAM}/fork.py",
+        _OPERATORS,
+        functions=(
+            "state_transition",
+            "validate_header",
+            "calculate_base_fee_per_gas",
+            "get_last_256_block_hashes",
+            "execute_block",
+            "process_withdrawals",
+            "check_gas_limit",
+        ),
+        count=10,
+    ),
+    # Classic EVM, so regressions there still show.
+    Stratum(
+        "evm-system-ops",
+        f"{_AMSTERDAM}/vm/instructions/system.py",
+        _OPERATORS,
+        count=6,
+    ),
+    Stratum(
+        "evm-environment",
+        f"{_AMSTERDAM}/vm/instructions/environment.py",
+        _OPERATORS,
+        count=4,
+    ),
+    Stratum(
+        "evm-interpreter",
+        f"{_AMSTERDAM}/vm/interpreter.py",
+        _OPERATORS,
+        count=4,
+    ),
+    Stratum(
+        "evm-gas",
+        f"{_AMSTERDAM}/vm/gas.py",
+        _OPERATORS,
+        functions=(
+            "check_gas",
+            "charge_gas_from_meter",
+            "charge_gas",
+            "calculate_memory_gas_cost",
+            "calculate_gas_extend_memory",
+            "calculate_message_call_gas",
+            "max_message_call_gas",
+            "init_code_cost",
+        ),
+        count=4,
+    ),
+    Stratum(
+        "evm-arithmetic",
+        f"{_AMSTERDAM}/vm/instructions/arithmetic.py",
+        _OPERATORS,
+        count=4,
+    ),
+)
+"""The v26 held-out strata: weighted toward the Amsterdam surfaces, with a
+slice of classic EVM modules so a regression there still shows."""
+
+
+def _top_level_function(source: str, lineno: int) -> Optional[str]:
+    """The name of the top-level function holding ``lineno``, if any."""
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef) and node.lineno <= lineno <= (
+            node.end_lineno or node.lineno
+        ):
+            return node.name
+    return None
+
 
 class HeldOutDriftError(Exception):
     """A frozen mutant no longer resolves against current spec source."""
@@ -96,8 +242,27 @@ def stratified_mutants(
     for stratum, source in sources.items():
         seen: set[Tuple[str, str, str]] = set()
         candidates: List[Mutant] = []
-        for mutant in enumerate_mutants(source):
+        everywhere = enumerate_mutants(source)
+        # `resolve` takes a construct's first occurrence; one that occurs
+        # twice could resolve outside the function it was drawn from.
+        ambiguous = {
+            identity
+            for identity, n in Counter(map(_identity, everywhere)).items()
+            if n > 1
+        }
+        for mutant in everywhere:
+            if (
+                stratum.functions is not None
+                and _identity(mutant) in ambiguous
+            ):
+                continue
             if mutant.operator not in stratum.operators:
+                continue
+            if (
+                stratum.functions is not None
+                and _top_level_function(source, mutant.lineno)
+                not in stratum.functions
+            ):
                 continue
             identity = _identity(mutant)
             if identity in seen:
@@ -113,7 +278,7 @@ def stratified_mutants(
                 mutant.original,
                 mutant.mutated,
             )
-            for mutant in candidates[:per_stratum]
+            for mutant in candidates[: stratum.count or per_stratum]
         ]
     return picked
 
@@ -146,6 +311,8 @@ def freeze_held_out(
                 "name": s.name,
                 "module": s.module,
                 "operators": list(s.operators),
+                **({"functions": list(s.functions)} if s.functions else {}),
+                **({"count": s.count} if s.count else {}),
             }
             for s in strata
         ],

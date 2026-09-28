@@ -331,3 +331,22 @@ def test_liveness_splits_survivors_by_the_remedy_they_need() -> None:
     tallies[2].executions_differing = 0
     tallies[2].crashed = 1
     assert tallies[2].verdict.startswith("reached, crashes")
+
+
+def test_a_stratum_can_draw_from_named_functions_only() -> None:
+    """
+    Only constructs inside the named functions are drawn, up to the
+    stratum's own count, and a construct that also occurs elsewhere in the
+    module is skipped: its anchor could resolve outside the function.
+    """
+    source = (
+        "def wanted(a, b):\n    return a + b - (a * b)\n\n"
+        "def other(a, b):\n    return a * b\n"
+    )
+    stratum = Stratum("s", "m.py", ("binop",), functions=("wanted",), count=5)
+    picked = stratified_mutants({stratum: source}, per_stratum=1, seed=0)
+    originals = {h.original for h in picked}
+    assert originals == {"a + b - (a * b)", "a + b"}
+    held = picked[0]
+    mutant = resolve(held, source)
+    assert mutant is not None and mutant.lineno == 2

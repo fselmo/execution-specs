@@ -1,0 +1,914 @@
+{
+  "seed": 26,
+  "per_stratum": 8,
+  "strata": [
+    {
+      "name": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "count": 14
+    },
+    {
+      "name": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "count": 12
+    },
+    {
+      "name": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "functions": [
+        "charge_state_gas_from_meter",
+        "charge_state_gas",
+        "commit_state_gas",
+        "restore_state_gas",
+        "restore_state_gas_to_entry",
+        "tx_state_gas_used",
+        "credit_state_gas_refund",
+        "repay_state_gas_spill",
+        "forfeit_remaining_gas",
+        "withhold_create_gas",
+        "drain_state_gas_reservoir",
+        "restore_child_gas",
+        "allocate_evm_gas",
+        "settle_transaction_gas",
+        "check_block_gas_capacity"
+      ],
+      "count": 14
+    },
+    {
+      "name": "transaction",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "functions": [
+        "check_transaction",
+        "process_transaction",
+        "disburse_gas_fees",
+        "update_sender_state",
+        "make_receipt"
+      ],
+      "count": 8
+    },
+    {
+      "name": "system-calls",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "functions": [
+        "process_checked_system_transaction",
+        "process_unchecked_system_transaction",
+        "process_general_purpose_requests",
+        "apply_body"
+      ],
+      "count": 8
+    },
+    {
+      "name": "requests",
+      "module": "src/ethereum/forks/amsterdam/requests.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "count": 4
+    },
+    {
+      "name": "delegation",
+      "module": "src/ethereum/forks/amsterdam/vm/eoa_delegation.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "count": 10
+    },
+    {
+      "name": "blocks-withdrawals",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "functions": [
+        "state_transition",
+        "validate_header",
+        "calculate_base_fee_per_gas",
+        "get_last_256_block_hashes",
+        "execute_block",
+        "process_withdrawals",
+        "check_gas_limit"
+      ],
+      "count": 10
+    },
+    {
+      "name": "evm-system-ops",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/system.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "count": 6
+    },
+    {
+      "name": "evm-environment",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/environment.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "count": 4
+    },
+    {
+      "name": "evm-interpreter",
+      "module": "src/ethereum/forks/amsterdam/vm/interpreter.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "count": 4
+    },
+    {
+      "name": "evm-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "functions": [
+        "check_gas",
+        "charge_gas_from_meter",
+        "charge_gas",
+        "calculate_memory_gas_cost",
+        "calculate_gas_extend_memory",
+        "calculate_message_call_gas",
+        "max_message_call_gas",
+        "init_code_cost"
+      ],
+      "count": 4
+    },
+    {
+      "name": "evm-arithmetic",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/arithmetic.py",
+      "operators": [
+        "binop",
+        "compare",
+        "boolop",
+        "unary-not"
+      ],
+      "count": 4
+    }
+  ],
+  "mutants": [
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "address in pre_tx_accounts",
+      "mutated": "address not in pre_tx_accounts"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "bal_items > block_gas_limit // GasCosts.BLOCK_ACCESS_LIST_ITEM",
+      "mutated": "bal_items >= block_gas_limit // GasCosts.BLOCK_ACCESS_LIST_ITEM"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "pre_balance != post_balance",
+      "mutated": "pre_balance == post_balance"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "address in block_state.storage_writes",
+      "mutated": "address not in block_state.storage_writes"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "existing_change.block_access_index == block_access_index",
+      "mutated": "existing_change.block_access_index != block_access_index"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "bal_items > block_gas_limit // GasCosts.BLOCK_ACCESS_LIST_ITEM",
+      "mutated": "bal_items < block_gas_limit // GasCosts.BLOCK_ACCESS_LIST_ITEM"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "key not in builder.index_start_accounts",
+      "mutated": "key in builder.index_start_accounts"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "key in block_state.storage_writes[address]",
+      "mutated": "key not in block_state.storage_writes[address]"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "address in block_state.storage_clears",
+      "mutated": "address not in block_state.storage_clears"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "index_key not in builder.index_start_storage",
+      "mutated": "index_key in builder.index_start_storage"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "address not in builder.accounts",
+      "mutated": "address in builder.accounts"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "new_nonce > existing.new_nonce",
+      "mutated": "new_nonce < existing.new_nonce"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "existing.block_access_index == block_access_index",
+      "mutated": "existing.block_access_index != block_access_index"
+    },
+    {
+      "stratum": "bal-builder",
+      "module": "src/ethereum/forks/amsterdam/block_access_lists.py",
+      "operator": "compare",
+      "original": "pre_nonce != post_nonce",
+      "mutated": "pre_nonce == post_nonce"
+    },
+    {
+      "stratum": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operator": "compare",
+      "original": "get_account_optional(tx_state, address) is not None",
+      "mutated": "get_account_optional(tx_state, address) is None"
+    },
+    {
+      "stratum": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operator": "compare",
+      "original": "account.nonce == Uint(0)",
+      "mutated": "account.nonce != Uint(0)"
+    },
+    {
+      "stratum": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operator": "compare",
+      "original": "address in tx_state.parent.storage_clears",
+      "mutated": "address not in tx_state.parent.storage_clears"
+    },
+    {
+      "stratum": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operator": "compare",
+      "original": "account is None",
+      "mutated": "account is not None"
+    },
+    {
+      "stratum": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operator": "compare",
+      "original": "code_hash in tx_state.parent.code_writes",
+      "mutated": "code_hash not in tx_state.parent.code_writes"
+    },
+    {
+      "stratum": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operator": "compare",
+      "original": "value == U256(0)",
+      "mutated": "value != U256(0)"
+    },
+    {
+      "stratum": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operator": "compare",
+      "original": "account.nonce != Uint(0)",
+      "mutated": "account.nonce == Uint(0)"
+    },
+    {
+      "stratum": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operator": "compare",
+      "original": "address in tx_state.created_accounts",
+      "mutated": "address not in tx_state.created_accounts"
+    },
+    {
+      "stratum": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operator": "compare",
+      "original": "account != EMPTY_ACCOUNT",
+      "mutated": "account == EMPTY_ACCOUNT"
+    },
+    {
+      "stratum": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operator": "compare",
+      "original": "key in tx_state.parent.storage_writes[address]",
+      "mutated": "key not in tx_state.parent.storage_writes[address]"
+    },
+    {
+      "stratum": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operator": "compare",
+      "original": "address in tx_state.storage_writes",
+      "mutated": "address not in tx_state.storage_writes"
+    },
+    {
+      "stratum": "bal-tracker",
+      "module": "src/ethereum/forks/amsterdam/state_tracker.py",
+      "operator": "boolop",
+      "original": "account is not None\n        and account.nonce == Uint(0)\n        and account.code_hash == EMPTY_CODE_HASH\n        and account.balance == 0",
+      "mutated": "account is not None or account.nonce == Uint(0) or account.code_hash == EMPTY_CODE_HASH or (account.balance == 0)"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "binop",
+      "original": "gas_meter.gas_left + Uint(from_gas_left)",
+      "mutated": "gas_meter.gas_left - Uint(from_gas_left)"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "boolop",
+      "original": "gas_meter.state_gas_left == Uint(0) or (\n        gas_meter.state_gas_spilled == Uint(0)\n    )",
+      "mutated": "gas_meter.state_gas_left == Uint(0) and gas_meter.state_gas_spilled == Uint(0)"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "binop",
+      "original": "tx_gas - gas_left - state_gas_left",
+      "mutated": "tx_gas - gas_left + state_gas_left"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "compare",
+      "original": "Uint(gas_meter.state_gas_left) + Uint(gas_meter.gas_left) >= amount",
+      "mutated": "Uint(gas_meter.state_gas_left) + Uint(gas_meter.gas_left) > amount"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "binop",
+      "original": "gas_meter.gas_left + Uint(repayment)",
+      "mutated": "gas_meter.gas_left - Uint(repayment)"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "compare",
+      "original": "min(GasCosts.TX_MAX_GAS_LIMIT, tx_gas) > execution_gas_available",
+      "mutated": "min(GasCosts.TX_MAX_GAS_LIMIT, tx_gas) < execution_gas_available"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "binop",
+      "original": "block_env.block_gas_limit - block_output.block_gas_used",
+      "mutated": "block_env.block_gas_limit + block_output.block_gas_used"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "binop",
+      "original": "gas_used_before_refund - gas_refund",
+      "mutated": "gas_used_before_refund + gas_refund"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "binop",
+      "original": "tx_gas - gas_used",
+      "mutated": "tx_gas + gas_used"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "compare",
+      "original": "gas_meter.state_gas_left >= amount",
+      "mutated": "gas_meter.state_gas_left > amount"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "compare",
+      "original": "tx_blob_gas > blob_gas_available",
+      "mutated": "tx_blob_gas < blob_gas_available"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "compare",
+      "original": "gas_meter.state_gas_left == Uint(0)",
+      "mutated": "gas_meter.state_gas_left != Uint(0)"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "binop",
+      "original": "tx_gas - Uint(intrinsic.execution)",
+      "mutated": "tx_gas + Uint(intrinsic.execution)"
+    },
+    {
+      "stratum": "state-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "binop",
+      "original": "gas_meter.gas_left\n        + Uint(gas_meter.state_gas_spilled)\n        + Uint(gas_meter.state_gas_committed_spill)",
+      "mutated": "gas_meter.gas_left + Uint(gas_meter.state_gas_spilled) - Uint(gas_meter.state_gas_committed_spill)"
+    },
+    {
+      "stratum": "transaction",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "boolop",
+      "original": "sender_account.code_hash != EMPTY_CODE_HASH and not is_valid_delegation(\n        sender_code\n    )",
+      "mutated": "sender_account.code_hash != EMPTY_CODE_HASH or not is_valid_delegation(sender_code)"
+    },
+    {
+      "stratum": "transaction",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "binop",
+      "original": "tx_env.effective_gas_price - block_env.base_fee_per_gas",
+      "mutated": "tx_env.effective_gas_price + block_env.base_fee_per_gas"
+    },
+    {
+      "stratum": "transaction",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "binop",
+      "original": "tx_env.gas_limit * tx_env.effective_gas_price",
+      "mutated": "tx_env.gas_limit // tx_env.effective_gas_price"
+    },
+    {
+      "stratum": "transaction",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "sender_account.code_hash != EMPTY_CODE_HASH",
+      "mutated": "sender_account.code_hash == EMPTY_CODE_HASH"
+    },
+    {
+      "stratum": "transaction",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "boolop",
+      "original": "is_create or tx.value > U256(0)",
+      "mutated": "is_create and tx.value > U256(0)"
+    },
+    {
+      "stratum": "transaction",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "binop",
+      "original": "settlement.gas_left * tx_env.effective_gas_price",
+      "mutated": "settlement.gas_left // tx_env.effective_gas_price"
+    },
+    {
+      "stratum": "transaction",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "tx_chain_id is not None",
+      "mutated": "tx_chain_id is None"
+    },
+    {
+      "stratum": "transaction",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "binop",
+      "original": "index + Uint(1)",
+      "mutated": "index - Uint(1)"
+    },
+    {
+      "stratum": "system-calls",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "len(deposit_requests) > 0",
+      "mutated": "len(deposit_requests) < 0"
+    },
+    {
+      "stratum": "system-calls",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "len(system_withdrawal_tx_output.return_data) > 0",
+      "mutated": "len(system_withdrawal_tx_output.return_data) < 0"
+    },
+    {
+      "stratum": "system-calls",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "len(system_contract_code) == 0",
+      "mutated": "len(system_contract_code) != 0"
+    },
+    {
+      "stratum": "system-calls",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "binop",
+      "original": "WITHDRAWAL_REQUEST_TYPE + system_withdrawal_tx_output.return_data",
+      "mutated": "WITHDRAWAL_REQUEST_TYPE - system_withdrawal_tx_output.return_data"
+    },
+    {
+      "stratum": "system-calls",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "binop",
+      "original": "LegacyTransaction | Bytes",
+      "mutated": "LegacyTransaction & Bytes"
+    },
+    {
+      "stratum": "system-calls",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "binop",
+      "original": "BUILDER_EXIT_REQUEST_TYPE\n            + system_builder_exit_tx_output.return_data",
+      "mutated": "BUILDER_EXIT_REQUEST_TYPE - system_builder_exit_tx_output.return_data"
+    },
+    {
+      "stratum": "system-calls",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "len(system_consolidation_tx_output.return_data) > 0",
+      "mutated": "len(system_consolidation_tx_output.return_data) >= 0"
+    },
+    {
+      "stratum": "system-calls",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "binop",
+      "original": "StateGasCosts.STORAGE_SET * SYSTEM_MAX_SSTORES_PER_CALL",
+      "mutated": "StateGasCosts.STORAGE_SET // SYSTEM_MAX_SSTORES_PER_CALL"
+    },
+    {
+      "stratum": "requests",
+      "module": "src/ethereum/forks/amsterdam/requests.py",
+      "operator": "binop",
+      "original": "withdrawal_credentials_offset\n        + Uint(32)",
+      "mutated": "withdrawal_credentials_offset - Uint(32)"
+    },
+    {
+      "stratum": "requests",
+      "module": "src/ethereum/forks/amsterdam/requests.py",
+      "operator": "binop",
+      "original": "signature_offset\n        + Uint(32)",
+      "mutated": "signature_offset - Uint(32)"
+    },
+    {
+      "stratum": "requests",
+      "module": "src/ethereum/forks/amsterdam/requests.py",
+      "operator": "compare",
+      "original": "pubkey_offset != PUBKEY_OFFSET",
+      "mutated": "pubkey_offset == PUBKEY_OFFSET"
+    },
+    {
+      "stratum": "requests",
+      "module": "src/ethereum/forks/amsterdam/requests.py",
+      "operator": "binop",
+      "original": "signature_offset + Uint(32)",
+      "mutated": "signature_offset - Uint(32)"
+    },
+    {
+      "stratum": "delegation",
+      "module": "src/ethereum/forks/amsterdam/vm/eoa_delegation.py",
+      "operator": "compare",
+      "original": "delegated_address in accessed_addresses",
+      "mutated": "delegated_address not in accessed_addresses"
+    },
+    {
+      "stratum": "delegation",
+      "module": "src/ethereum/forks/amsterdam/vm/eoa_delegation.py",
+      "operator": "unary-not",
+      "original": "not delegated_before_tx",
+      "mutated": "delegated_before_tx"
+    },
+    {
+      "stratum": "delegation",
+      "module": "src/ethereum/forks/amsterdam/vm/eoa_delegation.py",
+      "operator": "compare",
+      "original": "U256(0) >= s",
+      "mutated": "U256(0) <= s"
+    },
+    {
+      "stratum": "delegation",
+      "module": "src/ethereum/forks/amsterdam/vm/eoa_delegation.py",
+      "operator": "boolop",
+      "original": "U256(0) >= r or r >= SECP256K1N",
+      "mutated": "U256(0) >= r and r >= SECP256K1N"
+    },
+    {
+      "stratum": "delegation",
+      "module": "src/ethereum/forks/amsterdam/vm/eoa_delegation.py",
+      "operator": "compare",
+      "original": "r >= SECP256K1N",
+      "mutated": "r <= SECP256K1N"
+    },
+    {
+      "stratum": "delegation",
+      "module": "src/ethereum/forks/amsterdam/vm/eoa_delegation.py",
+      "operator": "binop",
+      "original": "SECP256K1N // U256(2)",
+      "mutated": "SECP256K1N * U256(2)"
+    },
+    {
+      "stratum": "delegation",
+      "module": "src/ethereum/forks/amsterdam/vm/eoa_delegation.py",
+      "operator": "boolop",
+      "original": "U256(0) >= s or s > SECP256K1N // U256(2)",
+      "mutated": "U256(0) >= s and s > SECP256K1N // U256(2)"
+    },
+    {
+      "stratum": "delegation",
+      "module": "src/ethereum/forks/amsterdam/vm/eoa_delegation.py",
+      "operator": "compare",
+      "original": "y_parity not in (0, 1)",
+      "mutated": "y_parity in (0, 1)"
+    },
+    {
+      "stratum": "delegation",
+      "module": "src/ethereum/forks/amsterdam/vm/eoa_delegation.py",
+      "operator": "unary-not",
+      "original": "not account_exists(tx_state, authority)",
+      "mutated": "account_exists(tx_state, authority)"
+    },
+    {
+      "stratum": "delegation",
+      "module": "src/ethereum/forks/amsterdam/vm/eoa_delegation.py",
+      "operator": "unary-not",
+      "original": "not is_valid_delegation(authority_code)",
+      "mutated": "is_valid_delegation(authority_code)"
+    },
+    {
+      "stratum": "blocks-withdrawals",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "parent_gas_used > parent_gas_target",
+      "mutated": "parent_gas_used >= parent_gas_target"
+    },
+    {
+      "stratum": "blocks-withdrawals",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "header.number != parent_header.number + Uint(1)",
+      "mutated": "header.number == parent_header.number + Uint(1)"
+    },
+    {
+      "stratum": "blocks-withdrawals",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "len(rlp.encode(block)) > MAX_RLP_BLOCK_SIZE",
+      "mutated": "len(rlp.encode(block)) < MAX_RLP_BLOCK_SIZE"
+    },
+    {
+      "stratum": "blocks-withdrawals",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "header.timestamp <= parent_header.timestamp",
+      "mutated": "header.timestamp < parent_header.timestamp"
+    },
+    {
+      "stratum": "blocks-withdrawals",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "binop",
+      "original": "parent_base_fee_per_gas - base_fee_per_gas_delta",
+      "mutated": "parent_base_fee_per_gas + base_fee_per_gas_delta"
+    },
+    {
+      "stratum": "blocks-withdrawals",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "parent_gas_used > parent_gas_target",
+      "mutated": "parent_gas_used < parent_gas_target"
+    },
+    {
+      "stratum": "blocks-withdrawals",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "header.gas_used > header.gas_limit",
+      "mutated": "header.gas_used < header.gas_limit"
+    },
+    {
+      "stratum": "blocks-withdrawals",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "receipt_root != block.header.receipt_root",
+      "mutated": "receipt_root == block.header.receipt_root"
+    },
+    {
+      "stratum": "blocks-withdrawals",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "requests_hash != block.header.requests_hash",
+      "mutated": "requests_hash == block.header.requests_hash"
+    },
+    {
+      "stratum": "blocks-withdrawals",
+      "module": "src/ethereum/forks/amsterdam/fork.py",
+      "operator": "compare",
+      "original": "gas_limit < GasCosts.LIMIT_MINIMUM",
+      "mutated": "gas_limit > GasCosts.LIMIT_MINIMUM"
+    },
+    {
+      "stratum": "evm-system-ops",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/system.py",
+      "operator": "compare",
+      "original": "memory_size > U256(MAX_INIT_CODE_SIZE)",
+      "mutated": "memory_size >= U256(MAX_INIT_CODE_SIZE)"
+    },
+    {
+      "stratum": "evm-system-ops",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/system.py",
+      "operator": "binop",
+      "original": "b\"\\x00\" * extend_memory.expand_by",
+      "mutated": "b'\\x00' // extend_memory.expand_by"
+    },
+    {
+      "stratum": "evm-system-ops",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/system.py",
+      "operator": "compare",
+      "original": "sender_balance < value",
+      "mutated": "sender_balance > value"
+    },
+    {
+      "stratum": "evm-system-ops",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/system.py",
+      "operator": "compare",
+      "original": "evm.depth + Uint(1) > STACK_DEPTH_LIMIT",
+      "mutated": "evm.depth + Uint(1) < STACK_DEPTH_LIMIT"
+    },
+    {
+      "stratum": "evm-system-ops",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/system.py",
+      "operator": "unary-not",
+      "original": "not is_account_alive(tx_state, beneficiary)",
+      "mutated": "is_account_alive(tx_state, beneficiary)"
+    },
+    {
+      "stratum": "evm-system-ops",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/system.py",
+      "operator": "compare",
+      "original": "to not in evm.accessed_addresses",
+      "mutated": "to in evm.accessed_addresses"
+    },
+    {
+      "stratum": "evm-environment",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/environment.py",
+      "operator": "binop",
+      "original": "b\"\\x00\" * extend_memory.expand_by",
+      "mutated": "b'\\x00' // extend_memory.expand_by"
+    },
+    {
+      "stratum": "evm-environment",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/environment.py",
+      "operator": "binop",
+      "original": "GasCosts.OPCODE_RETURNDATACOPY_PER_WORD * words",
+      "mutated": "GasCosts.OPCODE_RETURNDATACOPY_PER_WORD // words"
+    },
+    {
+      "stratum": "evm-environment",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/environment.py",
+      "operator": "compare",
+      "original": "Uint(return_data_start_position) + Uint(size) > ulen(evm.return_data)",
+      "mutated": "Uint(return_data_start_position) + Uint(size) >= ulen(evm.return_data)"
+    },
+    {
+      "stratum": "evm-environment",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/environment.py",
+      "operator": "binop",
+      "original": "GasCosts.OPCODE_CODECOPY_BASE + copy_gas_cost",
+      "mutated": "GasCosts.OPCODE_CODECOPY_BASE - copy_gas_cost"
+    },
+    {
+      "stratum": "evm-interpreter",
+      "module": "src/ethereum/forks/amsterdam/vm/interpreter.py",
+      "operator": "compare",
+      "original": "evm.depth > STACK_DEPTH_LIMIT",
+      "mutated": "evm.depth < STACK_DEPTH_LIMIT"
+    },
+    {
+      "stratum": "evm-interpreter",
+      "module": "src/ethereum/forks/amsterdam/vm/interpreter.py",
+      "operator": "binop",
+      "original": "GasCosts.OPCODE_KECCAK256_PER_WORD\n                * ceil32(ulen(contract_code))\n                // Uint(32)",
+      "mutated": "GasCosts.OPCODE_KECCAK256_PER_WORD * ceil32(ulen(contract_code)) * Uint(32)"
+    },
+    {
+      "stratum": "evm-interpreter",
+      "module": "src/ethereum/forks/amsterdam/vm/interpreter.py",
+      "operator": "binop",
+      "original": "int(tx_env.execution_gas_grant) - int(gas_meter.gas_left)",
+      "mutated": "int(tx_env.execution_gas_grant) + int(gas_meter.gas_left)"
+    },
+    {
+      "stratum": "evm-interpreter",
+      "module": "src/ethereum/forks/amsterdam/vm/interpreter.py",
+      "operator": "compare",
+      "original": "evm.caller != evm.current_target",
+      "mutated": "evm.caller == evm.current_target"
+    },
+    {
+      "stratum": "evm-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "binop",
+      "original": "gas_left - memory_cost - extra_gas",
+      "mutated": "gas_left - memory_cost + extra_gas"
+    },
+    {
+      "stratum": "evm-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "compare",
+      "original": "evm.gas_meter.gas_left < amount",
+      "mutated": "evm.gas_meter.gas_left > amount"
+    },
+    {
+      "stratum": "evm-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "binop",
+      "original": "extra_gas + memory_cost",
+      "mutated": "extra_gas - memory_cost"
+    },
+    {
+      "stratum": "evm-gas",
+      "module": "src/ethereum/forks/amsterdam/vm/gas.py",
+      "operator": "binop",
+      "original": "total_cost - already_paid",
+      "mutated": "total_cost + already_paid"
+    },
+    {
+      "stratum": "evm-arithmetic",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/arithmetic.py",
+      "operator": "binop",
+      "original": "bytearray([0xFF] * num_bytes_prepend) + value_bytes",
+      "mutated": "bytearray([255] * num_bytes_prepend) - value_bytes"
+    },
+    {
+      "stratum": "evm-arithmetic",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/arithmetic.py",
+      "operator": "binop",
+      "original": "x * y",
+      "mutated": "x // y"
+    },
+    {
+      "stratum": "evm-arithmetic",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/arithmetic.py",
+      "operator": "compare",
+      "original": "byte_num > U256(31)",
+      "mutated": "byte_num >= U256(31)"
+    },
+    {
+      "stratum": "evm-arithmetic",
+      "module": "src/ethereum/forks/amsterdam/vm/instructions/arithmetic.py",
+      "operator": "compare",
+      "original": "sign_bit == 0",
+      "mutated": "sign_bit != 0"
+    }
+  ]
+}
