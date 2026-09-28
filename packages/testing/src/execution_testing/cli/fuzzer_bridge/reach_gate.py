@@ -31,6 +31,7 @@ from typing import (
     FrozenSet,
     List,
     Optional,
+    Sequence,
     Set,
     Tuple,
 )
@@ -717,19 +718,14 @@ def _target_label(target: Tuple[str, Any]) -> str:
     return "|".join([kind, *map(str, name)])
 
 
-def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
+def _gate_items(fork_name: str, seeds: Sequence[int]) -> Dict[int, Set[Any]]:
     """
-    Measure per-seed signatures and greedy-cover a fresh baseline.
-
-    Returns the replacement constants for this module: the chosen seeds
-    and the events/cells they cover (events plus reached cells of the
-    enumerated fork space). Run over the full baseline range (400) when
-    re-baselining after a GENERATOR_VERSION bump.
+    Each seed's gate targets: its events, its enumerated frame cells and
+    its BAL cells. Seeds that cannot be filled are left out.
     """
     from execution_testing.cli.fuzzer_bridge.bal_reach import observer_spec
     from execution_testing.cli.fuzzer_bridge.campaign import fill_case
     from execution_testing.cli.fuzzer_bridge.generator import (
-        GENERATOR_VERSION,
         generate_fuzzer_output,
     )
     from execution_testing.cli.fuzzer_bridge.signature_baseline import (
@@ -741,7 +737,9 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
     from execution_testing.evm_tools.t8n.evm_trace.signature import (
         DEPTH_BUCKETS,
     )
+    from execution_testing.forks import get_forks
 
+    fork = next(f for f in get_forks() if f.name() == fork_name)
     call_ops, halt_kinds = fork_reach_space(fork)
     enumerated = {
         (bucket, "call", op) for bucket in DEPTH_BUCKETS for op in call_ops
@@ -771,6 +769,37 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
         }
         items |= _bal_items(eels.last_bal_observation, seed)
         per_seed[seed] = items
+    return per_seed
+
+
+def compute_gate_baseline(
+    fork: "Fork", seeds: range, *, workers: int = 1
+) -> Dict[str, Any]:
+    """
+    Measure per-seed signatures and greedy-cover a fresh baseline.
+
+    Returns the replacement constants for this module: the chosen seeds
+    and the events/cells they cover (events plus reached cells of the
+    enumerated fork space). Run over the full baseline range when
+    re-baselining after a GENERATOR_VERSION bump. Each seed is measured on
+    its own, so ``workers`` processes split the range between them; the
+    cover over the merged measurement is the same either way.
+    """
+    from concurrent.futures import ProcessPoolExecutor
+
+    from execution_testing.cli.fuzzer_bridge.generator import (
+        GENERATOR_VERSION,
+    )
+
+    per_seed: Dict[int, Set[Any]] = {}
+    if workers <= 1:
+        per_seed = _gate_items(fork.name(), seeds)
+    else:
+        chunks = [list(seeds)[i::workers] for i in range(workers)]
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            for part in pool.map(_gate_items, [fork.name()] * workers, chunks):
+                per_seed.update(part)
+        per_seed = dict(sorted(per_seed.items()))
 
     occurrences: Dict[Any, int] = {}
     for items in per_seed.values():
@@ -821,7 +850,9 @@ def compute_gate_baseline(fork: "Fork", seeds: range) -> Dict[str, Any]:
     }
 
 
-def gate_baseline_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
+def gate_baseline_record(
+    fork: "Fork", seeds: range, *, workers: int = 1
+) -> Dict[str, Any]:
     """
     One reach-log record of a gate baseline, to append on re-baselining.
 
@@ -838,5 +869,5 @@ def gate_baseline_record(fork: "Fork", seeds: range) -> Dict[str, Any]:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "eels_commit": eels_commit(),
         "window_seeds": len(seeds),
-        **compute_gate_baseline(fork, seeds),
+        **compute_gate_baseline(fork, seeds, workers=workers),
     }
