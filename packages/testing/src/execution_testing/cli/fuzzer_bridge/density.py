@@ -305,6 +305,30 @@ def _tally_exact_charge(
             tally["exact_charge_margin"]["over"] += 1
 
 
+def _tally_graver(case: Any, tally: Dict[str, Counter]) -> None:
+    """Count the graver's presence, beneficiaries and values."""
+    from execution_testing.base_types import Address
+
+    from .generator import (
+        DEAD_BENEFICIARY_BASE,
+        EMPTY_BENEFICIARY_ADDRESS,
+        GRAVER_ADDRESS,
+    )
+
+    graver = Address(GRAVER_ADDRESS)
+    owned = [tx for tx in case.transactions if tx.to == graver]
+    tally["graver_tx"]["present" if owned else "absent"] += 1
+    for tx in owned:
+        beneficiary = int.from_bytes(bytes(tx.data)[:32], "big")
+        if beneficiary == EMPTY_BENEFICIARY_ADDRESS:
+            tally["graver_beneficiary"]["empty"] += 1
+        elif DEAD_BENEFICIARY_BASE <= beneficiary < EMPTY_BENEFICIARY_ADDRESS:
+            tally["graver_beneficiary"]["nonexistent"] += 1
+        else:
+            tally["graver_beneficiary"]["alive"] += 1
+        tally["graver_value"]["nonzero" if int(tx.value) else "zero"] += 1
+
+
 def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     """
     Share of draws holding each value of every multi-valued input axis.
@@ -344,6 +368,9 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "state_exhaust_reservoir": Counter(),
         "exact_charge_tx": Counter(),
         "exact_charge_margin": Counter(),
+        "graver_tx": Counter(),
+        "graver_beneficiary": Counter(),
+        "graver_value": Counter(),
     }
     reads = _blockhash_signatures()
 
@@ -427,6 +454,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         _tally_toucher(case, tally)
         _tally_state_exhaust(case, fork, tally)
         _tally_exact_charge(case, fork, tally)
+        _tally_graver(case, tally)
         for tx in case.transactions:
             target = (
                 int.from_bytes(bytes(tx.to), "big")
@@ -566,6 +594,9 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "state_exhaust_reservoir": ("under_one_store", "one_store", "several"),
     "exact_charge_tx": ("present", "absent"),
     "exact_charge_margin": ("exact", "short", "over"),
+    "graver_tx": ("present", "absent"),
+    "graver_beneficiary": ("nonexistent", "empty", "alive"),
+    "graver_value": ("nonzero", "zero"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""

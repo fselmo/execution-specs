@@ -49,7 +49,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 21
+GENERATOR_VERSION = 22
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -358,6 +358,29 @@ def exact_charger_code() -> bytes:
             ),
         )
     )
+
+
+GRAVER_ADDRESS = 0x1FFF6
+"""Helper that self-destructs to the beneficiary its calldata names.
+
+It holds nothing between transactions, so its balance at the SELFDESTRUCT
+is the transaction's value. A dead beneficiary funded with a non-zero
+balance is the one case that pays the account-write surcharge and the
+new account's state charge; the generator draws the beneficiary's kind
+and whether the value is zero, so the surcharge's condition is met and
+missed on each side."""
+
+GRAVER_TX_GAS = 1_000_000
+"""Gas for a transaction to the graver: enough for a new account's state
+charge on the smallest draw."""
+
+DEAD_BENEFICIARY_BASE = 0x2E000
+"""Addresses the graver's nonexistent beneficiaries are taken from, one
+per transaction so each is still dead when it is paid."""
+
+EMPTY_BENEFICIARY_ADDRESS = 0x2E0FF
+"""An account in the pre-state with nothing in it: it exists, and is not
+alive, until something pays it."""
 
 
 RESERVOIR_TX_RATE = 0.35
@@ -737,6 +760,15 @@ def generate_fuzzer_output(
         code=Bytes(bytes(exact_charge_child_code())),
     )
     exact_need = exact_charge_child_code().gas_cost(fork)
+    accounts[Address(GRAVER_ADDRESS)] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(1),
+        code=Bytes(bytes(Op.SELFDESTRUCT(Op.CALLDATALOAD(0)))),
+    )
+    accounts[Address(EMPTY_BENEFICIARY_ADDRESS)] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(0),
+    )
     fresh_store_state = Op.SSTORE(
         key_warm=False, original_value=0, new_value=1
     ).state_cost(fork)
@@ -764,6 +796,7 @@ def generate_fuzzer_output(
         gas_need_fraction = None
         exhaust: Optional[Tuple[int, int]] = None
         exact_gas: Optional[int] = None
+        grave: Optional[Tuple[Address, int]] = None
         if rng.random() < domains.failing_tx_rate:
             to = Address(FAILER_ADDRESS)
         elif rng.random() < domains.toucher_tx_rate:
@@ -791,6 +824,20 @@ def generate_fuzzer_output(
         ):
             to = Address(EXACT_CHARGER_ADDRESS)
             exact_gas = exact_need + rng.choice(domains.exact_charge_margins)
+        elif rng.random() < domains.graver_tx_rate and GRAVER_TX_GAS <= min(
+            tx_gas_cap, budgets[block]
+        ):
+            to = Address(GRAVER_ADDRESS)
+            kind = rng.choice(domains.graver_beneficiaries)
+            if kind == "nonexistent":
+                beneficiary = Address(DEAD_BENEFICIARY_BASE + index)
+            elif kind == "empty":
+                beneficiary = Address(EMPTY_BENEFICIARY_ADDRESS)
+            elif kind == "alive":
+                beneficiary = rng.choice(sender_addresses)
+            else:
+                raise ValueError(f"unknown beneficiary kind {kind!r}")
+            grave = (beneficiary, rng.choice(domains.graver_values))
         choices = tx_gas_choices
         if domains.reservoir_tx_gas and rng.random() < RESERVOIR_TX_RATE:
             choices = domains.reservoir_tx_gas + tx_gas_choices
@@ -819,6 +866,11 @@ def generate_fuzzer_output(
             gas = EXACT_CHARGE_TX_GAS
             tx_type = 2
             data = Bytes(exact_gas.to_bytes(32, "big"))
+        value = rng.randrange(0, 10**16)
+        if grave is not None:
+            gas = GRAVER_TX_GAS
+            data = Bytes(bytes(grave[0]).rjust(32, b"\0"))
+            value = grave[1]
         budgets[block] -= gas
         # Read before building authorizations: an authorization whose
         # authority is this sender advances `nonces[sender]`, and the
@@ -846,7 +898,7 @@ def generate_fuzzer_output(
                 to=to,
                 gas=HexNumber(gas),
                 nonce=HexNumber(tx_nonce),
-                value=HexNumber(rng.randrange(0, 10**16)),
+                value=HexNumber(value),
                 data=data,
                 gas_need_fraction=gas_need_fraction,
                 **fields,
