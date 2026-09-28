@@ -95,6 +95,7 @@ _PRECOMPILE_SLOT_BASE = 0x000
 _CALL_SLOT_BASE = 0x100
 _EPILOGUE_SLOT = 0x200
 _CHARGE_SLOT = 0x300
+_CREATE_GAS_SLOT = 0x400
 _WITNESS_RANGE = 0x100  # each witness range spans this many slots
 
 
@@ -541,6 +542,18 @@ def _bad_jump(slot: int) -> Bytecode:
     return code
 
 
+def _gas_after_create(slot: int) -> Bytecode:
+    """
+    Store the gas left right after a creation.
+
+    A creation's charge moves the frame's gas, and anything later that
+    forwards nearly all of it, to a child that burns it, shrinks the
+    difference 63/64 at a time until the gas used no longer shows it.
+    Stored here, before any forwarding, it lasts whenever the frame does.
+    """
+    return Op.SSTORE(slot, Op.GAS)
+
+
 def _epilogue() -> Bytecode:
     """
     Record what the frame has left before it ends.
@@ -609,6 +622,7 @@ def fuzzed_bytecode(
     num_ops = rng.randint(1, max_ops)
     witness_slot = _PRECOMPILE_SLOT_BASE
     call_slot = _CALL_SLOT_BASE
+    create_slot = _CREATE_GAS_SLOT
     emitted_precompile_call = False
     terminated = False
     walk = domains.walk
@@ -659,6 +673,8 @@ def fuzzed_bytecode(
         if call_targets and rng.random() < walk.initcode_ef_prefix:
             code += _initcode_ef_prefix(call_slot)
             call_slot += 1
+            code += _gas_after_create(create_slot)
+            create_slot += 1
             continue
         if call_targets and rng.random() < walk.stack_bomb:
             code += _stack_bomb(call_slot)
@@ -686,6 +702,9 @@ def fuzzed_bytecode(
             stack_height += 1
         code += op
         stack_height += op.pushed_stack_items - op.popped_stack_items
+        if op in _CREATION:
+            code += _gas_after_create(create_slot)
+            create_slot += 1
         if stack_height > 900:
             code += Op.POP
             stack_height -= 1

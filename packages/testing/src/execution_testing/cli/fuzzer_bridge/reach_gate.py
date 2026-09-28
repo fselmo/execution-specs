@@ -44,23 +44,23 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 24
+BASELINE_GENERATOR_VERSION = 25
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    36,
-    75,
-    85,
-    246,
-    261,
-    502,
-    733,
-    1181,
-    1701,
-    2463,
-    3060,
+    6,
+    363,
+    948,
+    967,
+    1015,
+    1152,
+    1287,
+    2843,
+    3790,
+    4144,
+    4638,
 )
-"""Greedy cover over a 5000-seed baseline at v24: together these fire
+"""Greedy cover over a 5000-seed baseline at v25: together these fire
 every target below.
 
 Re-baseline over at least `GATE_BASELINE_SEEDS`, which is measured
@@ -71,6 +71,10 @@ reports its own sampling as a regression: at 400 seeds this map lost
 
 GATE_BASELINE_SEEDS = 4700
 """Baseline window, from the rarest gated cell's measured rate.
+
+At v25 `(3, "halt", "OutOfBoundsRead")` is 9 in 5000, needing 2559
+seeds; the BAL floor rises to 9 and the five cells v24 regained, seen 4
+to 6 times, are listed below the window again.
 
 At v24 `(3, "halt", "OutOfBoundsRead")` is again the rarest, 5 in 5000,
 needing 4606 seeds; the BAL floor falls back to 5 and five cells return
@@ -215,9 +219,6 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "touched_account",
             "success",
         ),
-        ("fork.process_transaction", "nonce_change", "success"),
-        ("fork.process_transaction", "storage_read", "success"),
-        ("fork.process_transaction", "touched_account", "success"),
         ("fork.process_withdrawals", "balance_change", "success"),
         ("fork.process_withdrawals", "touched_account", "success"),
         ("fork.update_sender_state", "balance_change", "exceptional_halt"),
@@ -342,11 +343,6 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "vm.instructions.environment.extcodecopy",
             "touched_account",
             "revert",
-        ),
-        (
-            "vm.instructions.environment.extcodecopy",
-            "touched_account",
-            "success",
         ),
         (
             "vm.instructions.environment.extcodehash",
@@ -492,11 +488,6 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "success",
         ),
         ("vm.instructions.system.selfdestruct", "balance_change", "success"),
-        (
-            "vm.instructions.system.selfdestruct",
-            "touched_account",
-            "out_of_gas",
-        ),
         ("vm.instructions.system.selfdestruct", "touched_account", "success"),
         (
             "vm.instructions.system.staticcall",
@@ -553,13 +544,26 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
         ("vm.interpreter.process_create", "touched_account", "success"),
     }
 )
-"""BAL cells the baseline window samples reliably: 145 of the
-147 reached over 5000 seeds at v24, each seen at least
-`bal_gate_floor` = 5 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
+"""BAL cells the baseline window samples reliably: 140 of the
+147 reached over 5000 seeds at v25, each seen at least
+`bal_gate_floor` = 9 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
 
 BAL_CELLS_BELOW_WINDOW: Dict[Tuple[str, str, str], int] = {
     ("fork.process_transaction", "code_change", "success"): 1,
-    ("vm.instructions.system.create", "touched_account", "revert"): 4,
+    ("fork.process_transaction", "nonce_change", "success"): 6,
+    ("fork.process_transaction", "storage_read", "success"): 6,
+    ("fork.process_transaction", "touched_account", "success"): 6,
+    (
+        "vm.instructions.environment.extcodecopy",
+        "touched_account",
+        "success",
+    ): 4,
+    ("vm.instructions.system.create", "touched_account", "revert"): 3,
+    (
+        "vm.instructions.system.selfdestruct",
+        "touched_account",
+        "out_of_gas",
+    ): 4,
 }
 """Reached in the 5000-seed baseline but fewer than `bal_gate_floor` times,
 with their occurrence counts. Listed so they stay visible rather than gated:

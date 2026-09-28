@@ -473,6 +473,9 @@ def test_a_real_destroy_of_pending_writes_is_still_a_read() -> None:
             "data": Bytes(bytes(initcode)),
             "value": HexNumber(0),
             "gas": HexNumber(2_000_000),
+            # A drawn set-code transaction cannot create.
+            "authorization_list": None,
+            "gas_need_fraction": None,
         }
     )
     with contextlib.redirect_stdout(io.StringIO()):

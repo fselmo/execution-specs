@@ -127,6 +127,81 @@ def test_an_existing_balance_spares_the_new_account_charge() -> None:
     assert fresh_gas - held_gas == new_account
 
 
+CREATOR = Address(0xC4EA7)
+
+
+def _create_then_burn(initcode_size: int) -> FuzzerOutput:
+    """
+    A contract that creates from ``initcode_size`` bytes of zeros, stores
+    GAS right after, then forwards all its gas to a call that burns it.
+    """
+    from execution_testing.fuzzing.strategies import _gas_after_create
+    from execution_testing.vm import Opcodes as Op
+
+    from ..fuzzer_bridge.generator import BURNER_ADDRESS
+    from ..fuzzer_bridge.models import FuzzerAccountInput
+
+    code = (
+        Op.MSTORE(64, 0)  # memory already spans both sizes
+        + Op.POP(Op.CREATE(0, 0, initcode_size))
+        + _gas_after_create(0)
+        + Op.POP(Op.CALL(Op.GAS, BURNER_ADDRESS, 0, 0, 0, 0, 0))
+    )
+    case = generate_fuzzer_output(Amsterdam, 0)
+    accounts = dict(case.accounts)
+    accounts[CREATOR] = FuzzerAccountInput(
+        balance=HexNumber(0), nonce=HexNumber(1), code=Bytes(bytes(code))
+    )
+    (first, *_) = case.transactions
+    tx = first.model_copy(
+        update={
+            "to": CREATOR,
+            "gas": HexNumber(CREATION_TX_GAS),
+            "data": Bytes(b""),
+            "value": HexNumber(0),
+            "authorization_list": None,
+            "gas_need_fraction": None,
+            "block": 0,
+        }
+    )
+    return case.model_copy(
+        update={
+            "accounts": accounts,
+            "transactions": [tx],
+            "block_count": 1,
+            "withdrawals": [],
+        }
+    )
+
+
+def _stored_gas(fixture: Dict[str, Any]) -> int:
+    (block,) = fixture["blocks"]
+    entry = next(
+        e
+        for e in block["blockAccessList"]
+        if e["address"].lower() == str(CREATOR).lower()
+    )
+    (slot,) = entry["storageChanges"]
+    return int(slot["slotChanges"][-1]["postValue"], 16)
+
+
+def test_gas_stored_after_a_creation_shows_its_initcode_charge() -> None:
+    """
+    The frame then forwards all its gas to a call that burns it, so the
+    gas used cannot tell two initcode sizes apart; the gas stored right
+    after the creation differs by exactly one more initcode word's cost.
+    """
+    from execution_testing.vm import Opcodes as Op
+
+    one_word = _stored_gas(_fill(_create_then_burn(32)))
+    two_words = _stored_gas(_fill(_create_then_burn(64)))
+    word = Op.CREATE(init_code_size=64).gas_cost(Amsterdam) - Op.CREATE(
+        init_code_size=32
+    ).gas_cost(Amsterdam)
+    assert word > 0
+    assert one_word - two_words == word
+
+
 def test_every_creation_axis_keeps_all_its_values() -> None:
     """Presence and every target kind stay drawn."""
     coverage = axis_coverage(Amsterdam, range(0, 400))

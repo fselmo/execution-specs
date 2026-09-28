@@ -66,6 +66,8 @@ def _send_to_failer(code: bytes, storage: Dict) -> FuzzerOutput:
             "to": FAILER,
             "gas": HexNumber(SMALLEST_GAS),
             "gas_need_fraction": None,
+            # Authorizations would charge the failer's gas before it runs.
+            "authorization_list": None,
         }
     )
     return case.model_copy(
