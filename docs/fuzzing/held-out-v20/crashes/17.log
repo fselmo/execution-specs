@@ -1,0 +1,149 @@
+Differential Amsterdam (generator v20) EELS vs evm, seeds 0..299 (8 workers)
+opcode count: dropping unrecognized 'EXTDELEGATECALL'
+opcode count: dropping unrecognized 'RETURNDATALOAD'
+opcode count: dropping unrecognized 'RETURNDATALOAD'
+opcode count: dropping unrecognized 'RETURNCONTRACT'
+opcode count: dropping unrecognized 'RETURNCONTRACT'
+opcode count: dropping unrecognized 'DATALOAD'
+opcode count: dropping unrecognized 'RJUMP'
+opcode count: dropping unrecognized 'RETURNCONTRACT'
+concurrent.futures.process._RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/home/fselmo/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py", line 254, in _process_worker
+    r = call_item.fn(*call_item.args, **call_item.kwargs)
+  File "/home/fselmo/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py", line 203, in _process_chunk
+    return [fn(*args) for args in chunk]
+            ~~^^^^^^^
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/cli/fuzzer_bridge/differential.py", line 525, in _detect_in_worker
+    outcome = evaluate_case(
+        _WORKER["tools"],
+    ...<2 lines>...
+        tiered=_WORKER["tiered"],
+    )
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/cli/fuzzer_bridge/differential.py", line 423, in evaluate_case
+    results, errors, rejections, allocs = run_tools(tools, case, fork)
+                                          ~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/cli/fuzzer_bridge/differential.py", line 333, in run_tools
+    prepared = _prepare(_resolve(case, fork, tools), fork)
+                        ~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/cli/fuzzer_bridge/differential.py", line 192, in _resolve
+    return resolve_measured_gas(case, fork, measuring_filler(fork))
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/cli/fuzzer_bridge/measured_gas.py", line 131, in resolve_measured_gas
+    fixture = fill(case.model_copy(update={"transactions": probe}))
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/cli/fuzzer_bridge/measured_gas.py", line 65, in fill
+    result = test.generate(
+        t8n=t8n, fixture_format=BlockchainFixture
+    )
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/specs/blockchain.py", line 1800, in generate
+    return self.make_fixture(t8n)
+           ~~~~~~~~~~~~~~~~~^^^^^
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/specs/blockchain.py", line 1316, in make_fixture
+    built_block = self.generate_block_data(
+        t8n=t8n,
+    ...<2 lines>...
+        previous_alloc=alloc,
+    )
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/specs/blockchain.py", line 980, in generate_block_data
+    transition_tool_output = t8n.evaluate(
+        transition_tool_data=TransitionTool.TransitionToolData(
+    ...<8 lines>...
+        slow_request=self.is_tx_gas_heavy_test,
+    )
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/client_clis/transition_tool.py", line 1025, in evaluate
+    result = self._evaluate(
+        transition_tool_data=transition_tool_data,
+    ...<2 lines>...
+        profiler=profiler,
+    )
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/client_clis/clis/execution_specs.py", line 229, in _evaluate
+    output = t8n.run()
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/evm_tools/t8n/__init__.py", line 474, in run
+    self.run_blockchain_test()
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/evm_tools/t8n/__init__.py", line 442, in run_blockchain_test
+    self._run_blockchain_test(self._block_env, self._block_output)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/evm_tools/t8n/__init__.py", line 388, in _run_blockchain_test
+    self._process_txs(block_env, block_output)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/evm_tools/t8n/__init__.py", line 331, in _process_txs
+    self.fork.process_transaction(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        block_env, block_output, fork_tx, Uint(tx_index)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/fselmo/ho-wt/src/ethereum/forks/amsterdam/fork.py", line 1062, in process_transaction
+    tx_output = process_top_level(block_env, tx_env)
+  File "/home/fselmo/ho-wt/src/ethereum/forks/amsterdam/vm/interpreter.py", line 298, in process_top_level
+    process_call(evm)
+    ~~~~~~~~~~~~^^^^^
+  File "/home/fselmo/ho-wt/src/ethereum/forks/amsterdam/vm/interpreter.py", line 450, in process_call
+    op_implementation[op](evm)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/home/fselmo/ho-wt/src/ethereum/forks/amsterdam/vm/instructions/system.py", line 572, in call
+    generic_call(
+    ~~~~~~~~~~~~^
+        evm,
+        ^^^^
+    ...<17 lines>...
+        ),
+        ^^
+    )
+    ^
+  File "/home/fselmo/ho-wt/src/ethereum/forks/amsterdam/vm/instructions/system.py", line 447, in generic_call
+    child_evm = process_call(child_evm)
+  File "/home/fselmo/ho-wt/src/ethereum/forks/amsterdam/vm/interpreter.py", line 450, in process_call
+    op_implementation[op](evm)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/home/fselmo/ho-wt/src/ethereum/forks/amsterdam/vm/instructions/system.py", line 284, in create2
+    GasCosts.CREATE_ACCESS - GasCosts.OPCODE_KECCAK256_PER_WORD * call_data_words
+    ~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  File "/home/fselmo/ho-wt/.venv/lib/python3.14/site-packages/ethereum_types/numeric.py", line 109, in __sub__
+    raise OverflowError
+OverflowError
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/fselmo/ho-wt/.venv/bin/fuzz", line 10, in <module>
+    sys.exit(fuzz())
+             ~~~~^^
+  File "/home/fselmo/ho-wt/.venv/lib/python3.14/site-packages/click/core.py", line 1462, in __call__
+    return self.main(*args, **kwargs)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/home/fselmo/ho-wt/.venv/lib/python3.14/site-packages/click/core.py", line 1383, in main
+    rv = self.invoke(ctx)
+  File "/home/fselmo/ho-wt/.venv/lib/python3.14/site-packages/click/core.py", line 1850, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/fselmo/ho-wt/.venv/lib/python3.14/site-packages/click/core.py", line 1246, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fselmo/ho-wt/.venv/lib/python3.14/site-packages/click/core.py", line 814, in invoke
+    return callback(*args, **kwargs)
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/cli/fuzzer_bridge/differential_cli.py", line 212, in differential
+    report = differential_fuzz(
+        fork,  # type: ignore[arg-type]
+    ...<10 lines>...
+        tiered=tiering,
+    )
+  File "/home/fselmo/ho-wt/packages/testing/src/execution_testing/cli/fuzzer_bridge/differential.py", line 598, in differential_fuzz
+    outcomes = list(executor.map(_detect_in_worker, seeds))
+  File "/home/fselmo/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py", line 617, in _chain_from_iterable_of_lists
+    for element in iterable:
+                   ^^^^^^^^
+  File "/home/fselmo/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/concurrent/futures/_base.py", line 639, in result_iterator
+    yield _result_or_cancel(fs.pop())
+          ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/fselmo/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/concurrent/futures/_base.py", line 311, in _result_or_cancel
+    return fut.result(timeout)
+           ~~~~~~~~~~^^^^^^^^^
+  File "/home/fselmo/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/concurrent/futures/_base.py", line 443, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File "/home/fselmo/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/concurrent/futures/_base.py", line 395, in __get_result
+    raise self._exception
+OverflowError
