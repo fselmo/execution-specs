@@ -1678,6 +1678,22 @@ class CampaignOptions:
     reproduce_runs: int = 5
     """Times a new finding's case is judged again alone, and again under
     load, on its first sighting; 0 skips it."""
+    contrast_every: int = 1
+    """The contrast lanes judge one batch in this many; the rest run the
+    primaries only. A contrast asks whether a client's two modes agree,
+    which a sample answers at a fraction of the runner time."""
+    control_every: int = 1
+    """The health control's client judges one batch in this many. Its
+    rate is then measured over those batches alone."""
+
+    def sampled(self, seeds: range, every: int) -> bool:
+        """
+        Whether the batch starting ``seeds`` is one of the one-in-``every``.
+
+        Decided by the batch's position from the campaign's first seed, so
+        a resumed run samples the same batches.
+        """
+        return (seeds.start - self.seed_start) // self.batch % every == 0
 
 
 def _seed_of(fixture_name: str) -> int:
@@ -1971,6 +1987,8 @@ def run_campaign(
             names = slice_result["names"]
             primary: Dict[str, "Future[JudgeResult]"] = {}
             contrast: Dict[str, "Future[JudgeResult]"] = {}
+            contrast_sampled = options.sampled(seeds, options.contrast_every)
+            control_sampled = options.sampled(seeds, options.control_every)
             if names:
                 batch_file = Path(slice_result["path"])
                 primary = {
@@ -1978,15 +1996,25 @@ def run_campaign(
                         _judge_job, runner, caps[name], batch_file, names
                     )
                     for name, runner in runners.items()
+                    if control_sampled or name != options.health.control_client
                 }
-                contrast = {
-                    lane: judge_pool.submit(
-                        _judge_job, runner, caps[name], batch_file, names
-                    )
-                    for lane, (name, runner) in contrast_runners.items()
-                }
+                if contrast_sampled:
+                    contrast = {
+                        lane: judge_pool.submit(
+                            _judge_job, runner, caps[name], batch_file, names
+                        )
+                        for lane, (name, runner) in contrast_runners.items()
+                    }
             judging.append(
-                JudgedBatch(seeds, slice_result, fill_wait, primary, contrast)
+                JudgedBatch(
+                    seeds,
+                    slice_result,
+                    fill_wait,
+                    primary,
+                    contrast,
+                    contrast_sampled,
+                    control_sampled,
+                )
             )
 
         while True:
@@ -2075,6 +2103,9 @@ def run_campaign(
                 }
                 judging_seconds = time.time() - judged
                 results = {name: r.verdicts for name, r in timed.items()}
+                # The clients that judged this batch: the control's client
+                # sits out the batches it does not sample.
+                judges = {name: runners[name] for name in results}
                 contrast_results = {
                     lane: r.verdicts for lane, r in contrast_timed.items()
                 }
@@ -2143,7 +2174,7 @@ def run_campaign(
                         results,
                         shard_fixtures,
                         fill_spec=fill_spec,
-                        runners=runners,
+                        runners=judges,
                         spec_file=batch_file.with_name(
                             batch_file.stem + "_eels.json"
                         ),
@@ -2189,7 +2220,7 @@ def run_campaign(
                                 options,
                                 fixture_name,
                                 found.spec_fixtures[fixture_name],
-                                {c: results[c][fixture_name] for c in runners},
+                                {c: results[c][fixture_name] for c in judges},
                                 runners,
                                 focus_client=None,
                                 events=found.events.get(fixture_name, []),
@@ -2199,10 +2230,10 @@ def run_campaign(
                         shard_fixtures[fixture_name] = found.spec_fixtures[
                             fixture_name
                         ]
-                batch_failures = dict.fromkeys(runners, 0)
+                batch_failures = dict.fromkeys(judges, 0)
                 for fixture_name in names:
                     verdicts = {
-                        name: results[name][fixture_name] for name in runners
+                        name: results[name][fixture_name] for name in judges
                     }
                     verdicts, errored = partition_runner_errors(verdicts)
                     for name in errored:
@@ -2368,10 +2399,12 @@ def run_campaign(
                         write_report()
                         raise StaleClientError(stale, len(names))
 
+                # Only a batch the contrasts judged can show one silent.
                 silent = {
                     lane: state.contrast.get(lane, {}).get("not_compared", 0)
                     for lane in contrast_runners
-                    if state.contrast.get(lane, {}).get("compared", 0) == 0
+                    if batch.contrast_sampled
+                    and state.contrast.get(lane, {}).get("compared", 0) == 0
                 }
                 if silent:
                     state.save()
@@ -2392,6 +2425,9 @@ def run_campaign(
                         before,
                         health_snapshot(state, options.health),
                         len(names),
+                        contrast_sampled=batch.contrast_sampled,
+                        control_sampled=batch.control_sampled,
+                        verdicts=len(names) * len(batch.primary),
                     ),
                 ],
                 options.health.window,
@@ -2403,6 +2439,8 @@ def run_campaign(
                 runners=len(runners),
                 segment=state.segments[-1] if state.segments else None,
             )
+            state.health["contrast_every"] = options.contrast_every
+            state.health["control_every"] = options.control_every
             found_new = new_findings(state, seen)
             if found_new:
                 failure = send_alert(
@@ -2512,6 +2550,8 @@ class JudgedBatch:
     fill_wait: float
     primary: Dict[str, "Future[JudgeResult]"]
     contrast: Dict[str, "Future[JudgeResult]"]
+    contrast_sampled: bool = True
+    control_sampled: bool = True
 
 
 def _judge_job(

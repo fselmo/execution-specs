@@ -2208,3 +2208,82 @@ def test_a_baseline_below_the_pre_run_proof_is_flagged(
     guarded = state.health["parallel"]["nethermind"]
     assert guarded["baseline"] == 0.5
     assert "below the pre-run proof" in guarded["note"]
+
+
+class _ContrastSilentFromSix(_FakeRunner):
+    """A primary whose contrast run stops reporting from seed 6 on."""
+
+    def with_flags(self, flags: Any) -> "_FakeRunner":
+        return _SilentFromSix(self.name, self.failing, None, flags)
+
+
+class _SilentFromSix(_FakeRunner):
+    def run_file(self, path: Path, fixture_names: Any) -> Dict[str, Verdict]:
+        verdicts = super().run_file(path, fixture_names)
+        for name in verdicts:
+            if int(name.split("_")[1]) >= 6:
+                verdicts[name] = Verdict(
+                    False, f"{RUNNER_ERROR_PREFIX}no result"
+                )
+        return verdicts
+
+
+def test_a_sampled_contrast_is_judged_silent_only_in_its_batches(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Contrasts judge one batch in two. A window holding only an unsampled
+    batch has no contrast verdict to find missing, so the lane going
+    silent at seed 6 pauses the campaign at the next sampled batch,
+    8..9, and not at 6..7, which it did not judge.
+    """
+    from ..fuzzer_bridge.health import HealthPolicy
+
+    failing = {"geth": lambda _s: False, "erigon": lambda _s: False}
+    lines: List[str] = []
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        echo=lines.append,
+        runner=lambda name, flags: (
+            _ContrastSilentFromSix(name, failing[name], None, flags)
+        ),
+        contrast={"erigon": failing["erigon"]},
+        contrast_every=2,
+        batch=2,
+        count=20,
+        baseline=False,
+        health=HealthPolicy(window=2),
+    )
+    assert state.status == "paused"
+    assert "erigon:contrast compared nothing" in state.status_reason
+    paused = next(i for i, line in enumerate(lines) if "paused:" in line)
+    assert lines[paused + 1].startswith("seeds 8..9:")
+    # Judged on seeds 0..1 and 4..5 only; 8..9 was judged and silent.
+    assert state.contrast["erigon:contrast"]["compared"] == 4
+    assert state.health["contrast_every"] == 2
+
+
+def test_the_control_sits_out_the_batches_it_does_not_sample(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    With `control_every` 3, the control's client judges seeds 0..1 and
+    6..7 of eight: its failures count there and nowhere else.
+    """
+    from ..fuzzer_bridge.health import HealthPolicy
+
+    failing = {"geth": lambda _s: False, "gate": lambda _s: True}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        control_every=3,
+        batch=2,
+        count=8,
+        baseline=False,
+        health=HealthPolicy(window=100, control_client="gate"),
+    )
+    assert state.client_failures == {"gate": 4}
+    assert state.counts["agreed"] == 4 and state.counts["divergence"] == 4

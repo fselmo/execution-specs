@@ -256,6 +256,8 @@ def campaign(
         output=output,
         reproduce_runs=campaign_config.reproduce_runs,
         runner_concurrency=campaign_config.runner_concurrency,
+        contrast_every=campaign_config.contrast_every,
+        control_every=campaign_config.control_every,
         seed_start=campaign_config.seed_start,
         hours=hours,
         count=count,

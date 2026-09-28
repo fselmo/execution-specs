@@ -29,6 +29,14 @@ def served(tmp_path: Path) -> Iterator[Tuple[str, int]]:
                 "segment": "abcd1234",
                 "summary": {"cases": 400, "cases_per_second": 2.0},
                 "counts": {"agreed": 399, "divergence": 1},
+                "contrast": {"erigon:contrast": {"compared": 80}},
+                "health": {
+                    "contrast_every": 5,
+                    "control_every": 5,
+                    "control_client": "besu-gate",
+                    "control_rate": 0.05,
+                    "control_cases": 80,
+                },
                 "signatures": {
                     "deadbeef": {
                         "client": "geth",
@@ -315,3 +323,12 @@ def test_the_page_has_a_row_per_shard(
     texts = _render(two_shards, tmp_path)["texts"]
     assert "main-b" in texts and "main" in texts
     assert "main-b window" in texts and "main window" in texts
+
+
+def test_each_lane_shows_how_often_it_is_sampled(
+    served: Tuple[str, int], tmp_path: Path
+) -> None:
+    """A sampled lane's counts cover a fraction of the cases; it says so."""
+    texts = _render(served, tmp_path)["texts"]
+    assert "erigon:contrast, 1 in 5 batches" in texts
+    assert "control besu-gate, 1 in 5 batches" in texts

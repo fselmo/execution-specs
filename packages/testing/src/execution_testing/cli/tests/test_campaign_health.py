@@ -139,3 +139,42 @@ def test_a_slack_webhook_gets_json(monkeypatch: Any) -> None:
         assert send_alert("hi") is None
     (request,) = seen
     assert json.loads(request.data) == {"text": "hi"}
+
+
+def test_the_control_band_widens_for_a_sampled_control() -> None:
+    """
+    At `control_every` 5 the control judges 400 of a 2,000-case window.
+    Its rate over those carries the extra noise of p(1 - p)(1/400 -
+    1/2000), so 2.5% is within the widened band where, judging every
+    case, it would pause; 1% is outside either way.
+    """
+    import math
+    from statistics import NormalDist
+
+    policy = HealthPolicy(
+        window=2000, control_client="besu-gate", control_band=(0.03, 0.08)
+    )
+
+    def window(hits: int, every: int) -> List[Dict[str, Any]]:
+        return [
+            _sample(200, control=hits if i % every == 0 else 0)
+            | {"control_sampled": i % every == 0}
+            for i in range(10)
+        ]
+
+    z = NormalDist().inv_cdf(0.99)
+    extra = 1 / 400 - 1 / 2000
+    sampled, problems = evaluate(window(5, 5), policy, [], runners=2)
+    assert sampled["control_cases"] == 400
+    assert sampled["control_rate"] == 0.025
+    low, high = sampled["control_band"]
+    assert math.isclose(low, 0.03 - z * math.sqrt(0.03 * 0.97 * extra))
+    assert math.isclose(high, 0.08 + z * math.sqrt(0.08 * 0.92 * extra))
+    assert problems == []
+
+    every, problems = evaluate(window(5, 1), policy, [], runners=2)
+    assert every["control_band"] == [0.03, 0.08]
+    assert "control besu-gate at 2.50%" in problems[0]
+
+    _, problems = evaluate(window(2, 5), policy, [], runners=2)
+    assert "control besu-gate at 1.00% over 400 sampled cases" in problems[0]

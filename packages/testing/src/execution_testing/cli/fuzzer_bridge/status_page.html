@@ -75,6 +75,7 @@ function fill(id, nodes) {
   box.replaceChildren(...(nodes.length ? nodes : [row("none", "")]));
 }
 function pct(x) { return x === undefined || x === null ? "-" : (100 * x).toFixed(2) + "%"; }
+function every(k) { return !k || k === 1 ? "every batch" : "1 in " + k + " batches"; }
 function ago(seconds) {
   if (seconds < 90) return Math.round(seconds) + " s";
   if (seconds < 5400) return Math.round(seconds / 60) + " min";
@@ -88,7 +89,8 @@ function healthRows(s, prefix) {
     const band = h.control_band || [0, 1];
     const rate = h.control_rate;
     const out = rate !== undefined && (rate < band[0] || rate > band[1]);
-    checks.push(row(prefix + "control " + h.control_client, pct(rate) + " (band " + pct(band[0]) + "-" + pct(band[1]) + ")", out));
+    const over = h.control_cases !== undefined ? " over " + h.control_cases + " cases" : "";
+    checks.push(row(prefix + "control " + h.control_client + ", " + every(h.control_every), pct(rate) + over + " (band " + pct(band[0]) + "-" + pct(band[1]) + ")", out));
   }
   if (h.runner_error_rate !== undefined) checks.push(row(prefix + "runner errors", pct(h.runner_error_rate) + " (max " + pct(h.max_runner_error_rate) + ")", h.runner_error_rate > h.max_runner_error_rate));
   if (h.producer_disagreement_rate !== undefined) checks.push(row(prefix + "producer disagreement", pct(h.producer_disagreement_rate) + " (max " + pct(h.max_producer_disagreement_rate) + ")", h.producer_disagreement_rate > h.max_producer_disagreement_rate));
@@ -140,8 +142,10 @@ function render(s) {
   fill("checks", judged.flatMap((shard) => healthRows(shard, several ? shard.campaign + " " : "")));
   fill("clients", Object.entries(s.clients || {}).map(([name, c]) =>
     row(name, c.failures + " failed, " + c.refused + " refused, " + c.runner_errors + " runner errors", c.runner_errors > 0)));
+  // Every shard of a run is configured alike; its first one says how often.
+  const sampling = several ? shards[0].health || {} : s.health || {};
   fill("contrast", Object.entries(s.contrast || {}).map(([lane, c]) =>
-    row(lane, (c.compared || 0) + " compared, " + (c.mismatches || 0) + " mismatches", !c.compared)));
+    row(lane + ", " + every(sampling.contrast_every), (c.compared || 0) + " compared, " + (c.mismatches || 0) + " mismatches", !c.compared)));
   const guarded = several ? {} : (s.health || {}).parallel || {};
   fill("parallel", Object.entries(s.parallel || {}).map(([lane, p]) => {
     const g = guarded[lane];

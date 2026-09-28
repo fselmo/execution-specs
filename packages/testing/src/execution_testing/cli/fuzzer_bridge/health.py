@@ -12,10 +12,12 @@ must stop, not keep counting.
 """
 
 import json
+import math
 import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from statistics import NormalDist
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 
@@ -33,7 +35,12 @@ class HealthPolicy:
     """Substring of the control's signature reason, as `known:` matches."""
     control_band: Tuple[float, float] = (0.0, 1.0)
     """Share of cases the control must fail within: below it the lane
-    has gone quiet, above it something else is failing the control."""
+    has gone quiet, above it something else is failing the control. Set
+    for a control judging every case in the window; when it judges a
+    sample, see `control_band_for`."""
+    control_alpha: float = 0.01
+    """One-sided chance of pausing on sampling noise alone that the band
+    is widened to, when the control judges a sample of the window."""
     max_runner_error_rate: float = 0.001
     """Share of verdicts the harness may lose before the run is judging
     too little to trust."""
@@ -55,11 +62,26 @@ class HealthPolicy:
 
 
 def batch_sample(
-    before: Mapping[str, Any], after: Mapping[str, Any], cases: int
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    cases: int,
+    *,
+    contrast_sampled: bool = True,
+    control_sampled: bool = True,
+    verdicts: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """One batch's contribution to the window, from two state snapshots."""
+    """
+    One batch's contribution to the window, from two state snapshots.
+
+    ``contrast_sampled`` and ``control_sampled`` say whether the contrast
+    lanes and the control judged this batch; ``verdicts`` is how many
+    verdicts the primaries gave, the runner-error rate's denominator.
+    """
     return {
         "cases": cases,
+        "contrast_sampled": contrast_sampled,
+        "control_sampled": control_sampled,
+        "verdicts": verdicts,
         "control": after["control"] - before["control"],
         "runner_errors": after["runner_errors"] - before["runner_errors"],
         "producer_disagreements": after["producer_disagreements"]
@@ -115,6 +137,30 @@ def trim(window: List[Dict[str, Any]], size: int) -> List[Dict[str, Any]]:
     return list(reversed(kept))
 
 
+def control_band_for(
+    policy: HealthPolicy, sampled_cases: int, window_cases: int
+) -> Tuple[float, float]:
+    """
+    The control's band when it judged ``sampled_cases`` of the window.
+
+    The configured band holds for a rate measured over the whole window.
+    A rate over a sample of it carries more sampling noise, by
+    p(1 - p)(1/sampled - 1/window) in variance at a true rate p, so each
+    edge moves out by that much noise at `control_alpha`. Judging every
+    case, the band is exactly the configured one.
+    """
+    low, high = policy.control_band
+    if sampled_cases >= window_cases or sampled_cases == 0:
+        return low, high
+    z = NormalDist().inv_cdf(1 - policy.control_alpha)
+    extra = 1 / sampled_cases - 1 / window_cases
+
+    def noise(p: float) -> float:
+        return z * math.sqrt(p * (1 - p) * extra)
+
+    return max(0.0, low - noise(low)), min(1.0, high + noise(high))
+
+
 def evaluate(
     window: List[Dict[str, Any]],
     policy: HealthPolicy,
@@ -146,16 +192,28 @@ def evaluate(
     rates["checking"] = True
     problems = []
     if policy.control_client is not None:
-        rate = sum(s["control"] for s in window) / cases
-        rates["control_rate"] = rate
-        low, high = policy.control_band
-        if not low <= rate <= high:
-            problems.append(
-                f"control {policy.control_client} at {rate:.2%}, outside "
-                f"{low:.2%}-{high:.2%}"
-            )
+        # The control is measured over the batches it judged.
+        judged = [s for s in window if s.get("control_sampled", True)]
+        sampled = sum(s["cases"] for s in judged)
+        rates["control_cases"] = sampled
+        if sampled:
+            rate = sum(s["control"] for s in judged) / sampled
+            rates["control_rate"] = rate
+            low, high = control_band_for(policy, sampled, cases)
+            rates["control_band"] = [low, high]
+            if not low <= rate <= high:
+                problems.append(
+                    f"control {policy.control_client} at {rate:.2%} over "
+                    f"{sampled} sampled cases, outside {low:.2%}-{high:.2%}"
+                )
     errors = sum(s["runner_errors"] for s in window)
-    rate = errors / (cases * max(runners, 1))
+    verdicts = sum(
+        s["cases"] * max(runners, 1)
+        if s.get("verdicts") is None
+        else s["verdicts"]
+        for s in window
+    )
+    rate = errors / max(verdicts, 1)
     rates["runner_error_rate"] = rate
     if rate > policy.max_runner_error_rate:
         problems.append(
@@ -170,16 +228,19 @@ def evaluate(
             f"producer disagrees with the spec on {rate:.2%} of cases, "
             f"above {policy.max_producer_disagreement_rate:.2%}"
         )
+    # A contrast lane can only be silent in a batch it judged.
+    contrasted = [s for s in window if s.get("contrast_sampled", True)]
     compared = {
-        lane: sum(s["contrast_compared"].get(lane, 0) for s in window)
+        lane: sum(s["contrast_compared"].get(lane, 0) for s in contrasted)
         for lane in lanes
     }
     rates["contrast_compared"] = compared
     silent = sorted(lane for lane, count in compared.items() if count == 0)
-    if silent:
+    if silent and contrasted:
         problems.append(
             f"contrast lane(s) {', '.join(silent)} compared nothing in "
-            f"the last {cases} cases"
+            f"the {sum(s['cases'] for s in contrasted)} sampled cases of "
+            f"the last {cases}"
         )
     rates["parallel"], dropped = _parallel_checks(
         window, policy, segment or {}

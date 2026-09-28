@@ -270,6 +270,11 @@ class CampaignConfig(BaseModel):
     reproduce_runs: int = 5
     """Times a new finding's case is judged again alone, and again under
     load; 0 skips it."""
+    contrast_every: int = Field(default=1, ge=1)
+    """Run the contrast lanes on one batch in this many; see
+    `CampaignOptions.contrast_every`."""
+    control_every: int = Field(default=1, ge=1)
+    """Run the health control's client on one batch in this many."""
     health: HealthConfig = Field(default_factory=HealthConfig)
     """Bands checked after every batch; one out of band pauses the run.
     The alert webhook is never configured here: see `FUZZ_ALERT_URL`."""
