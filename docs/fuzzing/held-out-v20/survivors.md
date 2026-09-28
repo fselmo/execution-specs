@@ -1,6 +1,6 @@
 # Held-out v20 survivors: what each one needs
 
-Of the 9 survivors, 7 need a case shape that reaches them (a motif). One needs its difference made visible, and one cannot be killed by the differential at all.
+Of the 8 survivors, 4 need a case shape that reaches them (a motif), 1 needs its difference made visible, and 3 are out of scope. Mutant 23 is on a line of its own: it crashes wherever it is reached, so it is neither a survivor nor a target for a motif.
 
 ## Method
 
@@ -23,7 +23,7 @@ The second level matters because a value can differ without the execution changi
 | 18 | `create`: `+ init_code_gas` → `-` | 103 of 110 (22 seeds) | 12 of 22 seeds | **observability**: the charge changes the execution, and nothing compared shows it |
 | 19 | `generic_create`: nonce cap `2**64 - 1` → `2**64 + 1` | 1,898 of 1,898 (101 seeds) | 0 of 101 seeds | maximum nonces (out of scope) |
 | 20 | `selfdestruct`: `gas_cost + account_write_gas` → `-` | 0 of 665 (78 seeds) | — | motif: SELFDESTRUCT that pays the account-write surcharge (dead beneficiary, nonzero balance) |
-| 23 | `create`: `b"\x00" * expand_by` → `//` | 91 of 91 (14 seeds) | crashes on all 14 | nothing: it crashes wherever reached, and a crash is not a kill |
+| 23 | `create`: `b"\x00" * expand_by` → `//` | 91 of 91 (14 seeds) | crashes on all 14 | its own category, crashes wherever reached: no case can kill it, and it stays out of the motif work |
 
 ## Corrections to the first report
 

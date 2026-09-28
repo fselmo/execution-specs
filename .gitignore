@@ -94,6 +94,8 @@ tests/t8n_testdata
 
 logs/
 *.log
+# Crash logs of a held-out run are its evidence.
+!docs/fuzzing/**/crashes/*.log
 
 env.yaml
 
