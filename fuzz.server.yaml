@@ -528,3 +528,21 @@ campaigns:
       parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main]
       parallel_baseline_blocks: 2000
       parallel_proof_floor: 0.9
+  # The engine lane, beside continuous-main rather than in its place.
+  # Fixtures are blockchain_test_engine, so every client imports through
+  # newPayload; only nethermind has an engine runner (--engineTest), so
+  # the panel is its parallel build and its stock build at the same head.
+  # A tenth of cases are negative (generator v32): each is imported by
+  # EELS first and dropped unless refused with the exception it names, so
+  # a client answering VALID to one is a finding. EELS fills: the evmone
+  # producer's engine fills are unverified here. No health control yet:
+  # besu-gate reads only the blockchain format. parallel_lanes waits for
+  # the first run to show FUZZ-PAR-DECISION on the engine path.
+  engine-main:
+    fork: Amsterdam
+    clients: [nethermind-par-main, nethermind-main]
+    fixture_format: blockchain_test_engine
+    seed_start: 80000000
+    runner_concurrency: 8
+    contrast_every: 5
+    known: []
