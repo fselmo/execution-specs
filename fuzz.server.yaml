@@ -271,6 +271,29 @@ clients:
     env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
           PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
     contrast_flags: [--bal.sequential]
+  # Proof only, never on a panel: besu-eng-main plus a print at
+  # ParallelTransactionPreprocessing.run.
+  - name: besu-eng-probe
+    build:
+      recipe: besu
+      repo: besu-eth/besu
+      ref: cf89071f9d6dddf7997f35e09929fe059f82ecd1
+      patches:
+        - patches/besu-main/0001-referencetests-let-a-caller-ask-for-the-parallel-blo.patch
+        - patches/besu-main/0002-evmtool-run-block-test-on-the-parallel-path-on-the-f.patch
+        - patches/besu-main/0003-core-print-the-parallel-processor-s-sequential-fallb.patch
+        - patches/besu-main/0004-core-print-the-parallel-execution-decision-for-each-.patch
+        - patches/besu-main/0005-evmtool-run-engine-test-on-the-parallel-path-on-the-.patch
+        - patches/besu-main-probe/0001-PROBE-print-each-block-that-reaches-ParallelTransact.patch
+      patch_paths:
+        - ethereum/evmtool/
+        - ethereum/referencetests/
+        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
+        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/AbstractBlockProcessor.java
+        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/ParallelTransactionPreprocessing.java
+    env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
+          PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
+    contrast_flags: [--bal.sequential]
   - name: besu-main
     build: {recipe: besu, repo: besu-eth/besu, ref: cf89071f9d6dddf7997f35e09929fe059f82ecd1}
     env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
@@ -542,6 +565,34 @@ campaigns:
     clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate]
     producer: evmone-producer
     seed_start: 70000000
+    # Measured on this box, same 2,500 seeds per cap (cases/s): 1: 4.02,
+    # 2: 5.34, 3: 5.86, 4: 6.09, 6: 6.36. Still rising slowly at 6.
+    runner_concurrency: 8
+    # Contrasts and the control judge one batch in five; primaries every batch.
+    contrast_every: 5
+    control_every: 5
+    known:
+      - {client: besu-par-main, reason: "System call halted"}
+      - {client: besu-par-main, reason: "System call did not execute to completion"}
+    health:
+      control: {client: besu-gate, reason: "Chain header mismatch"}
+      # No fixed floor: the control's rate moves with the generator (4.56%
+      # at v26, about 3.5% at v28 and v30), so each segment calibrates its
+      # own baseline and a drop is judged against it by the binomial test
+      # at the sampled count. Zero hits where the baseline predicts several
+      # pause as a stopped control, and so do any control runner errors.
+      # Only the upper edge is held here.
+      control_band: [0.0, 0.08]
+      # Every client's primary is its parallel path on this panel.
+      parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main]
+      parallel_baseline_blocks: 2000
+      parallel_proof_floor: 0.9
+  # One campaign from v28 on; the two shards above are a closed record.
+  continuous-one:
+    fork: Amsterdam
+    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate]
+    producer: evmone-producer
+    seed_start: 100000000
     # Measured on this box, same 2,500 seeds per cap (cases/s): 1: 4.02,
     # 2: 5.34, 3: 5.86, 4: 6.09, 6: 6.36. Still rising slowly at 6.
     runner_concurrency: 8
