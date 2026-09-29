@@ -77,6 +77,7 @@ from .health import snapshot as health_snapshot
 from .health import trim as trim_window
 from .measured_gas import measuring_filler, resolve_measured_gas
 from .models import FuzzerOutput
+from .negative import last_block_overrides, modify_last_block
 from .reproducer import client_judge, write_reproducer
 from .run_manifest import RunManifest, _eels_commit, binary_digest
 from .runners import FixtureRunner, Verdict, is_runner_error
@@ -1054,17 +1055,35 @@ def fill_case(
     output is discarded and the exception is the whole story.
     """
     case = resolve_measured_gas(case, fork, measuring_filler(fork))
+
+    def generate(test: Any, fixture_format: Type[BaseFixture]) -> Any:
+        with contextlib.redirect_stdout(io.StringIO()):
+            with warnings.catch_warnings():
+                # A violation is a counted finding here, not a warning
+                # printed into a log nobody keeps -- the failure mode that
+                # lost the per-case timings twice.
+                warnings.simplefilter("ignore", InvariantViolationWarning)
+                return test.generate(t8n=eels, fixture_format=fixture_format)
+
     test = blockchain_test_from_fuzzer(case, fork)
-    with contextlib.redirect_stdout(io.StringIO()):
-        with warnings.catch_warnings():
-            # A violation is a counted finding here, not a warning printed
-            # into a log nobody keeps -- the failure mode that lost the
-            # per-case timings twice.
-            warnings.simplefilter("ignore", InvariantViolationWarning)
-            result = test.generate(t8n=eels, fixture_format=fixture_format)
+    negative: Optional[Dict[str, Any]] = None
+    if fixture_format is BlockchainEngineFixture and case.negative is not None:
+        # The modification is chosen from what the block really holds, so
+        # the case is filled clean first.
+        negative = case.negative.model_dump()
+        clean = generate(test, BlockchainFixture).fixture.json_dict
+        overrides = last_block_overrides(negative, clean)
+        negative["applied"] = overrides is not None
+        test = blockchain_test_from_fuzzer(case, fork)
+        if overrides is not None:
+            modify_last_block(test, overrides)
+    result = generate(test, fixture_format)
     if violations is not None:
         violations.extend(test.invariant_violations)
-    return result.fixture.json_dict_with_info()
+    fixture = result.fixture.json_dict_with_info()
+    if negative is not None:
+        fixture["_info"]["negative"] = negative
+    return fixture
 
 
 def _fill_seed(

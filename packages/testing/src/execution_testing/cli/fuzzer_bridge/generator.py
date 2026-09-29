@@ -41,16 +41,18 @@ from execution_testing.vm import Opcodes as Op
 from .models import (
     FuzzerAccountInput,
     FuzzerAuthorizationInput,
+    FuzzerNegativeInput,
     FuzzerOutput,
     FuzzerTransactionInput,
     FuzzerWithdrawalInput,
 )
+from .negative import BAL_KINDS, BAL_VARIANTS, HEADER_KINDS
 
 # Contract bodies and calldata come from the shared strategy library
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 31
+GENERATOR_VERSION = 32
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -1362,6 +1364,28 @@ def generate_fuzzer_output(
         base_fee_per_gas=domains.base_fee_per_gas,
     )
 
+    # Drawn last, so the rest of the case is what it would be without it. A
+    # case already rejecting a block is left alone: only its last block is
+    # modified, and a rejected block is never the parent of another.
+    negative = None
+    if (
+        not any(tx.error for tx in transactions)
+        and rng.random() < domains.negative_case_rate
+    ):
+        if rng.random() < domains.negative_bal_share:
+            negative = FuzzerNegativeInput(
+                family="bal",
+                kind=rng.choice(BAL_KINDS),
+                variant=rng.choice(BAL_VARIANTS),
+                pick=rng.getrandbits(32),
+            )
+        else:
+            negative = FuzzerNegativeInput(
+                family="header",
+                kind=rng.choice(HEADER_KINDS),
+                pick=rng.getrandbits(32),
+            )
+
     return FuzzerOutput(
         version="2.0",
         fork=fork,
@@ -1371,4 +1395,5 @@ def generate_fuzzer_output(
         env=env,
         withdrawals=withdrawals,
         block_count=block_count,
+        negative=negative,
     )

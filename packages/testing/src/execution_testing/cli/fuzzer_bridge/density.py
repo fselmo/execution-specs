@@ -35,6 +35,8 @@ from collections import Counter
 from math import comb, erfc, sqrt
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
+from .negative import BAL_KINDS, BAL_VARIANTS, HEADER_KINDS
+
 if TYPE_CHECKING:
     from execution_testing.forks import Fork
 
@@ -446,6 +448,18 @@ def _tally_delegated_calls(case: Any, tally: Dict[str, Counter]) -> None:
         tally["delegated_target"]["warm" if warm else "cold"] += 1
 
 
+def _tally_negative(case: Any, tally: Dict[str, Counter]) -> None:
+    """Count negative cases, their family, kind and BAL variant."""
+    negative = case.negative
+    tally["negative_case"]["present" if negative else "absent"] += 1
+    if negative is None:
+        return
+    tally["negative_family"][negative.family] += 1
+    tally[f"negative_{negative.family}_kind"][negative.kind] += 1
+    if negative.variant is not None:
+        tally["negative_bal_variant"][negative.variant] += 1
+
+
 def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     """
     Share of draws holding each value of every multi-valued input axis.
@@ -505,6 +519,11 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "max_initcode_size": Counter(),
         "delegated_call_tx": Counter(),
         "delegated_target": Counter(),
+        "negative_case": Counter(),
+        "negative_family": Counter(),
+        "negative_bal_kind": Counter(),
+        "negative_bal_variant": Counter(),
+        "negative_header_kind": Counter(),
         "deployer_initcode": Counter(),
     }
     reads = _blockhash_signatures()
@@ -596,6 +615,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         _tally_requests(case, fork, tally)
         _tally_max_initcode(case, fork, tally)
         _tally_delegated_calls(case, tally)
+        _tally_negative(case, tally)
         carries_max = any(
             int(account.nonce or 0) >= 2**64 - 2
             for account in case.accounts.values()
@@ -772,6 +792,11 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "delegated_call_tx": ("present", "absent"),
     "delegated_target": ("warm", "cold"),
     "deployer_initcode": ("empty", "nonempty"),
+    "negative_case": ("present", "absent"),
+    "negative_family": ("bal", "header"),
+    "negative_bal_kind": BAL_KINDS,
+    "negative_bal_variant": BAL_VARIANTS,
+    "negative_header_kind": HEADER_KINDS,
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""

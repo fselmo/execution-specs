@@ -129,6 +129,20 @@ class FuzzerWithdrawalInput(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class FuzzerNegativeInput(BaseModel):
+    """
+    How a negative case's last block is modified; see `negative.py`.
+
+    `variant` is set for the BAL family only. `pick` seeds the choice of
+    what to modify, which is made from the clean fill's block.
+    """
+
+    family: str
+    kind: str
+    variant: str | None = None
+    pick: int
+
+
 class FuzzerOutput(CamelModel):
     """
     Main fuzzer output format v2.
@@ -154,3 +168,6 @@ class FuzzerOutput(CamelModel):
     """How many blocks the case's transactions are spread across, in nonce
     order; withdrawals go on the last. Part of the case, so a seed
     reproduces its chain and not just its transactions."""
+    negative: FuzzerNegativeInput | None = None
+    """Set when the case's last block is to be modified so it must be
+    rejected. Applied only when the case is filled in the engine format."""

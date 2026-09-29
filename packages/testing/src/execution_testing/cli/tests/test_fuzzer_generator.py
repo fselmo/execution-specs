@@ -47,7 +47,8 @@ def test_generated_shape() -> None:
         Osaka, 1, num_senders=2, num_contracts=2, num_transactions=4
     )
     assert out.version == "2.0"
-    assert len(out.transactions) == 4
+    # A draw that no longer fits its block's gas is dropped.
+    assert 1 <= len(out.transactions) <= 4
     # Authorities carry keys too but send nothing; the senders are the
     # key-holders a transaction is actually from.
     senders = [

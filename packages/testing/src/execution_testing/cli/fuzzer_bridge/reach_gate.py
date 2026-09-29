@@ -44,23 +44,22 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 31
+BASELINE_GENERATOR_VERSION = 32
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    1,
-    66,
-    76,
-    774,
-    815,
-    1097,
-    1272,
-    1608,
-    2415,
-    4157,
-    4481,
+    270,
+    424,
+    529,
+    685,
+    1190,
+    1715,
+    2724,
+    3631,
+    4575,
+    4593,
 )
-"""Greedy cover over a 5000-seed baseline at v31: together these fire
+"""Greedy cover over a 5000-seed baseline at v32: together these fire
 every target below.
 
 Re-baseline over at least `GATE_BASELINE_SEEDS`, which is measured
@@ -401,6 +400,11 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "revert",
         ),
         (
+            "vm.instructions.environment.extcodesize",
+            "touched_account",
+            "success",
+        ),
+        (
             "vm.instructions.environment.self_balance",
             "touched_account",
             "exceptional_halt",
@@ -560,30 +564,26 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
         ("vm.interpreter.process_create", "touched_account", "success"),
     }
 )
-"""BAL cells the baseline window samples reliably: 139 of the
-146 reached over 5000 seeds at v31, each seen at least
-`bal_gate_floor` = 10 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
+"""BAL cells the baseline window samples reliably: 140 of the
+147 reached over 5000 seeds at v32, each seen at least
+`bal_gate_floor` = 11 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
 
 BAL_CELLS_BELOW_WINDOW: Dict[Tuple[str, str, str], int] = {
-    ("fork.process_transaction", "nonce_change", "success"): 5,
-    ("fork.process_transaction", "storage_read", "success"): 5,
-    ("fork.process_transaction", "touched_account", "success"): 5,
+    ("fork.process_transaction", "code_change", "success"): 1,
+    ("fork.process_transaction", "nonce_change", "success"): 9,
+    ("fork.process_transaction", "storage_read", "success"): 9,
+    ("fork.process_transaction", "touched_account", "success"): 9,
     (
         "vm.instructions.environment.extcodecopy",
         "touched_account",
         "success",
-    ): 1,
-    (
-        "vm.instructions.environment.extcodesize",
-        "touched_account",
-        "success",
-    ): 8,
+    ): 5,
     ("vm.instructions.system.create", "touched_account", "revert"): 2,
     (
         "vm.instructions.system.selfdestruct",
         "touched_account",
         "out_of_gas",
-    ): 8,
+    ): 3,
 }
 """Reached in the 5000-seed baseline but fewer than `bal_gate_floor` times,
 with their occurrence counts. Listed so they stay visible rather than gated:

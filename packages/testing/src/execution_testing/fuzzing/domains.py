@@ -339,6 +339,13 @@ class ValueDomains:
     authorization is skipped, not rejected, so the transaction stays
     fillable -- and the nonce comparison is then live in both directions
     for a mutant that flips it."""
+    negative_case_rate: float = 0.1
+    """Share of cases whose last block is modified to be rejected: its
+    block access list, or one header field. Drawn only for a case with no
+    block already expected rejected."""
+    negative_bal_share: float = 0.6
+    """Share of negative cases modifying the block access list; the rest
+    corrupt a header field."""
     walk: WalkWeights = WALK_WEIGHTS
     gas_weights: MixtureWeights = GAS_WEIGHTS
     value_weights: MixtureWeights = VALUE_WEIGHTS
