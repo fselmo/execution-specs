@@ -202,7 +202,7 @@ def test_the_report_counts_tested_mutants_apart_from_the_rest(
     ]
     assert held_out_report(results).splitlines()[-1] == (
         "overall: kill-rate 1/2 tested (1 survived, 0 crash wherever "
-        "reached, 1 invalid, 1 not tested)"
+        "reached, 1 invalid, 1 not tested); 0 self-check kills"
     )
 
 
@@ -392,5 +392,31 @@ def test_a_mutant_that_crashes_wherever_reached_is_scored_apart() -> None:
     ]
     assert held_out_report(results, crashing={2}).splitlines()[-1] == (
         "overall: kill-rate 1/2 tested (1 survived, 1 crash wherever "
-        "reached, 0 invalid, 0 not tested)"
+        "reached, 0 invalid, 0 not tested); 0 self-check kills"
+    )
+
+
+def test_self_check_kills_are_counted_apart_from_the_differential() -> None:
+    """
+    A mutant EELS's own import refuses is a self-check kill: it is counted
+    in its own column and never raises the differential kill rate.
+    """
+    held = HeldOutMutant("s", "m.py", "binop", "a", "b")
+    import_only = {
+        "seeds": 3,
+        "compared": 3,
+        "diverged": 0,
+        "self_check_failed": 3,
+    }
+    results = [
+        ho.HeldOutResult(held, "survived", None, 0.0, import_only, 0),
+        ho.HeldOutResult(held, "killed", 1, 0.0, None, 1),
+    ]
+    assert (
+        held_out_report(results)
+        .splitlines()[-1]
+        .endswith(
+            "kill-rate 1/2 tested (1 survived, 0 crash wherever reached, "
+            "0 invalid, 0 not tested); 1 self-check kills"
+        )
     )

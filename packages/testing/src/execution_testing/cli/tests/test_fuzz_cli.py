@@ -241,6 +241,8 @@ def test_diff_writes_summary_and_exits_nonzero_on_divergence(
         diverged=True,
         category="diverged",
         crashed=None,
+        self_check=None,
+        self_check_crashed=None,
         eels_ran=True,
         post_state_diff={},
     )

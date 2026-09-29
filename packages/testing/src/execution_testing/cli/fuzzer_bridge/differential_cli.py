@@ -265,6 +265,10 @@ def differential(
     for outcome in report.outcomes:
         if outcome.crashed is not None:
             click.echo(f"  seed {outcome.seed}: {outcome.crashed}")
+        if outcome.self_check is not None:
+            click.echo(
+                f"  seed {outcome.seed}: self-check: {outcome.self_check}"
+            )
         if outcome.asymmetric_failure:
             for tool, error in outcome.errors.items():
                 click.echo(f"  seed {outcome.seed}: {tool} failed: {error}")
@@ -285,7 +289,13 @@ def differential(
         click.echo(f"\ndivergent cases saved to {corpus_dir}")
     if summary_path is not None:
         write_summary(report, seeds, summary_path)
-    if report.diverged or report.crashed:
+    self_checks = sum(1 for o in report.outcomes if o.self_check is not None)
+    if self_checks:
+        click.echo(
+            f"self-check: EELS's import disagreed with its own fill on "
+            f"{self_checks} seed(s)"
+        )
+    if report.diverged or report.crashed or self_checks:
         raise SystemExit(1)
 
 
@@ -312,6 +322,20 @@ def write_summary(report: Any, seeds: range, path: Path) -> Path:
         "runner_error": report.runner_error,
         "not_compared": report.not_compared,
         "crashed": report.crashed,
+        "self_check_failed": sum(
+            1 for o in report.outcomes if o.self_check is not None
+        ),
+        "self_check_crashed": sum(
+            1 for o in report.outcomes if o.self_check_crashed is not None
+        ),
+        "first_self_check": next(
+            (
+                {"seed": o.seed, "reason": o.self_check}
+                for o in report.outcomes
+                if o.self_check is not None
+            ),
+            None,
+        ),
         "first_crash": (
             {"seed": crashes[0].seed, "reason": crashes[0].crashed}
             if crashes

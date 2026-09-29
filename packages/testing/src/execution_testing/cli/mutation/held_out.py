@@ -447,6 +447,15 @@ class HeldOutResult:
         """Whether some seed the spec ran diverged."""
         return self.outcome == "killed"
 
+    @property
+    def self_check_killed(self) -> bool:
+        """
+        Whether EELS's import of its own filled fixture disagreed on some
+        seed. Scored apart from the differential: it is the spec failing
+        its own check, not two implementations disagreeing.
+        """
+        return bool((self.summary or {}).get("self_check_failed"))
+
 
 def run_held_out(
     path: Path,
@@ -543,11 +552,13 @@ def held_out_report(
         counts = {o: sum(r.outcome == o for r in group) for o in OUTCOMES}
         counts["survived"] -= len(apart)
         tested = counts["killed"] + counts["survived"]
+        self_checked = sum(r.self_check_killed for r in group)
         return (
             f"{name}: kill-rate {counts['killed']}/{tested} tested "
             f"({counts['survived']} survived, {len(apart)} crash wherever "
             f"reached, {counts['invalid']} invalid, "
-            f"{counts['not tested']} not tested)"
+            f"{counts['not tested']} not tested); "
+            f"{self_checked} self-check kills"
         )
 
     lines = [line(stratum, by[stratum]) for stratum in sorted(by)]

@@ -114,6 +114,12 @@ class CaseOutcome:
     crashed: Optional[str] = None
     """Why the case could not be evaluated at all: the reference crashed
     (see `SpecCrashError`), or the harness raised. Nothing was compared."""
+    self_check: Optional[str] = None
+    """Where EELS's own import of its filled fixture disagreed with the
+    fixture (see `eels_import`): a self-check failure, scored apart from
+    any divergence between tools."""
+    self_check_crashed: Optional[str] = None
+    """The self-check itself crashed: neither an agreement nor a failure."""
 
     @property
     def asymmetric_failure(self) -> bool:
@@ -580,12 +586,18 @@ def evaluate_seed(
     nor an agreement.
     """
     try:
-        outcome = evaluate_case(
-            tools,
-            generate_fuzzer_output(fork, seed, domains=domains),
-            fork,
-            tiered=tiered,
-        )
+        case = generate_fuzzer_output(fork, seed, domains=domains)
+        if REFERENCE in tools:
+            # Resolved once, so the tools and the self-check run one case.
+            try:
+                case = _resolve(case, fork, tools)
+            except Exception as exc:
+                raise SpecCrashError(
+                    f"measuring fill: {type(exc).__name__}: {exc}"
+                ) from exc
+        outcome = evaluate_case(tools, case, fork, tiered=tiered)
+        if REFERENCE in tools:
+            _self_check(outcome, case, fork)
     except SpecCrashError as exc:
         outcome = CaseOutcome(seed, crashed=f"{REFERENCE} crashed: {exc}")
     except Exception as exc:  # noqa: BLE001 - one seed, never the run
@@ -596,6 +608,30 @@ def evaluate_seed(
         outcome.crashed = outcome.crashed[:CRASH_TEXT_LIMIT]
     outcome.seed = seed
     return outcome
+
+
+def _self_check(outcome: CaseOutcome, case: FuzzerOutput, fork: Fork) -> None:
+    """
+    Fill ``case`` on a plain EELS tool and import the fixture back through
+    EELS's block import; record where the two disagree.
+    """
+    from .eels_import import ImportCrashError, import_fixture
+
+    try:
+        fixture = measuring_filler(fork)(case)
+        result = import_fixture(fixture, fork.name().lower())
+    except ImportCrashError as exc:
+        outcome.self_check_crashed = f"import crashed: {exc}"[
+            :CRASH_TEXT_LIMIT
+        ]
+        return
+    except Exception as exc:  # noqa: BLE001 - the self-check's own fill
+        outcome.self_check_crashed = (
+            f"self-check fill raised: {type(exc).__name__}: {exc}"
+        )[:CRASH_TEXT_LIMIT]
+        return
+    if not result.agreed:
+        outcome.self_check = result.reason[:CRASH_TEXT_LIMIT]
 
 
 def _detect_in_worker(seed: int) -> CaseOutcome:
