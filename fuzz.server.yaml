@@ -439,14 +439,20 @@ campaigns:
     seed_start: 50000000
     # Measured on this box, same 2,500 seeds per cap (cases/s): 1: 4.02,
     # 2: 5.34, 3: 5.86, 4: 6.09, 6: 6.36. Still rising slowly at 6.
-    runner_concurrency: 6
+    runner_concurrency: 8
+    # Contrasts and the control judge one batch in five; primaries every batch.
+    contrast_every: 5
+    control_every: 5
     known:
       - {client: besu-par-main, reason: "System call halted"}
       - {client: besu-par-main, reason: "System call did not execute to completion"}
     health:
       control: {client: besu-gate, reason: "Chain header mismatch"}
-      # besu-gate's 2d29706a ran 4.9-5.6% over 4.8M cases on v15-v20.
-      control_band: [0.03, 0.08]
+      # besu-gate's 2d29706a runs at 4.56% here (sd 0.47% per 2,000-case
+      # window). The band catches a loop that stopped judging (rate near 0),
+      # not sampling noise: a 3% floor sat 3.3 sd down and false-paused about
+      # once a day, so the floor is about 5 sd down.
+      control_band: [0.02, 0.08]
       # Every client's primary is its parallel path on this panel.
       parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main]
       parallel_baseline_blocks: 2000
@@ -496,13 +502,19 @@ campaigns:
     # Measured on this box, same 2,500 seeds per cap (cases/s): 1: 4.02,
     # 2: 5.34, 3: 5.86, 4: 6.09, 6: 6.36. Still rising slowly at 6.
     runner_concurrency: 8
+    # Contrasts and the control judge one batch in five; primaries every batch.
+    contrast_every: 5
+    control_every: 5
     known:
       - {client: besu-par-main, reason: "System call halted"}
       - {client: besu-par-main, reason: "System call did not execute to completion"}
     health:
       control: {client: besu-gate, reason: "Chain header mismatch"}
-      # besu-gate's 2d29706a ran 4.9-5.6% over 4.8M cases on v15-v20.
-      control_band: [0.03, 0.08]
+      # besu-gate's 2d29706a runs at 4.56% here (sd 0.47% per 2,000-case
+      # window). The band catches a loop that stopped judging (rate near 0),
+      # not sampling noise: a 3% floor sat 3.3 sd down and false-paused about
+      # once a day, so the floor is about 5 sd down.
+      control_band: [0.02, 0.08]
       # Every client's primary is its parallel path on this panel.
       parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main]
       parallel_baseline_blocks: 2000
