@@ -449,10 +449,11 @@ campaigns:
     health:
       control: {client: besu-gate, reason: "Chain header mismatch"}
       # besu-gate's 2d29706a runs at 4.56% here (sd 0.47% per 2,000-case
-      # window). The band catches a loop that stopped judging (rate near 0),
-      # not sampling noise: a 3% floor sat 3.3 sd down and false-paused about
-      # once a day, so the floor is about 5 sd down.
-      control_band: [0.02, 0.08]
+      # window). The floor stays at 3%: with control_every: 5 the band
+      # already widens for the control judging a fifth of the window,
+      # putting 3% at about 1.2% (control_band_for). A 2% floor on top of
+      # that widening would catch only a control that stopped firing.
+      control_band: [0.03, 0.08]
       # Every client's primary is its parallel path on this panel.
       parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main]
       parallel_baseline_blocks: 2000
@@ -511,10 +512,11 @@ campaigns:
     health:
       control: {client: besu-gate, reason: "Chain header mismatch"}
       # besu-gate's 2d29706a runs at 4.56% here (sd 0.47% per 2,000-case
-      # window). The band catches a loop that stopped judging (rate near 0),
-      # not sampling noise: a 3% floor sat 3.3 sd down and false-paused about
-      # once a day, so the floor is about 5 sd down.
-      control_band: [0.02, 0.08]
+      # window). The floor stays at 3%: with control_every: 5 the band
+      # already widens for the control judging a fifth of the window,
+      # putting 3% at about 1.2% (control_band_for). A 2% floor on top of
+      # that widening would catch only a control that stopped firing.
+      control_band: [0.03, 0.08]
       # Every client's primary is its parallel path on this panel.
       parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main]
       parallel_baseline_blocks: 2000
