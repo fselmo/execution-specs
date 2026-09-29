@@ -93,6 +93,43 @@ def test_a_valid_block_refused_on_import_is_a_disagreement() -> None:
     assert not result.agreed and "expected valid, refused" in result.reason
 
 
+def test_an_engine_fixture_imports_cleanly() -> None:
+    """Every payload EELS filled as valid imports through EELS."""
+    from execution_testing.fixtures import BlockchainEngineFixture
+
+    mod._init_fill_worker("Amsterdam")
+    for seed in range(3):
+        fixture = mod.fill_case(
+            generate_fuzzer_output(Amsterdam, seed),
+            Amsterdam,
+            mod._FILL["eels"],
+            fixture_format=BlockchainEngineFixture,
+        )
+        result = import_fixture(fixture, "amsterdam")
+        assert result.agreed, result.reason
+
+
+def test_a_payload_that_does_not_hash_to_its_block_hash_is_refused() -> None:
+    """
+    The rebuilt header is checked against `blockHash`: a payload with any
+    field changed after the fact is refused before it is executed.
+    """
+    from execution_testing.fixtures import BlockchainEngineFixture
+
+    mod._init_fill_worker("Amsterdam")
+    fixture = mod.fill_case(
+        generate_fuzzer_output(Amsterdam, 0),
+        Amsterdam,
+        mod._FILL["eels"],
+        fixture_format=BlockchainEngineFixture,
+    )
+    payload = fixture["engineNewPayloads"][0]["params"][0]
+    payload["extraData"] = "0x01"
+    result = import_fixture(fixture, "amsterdam")
+    assert not result.agreed
+    assert "refused as BlockException.INVALID_BLOCK_HASH" in result.reason
+
+
 def test_a_self_checked_slice_reports_every_case_checked(
     tmp_path: Any, monkeypatch: Any
 ) -> None:

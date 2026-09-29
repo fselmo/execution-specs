@@ -1555,15 +1555,23 @@ class MixedGeneratorError(RuntimeError):
 
 def _self_check_case(case: FuzzerOutput, fork: Fork) -> Tuple[str, str]:
     """
-    Fill ``case`` on a plain EELS tool and import it back through EELS's
-    block import: ("", "") when they agree, else a failure or a crash.
+    Fill ``case`` on a plain EELS tool, in the campaign's format and so
+    with its negative modification when it has one, and import it back
+    through EELS's block import: ("", "") when they agree, else a failure
+    or a crash. For a negative case this is the lane's own witness: EELS
+    must refuse the modified block with the exception the fixture names.
     """
     from .eels_import import ImportCrashError, import_fixture
-    from .measured_gas import measuring_filler, resolve_measured_gas
 
-    filler = measuring_filler(fork)
+    if "plain_eels" not in _FILL:
+        _FILL["plain_eels"] = ExecutionSpecsTransitionTool()
     try:
-        fixture = filler(resolve_measured_gas(case, fork, filler))
+        fixture = fill_case(
+            case,
+            fork,
+            _FILL["plain_eels"],
+            fixture_format=_FILL.get("format", BlockchainFixture),
+        )
         result = import_fixture(fixture, fork.name().lower())
     except ImportCrashError as exc:
         return "", f"import crashed: {exc}"[:200]

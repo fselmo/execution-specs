@@ -1,11 +1,12 @@
 """
 Negative cases: a filled block modified so every client must refuse it.
 
-Each kind is witnessed on EELS. A kind the block's own import can see is
-filled in the blockchain format and imported: EELS refuses it, imports the
-same case unmodified, and the two headers differ only where the kind says.
-A delivered list, which only the engine payload carries, is witnessed by
-the payload differing from the clean one in that list alone.
+Each kind is witnessed on EELS: its engine fixture, imported as
+`newPayload` receives it, is refused with the exception it names. A kind
+the block's own RLP can carry is also filled in the blockchain format,
+where the same case unmodified imports and the two headers differ only
+where the kind says. A delivered list is shown to differ from the clean
+payload in that list alone.
 """
 
 import contextlib
@@ -33,6 +34,7 @@ from ..fuzzer_bridge.measured_gas import measuring_filler, resolve_measured_gas
 from ..fuzzer_bridge.models import FuzzerNegativeInput, FuzzerOutput
 from ..fuzzer_bridge.negative import (
     BAL_KINDS,
+    BAL_VARIANTS,
     HEADER_KINDS,
     last_block_overrides,
     modify_last_block,
@@ -127,6 +129,60 @@ def test_a_modified_block_is_refused_by_eels(
     else:
         raise ValueError(draw["family"])
     assert _header_diff(clean, modified) == expected
+
+
+ALL_DRAWS = [
+    *(
+        pytest.param({"family": "header", "kind": kind}, id=kind)
+        for kind in HEADER_KINDS
+    ),
+    *(
+        pytest.param(
+            {"family": "bal", "kind": kind, "variant": variant},
+            id=f"{variant}-{kind}",
+        )
+        for kind in BAL_KINDS
+        for variant in BAL_VARIANTS
+    ),
+]
+
+
+def _engine_negative(draw: Dict[str, Any]) -> Dict[str, Any]:
+    negative = FuzzerNegativeInput(**draw, pick=0)
+    return mod.fill_case(
+        _case(negative),
+        Amsterdam,
+        mod._FILL["eels"],
+        fixture_format=BlockchainEngineFixture,
+    )
+
+
+@pytest.mark.parametrize("draw", ALL_DRAWS)
+def test_every_kind_is_refused_on_the_engine_path(
+    draw: Dict[str, Any],
+) -> None:
+    """EELS refuses the modified payload with the exception it names."""
+    mod._init_fill_worker("Amsterdam")
+    fixture = _engine_negative(draw)
+    assert fixture["_info"]["negative"]["applied"]
+    assert fixture["engineNewPayloads"][-1]["validationError"]
+    result = import_fixture(fixture, "amsterdam")
+    assert result.agreed, result.reason
+
+
+def test_a_refusal_for_another_reason_is_a_disagreement() -> None:
+    """
+    The witness's own teeth: a payload refused for its corrupted number
+    disagrees with a fixture naming a different exception.
+    """
+    mod._init_fill_worker("Amsterdam")
+    fixture = _engine_negative({"family": "header", "kind": "number"})
+    fixture["engineNewPayloads"][-1]["validationError"] = (
+        "BlockException.INVALID_RECEIPTS_ROOT"
+    )
+    result = import_fixture(fixture, "amsterdam")
+    assert not result.agreed
+    assert "refused as BlockException.INVALID_BLOCK_NUMBER" in result.reason
 
 
 @pytest.mark.parametrize("kind", BAL_KINDS)
