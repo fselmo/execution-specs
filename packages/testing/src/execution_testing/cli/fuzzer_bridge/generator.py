@@ -50,7 +50,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 30
+GENERATOR_VERSION = 31
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -955,7 +955,14 @@ def generate_fuzzer_output(
         code=Bytes(bytes(exact_charge_child_code())),
     )
     exact_need = exact_charge_child_code().gas_cost(fork)
+    # The creators at and below the highest nonce exist only in a drawn
+    # share of cases: v27 put them in every case, so every fixture carried
+    # a nonce of 2**64 - 1, and a client that cannot load one failed them
+    # all.
+    near_max_creators = rng.random() < domains.max_nonce_creator_case_rate
     for deployer, opcode, nonce in DEPLOYERS.values():
+        if nonce >= MAX_NONCE - 1 and not near_max_creators:
+            continue
         accounts[Address(deployer)] = FuzzerAccountInput(
             balance=HexNumber(0),
             nonce=HexNumber(nonce),
@@ -1092,7 +1099,8 @@ def generate_fuzzer_output(
                 rng.choice(domains.deployer_code_sizes),
             )
         elif (
-            rng.random() < domains.max_nonce_deployer_rate
+            near_max_creators
+            and rng.random() < domains.max_nonce_deployer_rate
             and DEPLOYER_TX_GAS <= min(tx_gas_cap, budgets[block])
         ):
             to = Address(

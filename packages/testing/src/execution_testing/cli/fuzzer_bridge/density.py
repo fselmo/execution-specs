@@ -497,6 +497,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "deployer_kind": Counter(),
         "max_nonce_block": Counter(),
         "max_nonce_rejected": Counter(),
+        "max_nonce_account": Counter(),
         "request_tx": Counter(),
         "request_kind": Counter(),
         "request_valid": Counter(),
@@ -595,6 +596,11 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         _tally_requests(case, fork, tally)
         _tally_max_initcode(case, fork, tally)
         _tally_delegated_calls(case, tally)
+        carries_max = any(
+            int(account.nonce or 0) >= 2**64 - 2
+            for account in case.accounts.values()
+        )
+        tally["max_nonce_account"]["present" if carries_max else "absent"] += 1
         maxed = [tx for tx in case.transactions if int(tx.nonce) >= 2**64 - 2]
         tally["max_nonce_block"]["present" if maxed else "absent"] += 1
         if maxed:
@@ -751,6 +757,7 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "deployer_kind": ("CREATE", "CREATE2", "near_max_nonce", "max_nonce"),
     "max_nonce_block": ("present", "absent"),
     "max_nonce_rejected": ("yes", "no"),
+    "max_nonce_account": ("present", "absent"),
     "request_tx": ("present", "absent"),
     "request_kind": (
         "DepositRequest",

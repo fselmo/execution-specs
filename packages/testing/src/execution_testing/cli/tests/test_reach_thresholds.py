@@ -296,12 +296,24 @@ def test_a_creator_at_the_highest_nonce_cannot_create(
     from ..fuzzer_bridge.generator import (
         DEPLOYER_ADDRESSES,
         DEPLOYER_TX_GAS,
+        DEPLOYERS,
         MAX_NONCE,
+        deployer_code,
         deployer_initcode,
     )
+    from ..fuzzer_bridge.models import FuzzerAccountInput
 
     creator = Address(DEPLOYER_ADDRESSES[kind])
     case = generate_fuzzer_output(Amsterdam, 0)
+    # Only a drawn share of cases holds the creators; this one does.
+    _, opcode, nonce = DEPLOYERS[kind]
+    accounts = dict(case.accounts)
+    accounts[creator] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(nonce),
+        code=Bytes(deployer_code(opcode)),
+    )
+    case = case.model_copy(update={"accounts": accounts})
     (first, *_) = case.transactions
     tx = first.model_copy(
         update={

@@ -297,7 +297,11 @@ class ValueDomains:
     kept a deployment."""
     deployer_kinds: Tuple[str, ...] = ("CREATE", "CREATE2")
     """Which creation opcode the deployer uses."""
-    max_nonce_deployer_rate: float = 0.03
+    max_nonce_creator_case_rate: float = 0.1
+    """Share of cases whose pre-state holds the creators at and one below
+    the highest nonce. Present in every case at v27, they put a nonce of
+    2**64 - 1 into every fixture."""
+    max_nonce_deployer_rate: float = 0.15
     """Share of transactions sent to a CREATE deployer one below or at the
     highest nonce, where CREATE must fail without deploying. Drawn apart
     from the other deployers, so their kept deployments are not diluted."""
