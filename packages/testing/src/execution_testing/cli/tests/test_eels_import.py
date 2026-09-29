@@ -156,3 +156,41 @@ def test_a_self_checked_slice_reports_every_case_checked(
     assert refused["self_checks"] == {
         "seed_0": "block 1 expected valid, refused"
     }
+
+
+def test_a_negative_is_witnessed_in_every_slice_and_dropped_on_failure(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """
+    An engine campaign self-checks a negative case even in a slice it does
+    not sample, and a negative EELS does not refuse as named is not written
+    for the clients.
+    """
+    from ..fuzzer_bridge import eels_import
+    from ..fuzzer_bridge.campaign import shard_path
+    from ..fuzzer_bridge.eels_import import ImportResult
+
+    mod._init_fill_worker("Amsterdam", fixture_format="blockchain_test_engine")
+    seed = next(
+        s
+        for s in range(100)
+        if generate_fuzzer_output(Amsterdam, s).negative is not None
+    )
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    witnessed = mod._fill_slice(([seed], str(tmp_path / "a")))
+    assert witnessed["self_checked"] == 1
+    assert witnessed["self_checks"] == {}
+    assert shard_path(tmp_path / "a", [seed]).exists()
+
+    monkeypatch.setattr(
+        eels_import,
+        "import_fixture",
+        lambda *_: ImportResult(False, "block 1 expected X, imported"),
+    )
+    refused = mod._fill_slice(([seed], str(tmp_path / "b")))
+    assert refused["self_checks"] == {
+        f"seed_{seed}": "block 1 expected X, imported"
+    }
+    assert not shard_path(tmp_path / "b", [seed]).exists()
+    mod._init_fill_worker("Amsterdam")

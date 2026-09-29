@@ -1589,12 +1589,14 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
     workers idle, and the fixtures never need to transit the parent.
     With a third, true element the slice is self-checked: each case is
     filled again on a plain EELS tool and imported back through EELS, and
-    the disagreements come back with the summary.
+    the disagreements come back with the summary. A negative case is
+    self-checked in every slice, and one that fails is not written.
     """
     seeds, fixtures_dir = args[0], args[1]
     self_check = len(args) > 2 and bool(args[2])
     self_checks: Dict[str, str] = {}
     self_check_crashes: Dict[str, str] = {}
+    self_checked = 0
     fork = _FILL["fork"]
     started = time.perf_counter()
     fixtures: Dict[str, Dict[str, Any]] = {}
@@ -1639,12 +1641,19 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
                 violating[seed] = [v.invariant for v in seen]
             for witness in getattr(_FILL["eels"], "bal_witnesses", []):
                 widest = max(widest, bracket_width(witness))
-            if self_check:
+            info = fixtures[f"seed_{seed}"].get("_info", {})
+            negative = "negative" in info
+            if self_check or negative:
+                self_checked += 1
                 failed, crashed = _self_check_case(case, fork)
                 if failed:
                     self_checks[f"seed_{seed}"] = failed
                 if crashed:
                     self_check_crashes[f"seed_{seed}"] = crashed
+                if negative and (failed or crashed):
+                    # A modification EELS does not refuse as named is not
+                    # known to be invalid, so no client is judged on it.
+                    del fixtures[f"seed_{seed}"]
         case_ms.append((seed, (time.perf_counter() - case_started) * 1000))
     seconds = time.perf_counter() - started
     path = shard_path(Path(fixtures_dir), seeds)
@@ -1690,7 +1699,7 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
         "errors": errors,
         "timeouts": timeouts,
         "violations": violating,
-        "self_checked": len(fixtures) if self_check else 0,
+        "self_checked": self_checked,
         "self_checks": self_checks,
         "self_check_crashes": self_check_crashes,
         # The worker's own value, not the parent's: a pool worker
