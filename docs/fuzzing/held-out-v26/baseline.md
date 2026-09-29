@@ -4,7 +4,7 @@
 
 ## By version and half
 
-The set is split into a tuning half and an evaluation half (`split.json`, seed 26, 51 each, every stratum split evenly), frozen before any new motif. Motifs may be aimed only at tuning-half survivors, so the evaluation half is the measure of what a version buys on mutants nobody tuned for. Mutants that crash wherever reached (`crashes_wherever_reached.json`) and invalid ones are left out of both rates.
+The set is split into a tuning half and an evaluation half (`split.json`, seed 26, 51 each, every stratum split evenly), frozen before any new motif. Motifs may be aimed only at tuning-half survivors, so the evaluation half is the measure of what a version buys on mutants nobody tuned for. **The evaluation half is untouchable:** no motif, witness or observability change may be motivated by an evaluation-half mutant, 92 and 30 included, and no motif's axis may be widened to cover one. Its survivors are reported, never targeted. Mutants that crash wherever reached (`crashes_wherever_reached.json`) and invalid ones are left out of both rates.
 
 | version | tuning killed | evaluation killed |
 | --- | --- | --- |
