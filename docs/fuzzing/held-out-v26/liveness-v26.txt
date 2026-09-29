@@ -1,0 +1,85 @@
+weak-mutation liveness over 300 seeds (0 the reference could not run)
+01 bal-builder     0/497 evaluations differ, on 0/300 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (evaluated, never differs): needs a motif
+   'bal_items > block_gas_limit // GasCosts.BLOCK_ACCESS_LIST_ITEM' -> 'bal_items >= block_gas_limit // GasCosts.BLOCK_ACCESS_LIST_ITEM'
+11 bal-builder     0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'new_nonce > existing.new_nonce' -> 'new_nonce < existing.new_nonce'
+19 bal-tracker     52/52 evaluations differ, on 8/8 seeds reaching it; execution differs on 0, crashes on 0 -- value differs, execution never does: needs a motif
+   'value == U256(0)' -> 'value != U256(0)'
+27 state-gas       3720/5570 evaluations differ, on 188/226 seeds reaching it; execution differs on 0, crashes on 188 -- reached, crashes wherever reached: not killable
+   'gas_meter.state_gas_left == Uint(0) or (\n        gas_meter.state_gas_spilled == Uint(0)\n    )' -> 'gas_meter.state_gas_left == Uint(0) and gas_meter.state_gas_spilled == Uint(0)'
+30 state-gas       175/5570 evaluations differ, on 50/226 seeds reaching it; execution differs on 27, crashes on 23 -- reached, not killed: needs observability
+   'gas_meter.gas_left + Uint(repayment)' -> 'gas_meter.gas_left - Uint(repayment)'
+32 state-gas       1010/1507 evaluations differ, on 300/300 seeds reaching it; execution differs on 0, crashes on 0 -- value differs, execution never does: needs a motif
+   'block_env.block_gas_limit - block_output.block_gas_used' -> 'block_env.block_gas_limit + block_output.block_gas_used'
+35 state-gas       19011/43117 evaluations differ, on 284/300 seeds reaching it; execution differs on 0, crashes on 0 -- value differs, execution never does: needs a motif
+   'gas_meter.state_gas_left >= amount' -> 'gas_meter.state_gas_left > amount'
+37 state-gas       5570/5570 evaluations differ, on 226/226 seeds reaching it; execution differs on 0, crashes on 159 -- value differs, execution never does: needs a motif
+   'gas_meter.state_gas_left == Uint(0)' -> 'gas_meter.state_gas_left != Uint(0)'
+39 state-gas       5/57 evaluations differ, on 5/55 seeds reaching it; execution differs on 0, crashes on 0 -- value differs, execution never does: needs a motif
+   'gas_meter.gas_left\n        + Uint(gas_meter.state_gas_spilled)\n        + Uint(gas_meter.state_gas_committed_spill)' -> 'gas_meter.gas_left + Uint(gas_meter.state_gas_spilled) - Uint(gas_meter.state_gas_committed_spill)'
+44 transaction     1355/1499 evaluations differ, on 300/300 seeds reaching it; execution differs on 0, crashes on 0 -- value differs, execution never does: needs a motif
+   'is_create or tx.value > U256(0)' -> 'is_create and tx.value > U256(0)'
+46 transaction     1507/1507 evaluations differ, on 300/300 seeds reaching it; execution differs on 0, crashes on 0 -- value differs, execution never does: needs a motif
+   'tx_chain_id is not None' -> 'tx_chain_id is None'
+48 system-calls    0/497 evaluations differ, on 0/300 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (evaluated, never differs): needs a motif
+   'len(deposit_requests) > 0' -> 'len(deposit_requests) < 0'
+49 system-calls    0/497 evaluations differ, on 0/300 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (evaluated, never differs): needs a motif
+   'len(system_withdrawal_tx_output.return_data) > 0' -> 'len(system_withdrawal_tx_output.return_data) < 0'
+51 system-calls    0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'WITHDRAWAL_REQUEST_TYPE + system_withdrawal_tx_output.return_data' -> 'WITHDRAWAL_REQUEST_TYPE - system_withdrawal_tx_output.return_data'
+53 system-calls    0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'BUILDER_EXIT_REQUEST_TYPE\n            + system_builder_exit_tx_output.return_data' -> 'BUILDER_EXIT_REQUEST_TYPE - system_builder_exit_tx_output.return_data'
+55 system-calls    2982/2982 evaluations differ, on 300/300 seeds reaching it; execution differs on 0, crashes on 0 -- value differs, execution never does: needs a motif
+   'StateGasCosts.STORAGE_SET * SYSTEM_MAX_SSTORES_PER_CALL' -> 'StateGasCosts.STORAGE_SET // SYSTEM_MAX_SSTORES_PER_CALL'
+56 requests        0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'withdrawal_credentials_offset\n        + Uint(32)' -> 'withdrawal_credentials_offset - Uint(32)'
+57 requests        0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'signature_offset\n        + Uint(32)' -> 'signature_offset - Uint(32)'
+58 requests        0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'pubkey_offset != PUBKEY_OFFSET' -> 'pubkey_offset == PUBKEY_OFFSET'
+59 requests        0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'signature_offset + Uint(32)' -> 'signature_offset - Uint(32)'
+60 delegation      0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'delegated_address in accessed_addresses' -> 'delegated_address not in accessed_addresses'
+63 delegation      0/313 evaluations differ, on 0/174 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (evaluated, never differs): needs a motif
+   'U256(0) >= r or r >= SECP256K1N' -> 'U256(0) >= r and r >= SECP256K1N'
+65 delegation      313/313 evaluations differ, on 174/174 seeds reaching it; execution differs on 0, crashes on 174 -- reached, crashes wherever reached: not killable
+   'SECP256K1N // U256(2)' -> 'SECP256K1N * U256(2)'
+66 delegation      0/313 evaluations differ, on 0/174 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (evaluated, never differs): needs a motif
+   'U256(0) >= s or s > SECP256K1N // U256(2)' -> 'U256(0) >= s and s > SECP256K1N // U256(2)'
+70 blocks-withdrawals 0/495 evaluations differ, on 0/300 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (evaluated, never differs): needs a motif
+   'parent_gas_used > parent_gas_target' -> 'parent_gas_used >= parent_gas_target'
+71 blocks-withdrawals 0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'header.number != parent_header.number + Uint(1)' -> 'header.number == parent_header.number + Uint(1)'
+72 blocks-withdrawals 0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'len(rlp.encode(block)) > MAX_RLP_BLOCK_SIZE' -> 'len(rlp.encode(block)) < MAX_RLP_BLOCK_SIZE'
+73 blocks-withdrawals 0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'header.timestamp <= parent_header.timestamp' -> 'header.timestamp < parent_header.timestamp'
+76 blocks-withdrawals 0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'header.gas_used > header.gas_limit' -> 'header.gas_used < header.gas_limit'
+77 blocks-withdrawals 0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'receipt_root != block.header.receipt_root' -> 'receipt_root == block.header.receipt_root'
+78 blocks-withdrawals 0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'requests_hash != block.header.requests_hash' -> 'requests_hash == block.header.requests_hash'
+80 evm-system-ops  0/115 evaluations differ, on 0/34 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (evaluated, never differs): needs a motif
+   'memory_size > U256(MAX_INIT_CODE_SIZE)' -> 'memory_size >= U256(MAX_INIT_CODE_SIZE)'
+81 evm-system-ops  115/115 evaluations differ, on 34/34 seeds reaching it; execution differs on 0, crashes on 34 -- reached, crashes wherever reached: not killable
+   'b"\\x00" * extend_memory.expand_by' -> "b'\\x00' // extend_memory.expand_by"
+86 evm-environment 49/49 evaluations differ, on 45/45 seeds reaching it; execution differs on 0, crashes on 45 -- reached, crashes wherever reached: not killable
+   'b"\\x00" * extend_memory.expand_by' -> "b'\\x00' // extend_memory.expand_by"
+87 evm-environment 0/7 evaluations differ, on 0/4 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (evaluated, never differs): needs a motif
+   'GasCosts.OPCODE_RETURNDATACOPY_PER_WORD * words' -> 'GasCosts.OPCODE_RETURNDATACOPY_PER_WORD // words'
+88 evm-environment 0/7 evaluations differ, on 0/4 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (evaluated, never differs): needs a motif
+   'Uint(return_data_start_position) + Uint(size) > ulen(evm.return_data)' -> 'Uint(return_data_start_position) + Uint(size) >= ulen(evm.return_data)'
+89 evm-environment 1399/1399 evaluations differ, on 78/78 seeds reaching it; execution differs on 0, crashes on 78 -- reached, crashes wherever reached: not killable
+   'GasCosts.OPCODE_CODECOPY_BASE + copy_gas_cost' -> 'GasCosts.OPCODE_CODECOPY_BASE - copy_gas_cost'
+92 evm-interpreter 3486/4424 evaluations differ, on 300/300 seeds reaching it; execution differs on 249, crashes on 0 -- reached, not killed: needs observability
+   'int(tx_env.execution_gas_grant) - int(gas_meter.gas_left)' -> 'int(tx_env.execution_gas_grant) + int(gas_meter.gas_left)'
+96 evm-gas         3518/36586 evaluations differ, on 54/283 seeds reaching it; execution differs on 0, crashes on 0 -- value differs, execution never does: needs a motif
+   'extra_gas + memory_cost' -> 'extra_gas - memory_cost'
+98 evm-arithmetic  3/3 evaluations differ, on 2/2 seeds reaching it; execution differs on 0, crashes on 2 -- reached, crashes wherever reached: not killable
+   'bytearray([0xFF] * num_bytes_prepend) + value_bytes' -> 'bytearray([255] * num_bytes_prepend) - value_bytes'
+99 evm-arithmetic  0/0 evaluations differ, on 0/0 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (never evaluated): needs a motif
+   'x * y' -> 'x // y'
+100 evm-arithmetic  0/190 evaluations differ, on 0/33 seeds reaching it; execution differs on 0, crashes on 0 -- unreached (evaluated, never differs): needs a motif
+   'byte_num > U256(31)' -> 'byte_num >= U256(31)'

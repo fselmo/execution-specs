@@ -1,0 +1,26 @@
+{
+  "fork": "Amsterdam",
+  "generator_version": 27,
+  "clients": [
+    "geth"
+  ],
+  "eels_commit": "7d56ae1e86330cc2cb6cb37b0cea3b6103d7f856",
+  "seed_start": 0,
+  "seeds": 300,
+  "agreed": 286,
+  "diverged": 0,
+  "compared": 286,
+  "tool_rejected": 0,
+  "runner_error": 0,
+  "not_compared": 0,
+  "crashed": 14,
+  "first_crash": {
+    "seed": 3,
+    "reason": "eels crashed: measuring fill: OverflowError: "
+  },
+  "rejected_by": {},
+  "errored": {},
+  "eels_runs": 300,
+  "first_divergent_seed": null,
+  "fields": {}
+}
