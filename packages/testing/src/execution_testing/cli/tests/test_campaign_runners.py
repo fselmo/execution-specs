@@ -1,7 +1,8 @@
 """Tests for whole-file runner output parsing."""
 
+import json
 from pathlib import Path
-from typing import Any, List
+from typing import Any, Dict, List, Tuple
 
 import pytest
 
@@ -304,9 +305,9 @@ def test_an_engine_campaign_refuses_a_client_with_no_engine_runner(
     monkeypatch: Any,
 ) -> None:
     """
-    Geth and erigon have no engine runner and besu's waits on its
-    parallel unlock: an engine-format campaign naming one stops before it
-    fills anything, rather than judging on import and calling it engine.
+    Erigon has no engine runner: an engine-format campaign naming it stops
+    before it fills anything, rather than judging on import and calling it
+    engine.
     """
     from ..fuzzer_bridge import runners as runners_module
     from ..fuzzer_bridge.runners import EngineRunnerUnsupportedError
@@ -314,11 +315,143 @@ def test_an_engine_campaign_refuses_a_client_with_no_engine_runner(
     monkeypatch.setattr(
         runners_module.FixtureConsumerTool,
         "from_binary_path",
-        lambda **_: type("GethFixtureConsumer", (), {})(),
+        lambda **_: type("ErigonFixtureConsumer", (), {})(),
     )
-    with pytest.raises(EngineRunnerUnsupportedError, match="geth"):
-        FixtureRunner.detect("geth", Path("/bin/evm"), engine=True)
-    assert FixtureRunner.detect("geth", Path("/bin/evm")).engine is False
+    with pytest.raises(EngineRunnerUnsupportedError, match="erigon"):
+        FixtureRunner.detect("erigon", Path("/bin/evm"), engine=True)
+    assert FixtureRunner.detect("erigon", Path("/bin/evm")).engine is False
+
+
+def _judge(
+    monkeypatch: Any, tmp_path: Path, runner: FixtureRunner, stdout: str
+) -> Tuple[List[str], Dict[str, Verdict]]:
+    """Run ``runner`` on one batch whose run prints ``stdout``."""
+    seen: List[List[str]] = []
+
+    def fake_run(args: Any) -> Any:
+        seen.append(list(args))
+        return type("P", (), {"stdout": stdout, "stderr": "", "returncode": 1})
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    fixture = tmp_path / "batch.json"
+    fixture.write_text("{}")
+    verdicts = runner.run_file(fixture, ["seed_0", "seed_1"])
+    (args,) = seen
+    return args, verdicts
+
+
+STATE_ROOT = (
+    "0x31357f1cc1e97fc69b6921ef869bbd552a60cc0532ebb43affa66fdd0257e392"
+)
+BLOCK_HASH = (
+    "0xd699eb29166ebed62e63b4bea039418fef7f75ac4ccaaa7d689bf36687b7b8ff"
+)
+GAS_ERROR = "block #1 insertion into chain failed: invalid gas used"
+
+GETH_BLOCKTEST_BEFORE_34650 = json.dumps(
+    [
+        {
+            "name": "seed_0",
+            "pass": True,
+            "stateRoot": STATE_ROOT,
+            "fork": "Amsterdam",
+        },
+        {
+            "name": "seed_1",
+            "pass": False,
+            "fork": "Amsterdam",
+            "error": GAS_ERROR,
+        },
+    ],
+    indent=2,
+)
+"""`evm blocktest` at 920c0777: `stateRoot` on a pass, `error` omitted."""
+
+GETH_BLOCKTEST_AFTER_34650 = json.dumps(
+    [
+        {
+            "name": "seed_0",
+            "pass": True,
+            "fork": "Amsterdam",
+            "error": "",
+            "lastBlockHash": BLOCK_HASH,
+        },
+        {
+            "name": "seed_1",
+            "pass": False,
+            "fork": "Amsterdam",
+            "error": GAS_ERROR,
+        },
+    ],
+    indent=2,
+)
+"""`evm blocktest` with #34650: `lastBlockHash` in place of `stateRoot`,
+and `error` always present, empty on a pass."""
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        pytest.param(GETH_BLOCKTEST_BEFORE_34650, id="before-34650"),
+        pytest.param(GETH_BLOCKTEST_AFTER_34650, id="after-34650"),
+    ],
+)
+def test_geth_blocktest_parses_before_and_after_34650(
+    monkeypatch: Any, tmp_path: Path, stdout: str
+) -> None:
+    """Both of geth's result schemas give the same verdicts."""
+    runner = FixtureRunner("geth", Path("/bin/evm"), "GethFixtureConsumer")
+    args, verdicts = _judge(monkeypatch, tmp_path, runner, stdout)
+    assert args[0] == "blocktest"
+    assert verdicts == {
+        "seed_0": Verdict(True),
+        "seed_1": Verdict(False, GAS_ERROR),
+    }
+
+
+def test_an_engine_campaign_judges_geth_through_enginetest(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """
+    Geth's engine runner is `evm enginetest`. A payload correctly refused
+    passes with its validation error in `error`, and stays a pass.
+    """
+    runner = FixtureRunner(
+        "geth", Path("/bin/evm"), "GethFixtureConsumer", engine=True
+    )
+    stdout = """[
+  {"name": "seed_0", "pass": true, "fork": "Amsterdam",
+   "error": "invalid block access list", "lastPayloadStatus": "INVALID"},
+  {"name": "seed_1", "pass": false, "fork": "Amsterdam",
+   "error": "expected INVALID, got VALID", "lastPayloadStatus": "VALID"}
+]"""
+    args, verdicts = _judge(monkeypatch, tmp_path, runner, stdout)
+    assert args[0] == "enginetest"
+    assert verdicts["seed_0"].passed
+    assert not verdicts["seed_1"].passed
+
+
+def test_an_engine_campaign_judges_besu_through_engine_test(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Besu's engine runner is `evmtool engine-test --json-array`."""
+    runner = FixtureRunner(
+        "besu", Path("/bin/evmtool"), "BesuFixtureConsumer", engine=True
+    )
+    stdout = """[ {
+  "name" : "seed_0", "pass" : true, "fork" : "Amsterdam",
+  "lastBlockHash" : "0x01", "lastPayloadStatus" : "INVALID", "error" : ""
+}, {
+  "name" : "seed_1", "pass" : false, "fork" : "Amsterdam",
+  "lastBlockHash" : "0x02", "lastPayloadStatus" : "VALID",
+  "error" : "payload 1: expected INVALID, got VALID"
+} ]"""
+    args, verdicts = _judge(monkeypatch, tmp_path, runner, stdout)
+    assert args[:2] == ["engine-test", "--json-array"]
+    assert verdicts == {
+        "seed_0": Verdict(True),
+        "seed_1": Verdict(False, "payload 1: expected INVALID, got VALID"),
+    }
 
 
 def test_nethtest_judges_generated_engine_fixtures() -> None:

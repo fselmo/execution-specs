@@ -160,10 +160,15 @@ def strip_nethermind_suffix(name: str) -> str:
     return _NETHERMIND_SUFFIX.sub("", name)
 
 
-ENGINE_RUNNERS = ("NethtestFixtureConsumer",)
-"""Runners with an Engine API path wired. besu's `evmtool engine-test`
-waits on the parallel-processor unlock its import path needed; geth and
-erigon have no engine runner."""
+ENGINE_RUNNERS = (
+    "NethtestFixtureConsumer",
+    "GethFixtureConsumer",
+    "BesuFixtureConsumer",
+)
+"""Runners with an Engine API path wired: `nethtest --engineTest`, geth's
+`evm enginetest` (go-ethereum#34650, carried as a patch) and besu's
+`evmtool engine-test --json-array`. Each prints the same `name`, `pass`,
+`error` list its block runner does. Erigon has no engine runner."""
 
 
 class EngineRunnerUnsupportedError(ValueError):
@@ -186,8 +191,7 @@ class FixtureRunner:
     timeout: float = 1800.0
     engine: bool = False
     """Judge through the client's Engine API path (`blockchain_test_engine`
-    fixtures) instead of its block import. Only nethermind's `nethtest
-    --engineTest` is wired; see `ENGINE_RUNNERS`."""
+    fixtures) instead of its block import; see `ENGINE_RUNNERS`."""
     _last_error: str = ""
     last_stderr: str = ""
     """Standard error of the latest run: where a client prints what its
@@ -356,7 +360,10 @@ class FixtureRunner:
         return verdicts
 
     def _run_json_array(self, path: Path) -> Dict[str, Verdict]:
-        args = ["blocktest"]
+        # geth's `blocktest` reports `stateRoot` before #34650 and
+        # `lastBlockHash` with an always-present `error` after it; only
+        # `name`, `pass` and `error` are read, so both parse.
+        args = ["enginetest" if self.engine else "blocktest"]
         if self.kind == "ErigonFixtureConsumer":
             args.append("--jsonout")
         proc = self._run([*args, *self.flags, str(path)])
@@ -384,8 +391,14 @@ class FixtureRunner:
         return verdicts
 
     def _run_besu(self, path: Path) -> Dict[str, Verdict]:
-        proc = self._run(["block-test", *self.flags, str(path)])
-        verdicts = parse_besu_summary(proc.stdout)
+        if self.engine:
+            proc = self._run(
+                ["engine-test", "--json-array", *self.flags, str(path)]
+            )
+            verdicts = parse_json_array(proc.stdout)
+        else:
+            proc = self._run(["block-test", *self.flags, str(path)])
+            verdicts = parse_besu_summary(proc.stdout)
         if not verdicts and proc.returncode != 0:
             return self._all_failed(
                 f"{RUNNER_ERROR_PREFIX}{proc.stderr.strip()[:200]}"
