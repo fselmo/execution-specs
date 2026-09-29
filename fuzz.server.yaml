@@ -566,19 +566,29 @@ campaigns:
       parallel_proof_floor: 0.9
   # The engine lane, beside continuous-main rather than in its place.
   # Fixtures are blockchain_test_engine, so every client imports through
-  # newPayload; only nethermind has an engine runner (--engineTest), so
-  # the panel is its parallel build and its stock build at the same head.
-  # A tenth of cases are negative (generator v32): each is imported by
-  # EELS first and dropped unless refused with the exception it names, so
-  # a client answering VALID to one is a finding. EELS fills: the evmone
-  # producer's engine fills are unverified here. No health control yet:
-  # besu-gate reads only the blockchain format. parallel_lanes waits for
-  # the first run to show FUZZ-PAR-DECISION on the engine path.
+  # newPayload: nethermind's parallel and stock builds (--engineTest),
+  # besu-eng-main (engine-test) and geth-eng-main (#34650's enginetest).
+  # A tenth of cases are negative (generator v32): EELS imports each first
+  # and drops it unless refused with the exception it names, so a client
+  # answering VALID to one is a finding. EELS fills: the evmone producer's
+  # engine fills are unverified here.
   engine-main:
     fork: Amsterdam
-    clients: [nethermind-par-main, nethermind-main]
+    clients: [nethermind-par-main, nethermind-main, besu-eng-main, geth-eng-main]
     fixture_format: blockchain_test_engine
     seed_start: 80000000
     runner_concurrency: 8
     contrast_every: 5
     known: []
+    health:
+      # The control: every negative must come back INVALID from every
+      # client. Each client's share is held to its segment's baseline by
+      # the binomial test at the count judged; besu-gate's import-lane bug
+      # cannot serve here.
+      negative_control: true
+      # geth and besu decided parallel on all 518 engine payloads of the
+      # server's probe. nethermind-par-main joins once its first run shows
+      # FUZZ-PAR-DECISION on the engine path.
+      parallel_lanes: [geth-eng-main, besu-eng-main]
+      parallel_baseline_blocks: 2000
+      parallel_proof_floor: 0.9
