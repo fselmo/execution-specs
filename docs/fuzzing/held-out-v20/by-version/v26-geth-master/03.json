@@ -1,0 +1,28 @@
+{
+  "fork": "Amsterdam",
+  "generator_version": 26,
+  "clients": [
+    "evm"
+  ],
+  "eels_commit": "76d14dd5aba4d245306d4e1aaad9be03011d3f38",
+  "seed_start": 0,
+  "seeds": 300,
+  "agreed": 0,
+  "diverged": 204,
+  "compared": 204,
+  "tool_rejected": 0,
+  "runner_error": 0,
+  "not_compared": 0,
+  "crashed": 96,
+  "first_crash": {
+    "seed": 2,
+    "reason": "eels crashed: measuring fill: UnexpectedExecutionFailError: Unexpected fail for Transaction ({'index': 0, 'nonce': 0}):\n   What: Transaction unexpectedly failed!\n  Error: \"Failed transaction: GasUsedExceedsLimitError('state gas used exceeds limit')\" ([TransactionException.GAS_ALLOWANCE_EXCEEDED] Failed transaction: GasUsedExceedsLimitError('state gas used exceeds limit'))"
+  },
+  "rejected_by": {},
+  "errored": {
+    "eels": 204
+  },
+  "eels_runs": 300,
+  "first_divergent_seed": 0,
+  "fields": {}
+}

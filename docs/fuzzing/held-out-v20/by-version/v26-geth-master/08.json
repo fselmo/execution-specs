@@ -1,0 +1,26 @@
+{
+  "fork": "Amsterdam",
+  "generator_version": 26,
+  "clients": [
+    "evm"
+  ],
+  "eels_commit": "76d14dd5aba4d245306d4e1aaad9be03011d3f38",
+  "seed_start": 0,
+  "seeds": 300,
+  "agreed": 0,
+  "diverged": 0,
+  "compared": 0,
+  "tool_rejected": 0,
+  "runner_error": 0,
+  "not_compared": 0,
+  "crashed": 300,
+  "first_crash": {
+    "seed": 0,
+    "reason": "eels crashed: StackDepthLimitError: Stack depth limit reached"
+  },
+  "rejected_by": {},
+  "errored": {},
+  "eels_runs": 300,
+  "first_divergent_seed": null,
+  "fields": {}
+}
