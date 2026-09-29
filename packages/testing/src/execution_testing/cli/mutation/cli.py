@@ -11,6 +11,7 @@ from .held_out import (
     AMSTERDAM_STRATA,
     DEFAULT_STRATA,
     check_held_out,
+    crashing_positions,
     freeze_held_out,
     held_out_report,
     load_held_out,
@@ -298,7 +299,11 @@ def mutate(
                     ).write_text(
                         json.dumps(held_result.summary, indent=2) + "\n"
                     )
-        click.echo(held_out_report(held_out_results))
+        click.echo(
+            held_out_report(
+                held_out_results, crashing_positions(held_out_path)
+            )
+        )
         return
     oracle_choice = Oracle(oracle)
     if (module_path is None) == (not shape_names):

@@ -1,0 +1,12 @@
+{
+  "positions": [
+    19,
+    20,
+    23
+  ],
+  "why": {
+    "19": "OverflowError at the highest nonce, the only place it differs (v27)",
+    "20": "OverflowError on every surcharge paid (v22 on)",
+    "23": "TypeError wherever memory is extended in CREATE (v20)"
+  }
+}

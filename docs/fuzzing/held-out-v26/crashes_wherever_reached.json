@@ -1,0 +1,12 @@
+{
+  "positions": [
+    27,
+    37,
+    65,
+    81,
+    86,
+    89,
+    98
+  ],
+  "why": "survivor diagnostic at v26, liveness-v26.txt; 37 changes execution only where it crashes"
+}

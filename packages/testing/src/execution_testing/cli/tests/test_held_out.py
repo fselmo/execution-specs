@@ -10,6 +10,7 @@ from execution_testing.cli.mutation import cli as mutation_cli
 from execution_testing.cli.mutation import held_out as ho
 from execution_testing.cli.mutation.held_out import (
     HeldOutDriftError,
+    HeldOutMutant,
     Stratum,
     check_held_out,
     freeze_held_out,
@@ -200,7 +201,8 @@ def test_the_report_counts_tested_mutants_apart_from_the_rest(
         "survived",
     ]
     assert held_out_report(results).splitlines()[-1] == (
-        "overall: kill-rate 1/2 tested (1 survived, 1 invalid, 1 not tested)"
+        "overall: kill-rate 1/2 tested (1 survived, 0 crash wherever "
+        "reached, 1 invalid, 1 not tested)"
     )
 
 
@@ -375,3 +377,20 @@ def test_a_split_halves_every_stratum_and_is_fixed_by_its_seed() -> None:
         tuned = len(mine & set(split["tuning"]))
         assert tuned in (len(mine) // 2, -(-len(mine) // 2))
     assert len(split["tuning"]) == len(split["evaluation"]) == 5
+
+
+def test_a_mutant_that_crashes_wherever_reached_is_scored_apart() -> None:
+    """
+    A survivor the diagnostic found crashing wherever reached leaves the
+    denominator: 1 of 2 tested, not 1 of 3.
+    """
+    held = HeldOutMutant("s", "m.py", "binop", "a", "b")
+    results = [
+        ho.HeldOutResult(held, "killed", 1, 0.0, None, 0),
+        ho.HeldOutResult(held, "survived", None, 0.0, None, 1),
+        ho.HeldOutResult(held, "survived", None, 0.0, None, 2),
+    ]
+    assert held_out_report(results, crashing={2}).splitlines()[-1] == (
+        "overall: kill-rate 1/2 tested (1 survived, 1 crash wherever "
+        "reached, 0 invalid, 0 not tested)"
+    )

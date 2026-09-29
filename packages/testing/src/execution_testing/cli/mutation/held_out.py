@@ -27,6 +27,7 @@ from typing import (
     Mapping,
     Optional,
     Sequence,
+    Set,
     Tuple,
 )
 
@@ -509,21 +510,43 @@ def run_held_out(
     return results
 
 
-def held_out_report(results: Sequence[HeldOutResult]) -> str:
+CRASHING_FILE = "crashes_wherever_reached.json"
+"""Beside a frozen set: the positions the survivor diagnostic found crash
+wherever they are reached. A run cannot tell them from survivors, since
+a seed that does not reach one agrees, so they are recorded once."""
+
+
+def crashing_positions(path: Path) -> Set[int]:
+    """The positions recorded as crashing wherever reached, if any."""
+    listed = path.parent / CRASHING_FILE
+    if not listed.exists():
+        return set()
+    return set(json.loads(listed.read_text())["positions"])
+
+
+def held_out_report(
+    results: Sequence[HeldOutResult], crashing: Collection[int] = ()
+) -> str:
     """
     Render the stratified kill rate over the tested mutants, with the
-    survived, invalid and untested counts beside it.
+    survived, crashing, invalid and untested counts beside it. A mutant in
+    ``crashing`` that was not killed is scored apart: no case can kill it.
     """
     by: Dict[str, List[HeldOutResult]] = {}
     for result in results:
         by.setdefault(result.held.stratum, []).append(result)
 
     def line(name: str, group: Sequence[HeldOutResult]) -> str:
+        apart = [
+            r for r in group if r.index in crashing and r.outcome == "survived"
+        ]
         counts = {o: sum(r.outcome == o for r in group) for o in OUTCOMES}
+        counts["survived"] -= len(apart)
         tested = counts["killed"] + counts["survived"]
         return (
             f"{name}: kill-rate {counts['killed']}/{tested} tested "
-            f"({counts['survived']} survived, {counts['invalid']} invalid, "
+            f"({counts['survived']} survived, {len(apart)} crash wherever "
+            f"reached, {counts['invalid']} invalid, "
             f"{counts['not tested']} not tested)"
         )
 
