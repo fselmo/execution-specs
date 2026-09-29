@@ -49,6 +49,8 @@ Ordered by survivors a generator change could fix.
 
 - **59, the deposit log's layout check**, is unreachable by construction. A deposit log comes from the deposit contract fixed in a chain's genesis, and the canonical contract always emits the well-formed layout. A client never receives a malformed deposit log on a real chain. EEST checks the parsing with a replaced contract under `pre_alloc_mutable` (`tests/prague/eip6110_deposits/test_modified_contract.py`), which a test can do and a network cannot. 56 and 57 are the same checks in the evaluation half, and are not considered.
 - **63, the authorization's `r` range check**, is equivalent. `secp256k1_recover` rejects every `r` the check does (zero, the curve order and above) with the same `InvalidSignatureError`, so no case can tell the mutant apart.
+- **70, the base fee's `parent_gas_used > parent_gas_target`**, is equivalent. `calculate_base_fee_per_gas` handles equality in the branch before it and returns, so the mutated `>=` only ever sees unequal values, where it agrees with `>`.
+- **01, the BAL item limit's `>`**, is unreachable by construction. The limit is `block_gas_limit // 2000` items, and every way to add an item costs more execution gas than 2000: a cold storage read 2100, a cold account access 2600, an authorization over 5,800. The only items that cost no gas are a fixed handful: the coinbase, the system contracts, and the consensus layer's 16 withdrawals at most. So at any gas limit a block holds at most about `block_gas_limit // 2100` items plus a few dozen, below the limit. The check is a backstop that gas already enforces.
 
 ## Survivors, ranked by stratum
 
