@@ -238,6 +238,13 @@ class HealthConfig(BaseModel):
     parallel_drop_tolerance: float = 0.0
     parallel_baseline_blocks: int = 2000
     parallel_proof_floor: float = 0.9
+    negative_control: bool = False
+    """Hold each client's share of negative cases answered INVALID to its
+    segment's baseline; for an engine-format campaign, where negatives
+    are drawn. See `health.HealthPolicy.negative_control`."""
+    negative_baseline_cases: int = 200
+    negative_drop_tolerance: float = 0.0
+    negative_floor: float = 0.99
 
     @model_validator(mode="after")
     def _control_names_a_client(self) -> "HealthConfig":
@@ -283,6 +290,19 @@ class CampaignConfig(BaseModel):
     health: HealthConfig = Field(default_factory=HealthConfig)
     """Bands checked after every batch; one out of band pauses the run.
     The alert webhook is never configured here: see `FUZZ_ALERT_URL`."""
+
+    @model_validator(mode="after")
+    def _negatives_need_the_engine_format(self) -> "CampaignConfig":
+        if (
+            self.health.negative_control
+            and self.fixture_format != "blockchain_test_engine"
+        ):
+            raise ValueError(
+                "health.negative_control needs fixture_format "
+                "blockchain_test_engine: only an engine fill applies the "
+                "negative draw, so any other format has no negatives to hold"
+            )
+        return self
 
 
 class FuzzConfig(BaseModel):

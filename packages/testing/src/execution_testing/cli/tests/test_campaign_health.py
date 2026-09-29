@@ -216,3 +216,59 @@ def test_the_control_band_widens_for_a_sampled_control() -> None:
     assert math.isclose(high, 0.08 + z * math.sqrt(0.08 * 0.92 * extra))
     every, _ = evaluate(window(18, 1), policy, [], 2, BASELINE)
     assert every["control_band"] == [0.0, 0.08]
+
+
+ENGINE = HealthPolicy(window=100, negative_control=True)
+
+
+def test_negatives_cannot_pause_while_they_calibrate() -> None:
+    """Before the segment's baseline is set, no share of negatives pauses."""
+    rates, problems = evaluate(
+        [_sample(100, negatives={"geth": [0, 10]})],
+        ENGINE,
+        [],
+        2,
+        {"negative_calibration": {"cases": 50, "clients": {}}},
+    )
+    assert problems == []
+    assert rates["negatives"]["geth"]["note"] == (
+        "calibrating (50/200 negative cases): cannot pause yet"
+    )
+
+
+def test_a_baseline_already_accepting_negatives_is_flagged() -> None:
+    """
+    Every negative should come back INVALID, so a baseline under the floor
+    was set by a client already accepting some, which a drop from that
+    baseline cannot catch.
+    """
+    rates, problems = evaluate(
+        [_sample(100, negatives={"besu": [9, 10]})],
+        ENGINE,
+        [],
+        2,
+        {"negative_baseline": {"besu": [180, 200]}},
+    )
+    assert problems == []
+    assert "below 99%" in rates["negatives"]["besu"]["note"]
+
+
+def test_negative_control_needs_the_engine_format() -> None:
+    """Only an engine fill draws negatives, so another format is refused."""
+    import pytest
+    from pydantic import ValidationError
+
+    from ..fuzzer_bridge.config import CampaignConfig
+
+    with pytest.raises(ValidationError, match="blockchain_test_engine"):
+        CampaignConfig(
+            fork="Amsterdam",
+            clients=["geth"],
+            health={"negative_control": True},
+        )
+    CampaignConfig(
+        fork="Amsterdam",
+        clients=["geth"],
+        fixture_format="blockchain_test_engine",
+        health={"negative_control": True},
+    )

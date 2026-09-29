@@ -154,7 +154,12 @@ def _hash(seed: int) -> str:
 
 
 class _FakePool:
-    """Synchronous stand-in pool: fills a slice of trivial fixtures."""
+    """
+    Synchronous stand-in pool: fills a slice of trivial fixtures, those
+    where `negative(seed)` holds marked as negative cases.
+    """
+
+    negative: Any = staticmethod(lambda _seed: False)
 
     def __enter__(self) -> "_FakePool":
         return self
@@ -175,6 +180,11 @@ class _FakePool:
                     }
                 ],
                 "seed": s,
+                **(
+                    {"_info": {"negative": {"family": "header"}}}
+                    if type(self).negative(s)
+                    else {}
+                ),
             }
             for s in seeds
         }
@@ -2307,3 +2317,62 @@ def test_client_findings_leave_out_the_control_known_and_producer(
     summary = json.loads((tmp_path / "state.json").read_text())["summary"]
     assert summary["client_findings"] == 2
     assert summary["client_findings_per_million_cases"] == 250.0
+
+
+def _negative_campaign(
+    tmp_path: Path, monkeypatch: Any, failing: Dict[str, Any], count: int
+) -> Any:
+    """Every even seed is a negative case; the control calibrates on 10."""
+    from ..fuzzer_bridge.health import HealthPolicy
+
+    monkeypatch.setattr(
+        _FakePool, "negative", staticmethod(lambda seed: seed % 2 == 0)
+    )
+    return _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        batch=20,
+        baseline=False,
+        count=count,
+        health=HealthPolicy(
+            window=20, negative_control=True, negative_baseline_cases=10
+        ),
+    )
+
+
+def test_negatives_answered_invalid_are_counted_and_baselined(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A pass on a negative fixture is the client answering INVALID. Each
+    client's share is tallied, and the segment's baseline is set once its
+    opening batches hold the calibration's negative cases.
+    """
+    passing = {"geth": lambda _s: False, "nethermind": lambda _s: False}
+    state = _negative_campaign(tmp_path, monkeypatch, passing, 60)
+    assert state.status == "done"
+    assert state.negatives == {"geth": [30, 30], "nethermind": [30, 30]}
+    assert state.segments[-1]["negative_baseline"] == {
+        "geth": [10, 10],
+        "nethermind": [10, 10],
+    }
+    assert state.health["negatives"]["nethermind"]["rate"] == 1.0
+
+
+def test_a_client_that_stops_refusing_negatives_pauses(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Nethermind answers INVALID to every negative in the opening batches,
+    then to none: the drop is far beyond sampling, so the campaign pauses
+    and names the client. geth, still refusing them, is not named.
+    """
+    failing = {
+        "geth": lambda _s: False,
+        "nethermind": lambda s: s >= 40 and s % 2 == 0,
+    }
+    state = _negative_campaign(tmp_path, monkeypatch, failing, 100)
+    assert state.status == "paused"
+    assert "answered INVALID by nethermind fell" in state.status_reason
+    assert "geth" not in state.status_reason

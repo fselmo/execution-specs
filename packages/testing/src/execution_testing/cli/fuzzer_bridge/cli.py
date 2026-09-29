@@ -308,6 +308,10 @@ def campaign(
             parallel_drop_tolerance=health.parallel_drop_tolerance,
             parallel_baseline_blocks=health.parallel_baseline_blocks,
             parallel_proof_floor=health.parallel_proof_floor,
+            negative_control=health.negative_control,
+            negative_baseline_cases=health.negative_baseline_cases,
+            negative_drop_tolerance=health.negative_drop_tolerance,
+            negative_floor=health.negative_floor,
         ),
     )
     if producer is not None:

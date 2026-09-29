@@ -95,6 +95,13 @@ function healthRows(s, prefix) {
       : "baseline " + pct(h.control_baseline) + ", at most " + pct(band[1]);
     checks.push(row(prefix + "control " + h.control_client + ", " + every(h.control_every), pct(rate) + over + " (" + against + ")", out));
   }
+  // The engine lane's control: every negative must come back INVALID.
+  for (const [client, g] of Object.entries(h.negatives || {})) {
+    const hasBase = g.baseline !== null && g.baseline !== undefined;
+    let text = pct(g.rate) + " INVALID over " + g.judged + " negatives" + (hasBase ? " (baseline " + pct(g.baseline) + ")" : "");
+    if (g.note) text += "; " + g.note;
+    checks.push(row(prefix + "control: negatives, " + client, text, hasBase && g.rate !== null && g.rate < g.baseline));
+  }
   if (h.runner_error_rate !== undefined) checks.push(row(prefix + "runner errors", pct(h.runner_error_rate) + " (max " + pct(h.max_runner_error_rate) + ")", h.runner_error_rate > h.max_runner_error_rate));
   if (h.producer_disagreement_rate !== undefined) checks.push(row(prefix + "producer disagreement", pct(h.producer_disagreement_rate) + " (max " + pct(h.max_producer_disagreement_rate) + ")", h.producer_disagreement_rate > h.max_producer_disagreement_rate));
   for (const [lane, g] of Object.entries(h.parallel || {})) {

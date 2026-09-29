@@ -69,6 +69,20 @@ class HealthPolicy:
     """The pre-run proof runs every BAL-carrying block in parallel. A
     baseline below this share was likely set by an already-degraded
     binary, which the drop test can then never catch, so it is flagged."""
+    negative_control: bool = False
+    """Hold each client's share of negative cases answered INVALID to its
+    segment's baseline: the engine lane's control, where besu-gate's
+    import-lane bug cannot serve."""
+    negative_baseline_cases: int = 200
+    """Negative cases the segment's opening batches must hold before each
+    client's baseline is set; until then the check cannot pause."""
+    negative_drop_tolerance: float = 0.0
+    """Proportional drop a client's INVALID share may take before the
+    binomial test is asked; 0 leaves the test alone to decide."""
+    negative_floor: float = 0.99
+    """Every negative should be answered INVALID. A baseline below this
+    was set by a client already accepting some, which a drop from it
+    cannot catch, so it is flagged."""
 
 
 def batch_sample(
@@ -109,6 +123,13 @@ def batch_sample(
             ]
             for lane, counts in after["parallel"].items()
         },
+        "negatives": {
+            client: [
+                counts[0] - before.get("negatives", {}).get(client, [0, 0])[0],
+                counts[1] - before.get("negatives", {}).get(client, [0, 0])[1],
+            ]
+            for client, counts in after.get("negatives", {}).items()
+        },
     }
 
 
@@ -139,6 +160,10 @@ def snapshot(state: Any, policy: HealthPolicy) -> Dict[str, Any]:
             if policy.control_client is not None
             else 0
         ),
+        "negatives": {
+            client: list(counts)
+            for client, counts in getattr(state, "negatives", {}).items()
+        },
     }
 
 
@@ -260,6 +285,11 @@ def evaluate(
         window, policy, segment or {}
     )
     problems += dropped
+    if policy.negative_control:
+        rates["negatives"], dropped = _negative_checks(
+            window, policy, segment or {}
+        )
+        problems += dropped
     return rates, problems
 
 
@@ -395,6 +425,79 @@ def _parallel_checks(
                         f"parallel decisions on {lane} fell: {drops[0]}"
                     )
         rates[lane] = entry
+    return rates, problems
+
+
+def _negative_checks(
+    window: List[Dict[str, Any]],
+    policy: HealthPolicy,
+    segment: Mapping[str, Any],
+) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Each client's share of negative cases answered INVALID, against its
+    segment's baseline, by the binomial test the control uses.
+
+    A negative reaches the clients only after EELS refused it with the
+    exception it names, so every client should answer INVALID to all of
+    them; a client whose share drops has stopped refusing something.
+    """
+    from .density import significant_drops
+
+    rates: Dict[str, Any] = {}
+    problems = []
+    clients = sorted(
+        {c for s in window for c in s.get("negatives", {})}
+        | set(segment.get("negative_baseline") or {})
+    )
+    baseline = segment.get("negative_baseline")
+    for client in clients:
+        invalid = sum(
+            s.get("negatives", {}).get(client, [0, 0])[0] for s in window
+        )
+        judged = sum(
+            s.get("negatives", {}).get(client, [0, 0])[1] for s in window
+        )
+        entry: Dict[str, Any] = {
+            "invalid": invalid,
+            "judged": judged,
+            "rate": invalid / judged if judged else None,
+        }
+        base = (baseline or {}).get(client)
+        if baseline is None:
+            calibrated = segment.get("negative_calibration", {}).get(
+                "cases", 0
+            )
+            entry["baseline"] = None
+            entry["note"] = (
+                f"calibrating ({calibrated}/{policy.negative_baseline_cases}"
+                " negative cases): cannot pause yet"
+            )
+        elif not base or not base[1]:
+            entry["baseline"] = None
+            entry["note"] = "no baseline for this segment: cannot pause"
+        else:
+            entry["baseline"] = base[0] / base[1]
+            if entry["baseline"] < policy.negative_floor:
+                entry["note"] = (
+                    f"baseline {entry['baseline']:.2%} is below "
+                    f"{policy.negative_floor:.0%}: the client already "
+                    "accepted some negatives when the segment opened, and "
+                    "a drop from there cannot catch that"
+                )
+            if judged:
+                drops = significant_drops(
+                    {client: base[0]},
+                    {client: invalid},
+                    base[1],
+                    judged,
+                    tolerance=policy.negative_drop_tolerance,
+                )
+                if drops:
+                    problems.append(
+                        f"negatives answered INVALID by {client} fell: "
+                        f"{drops[0]}"
+                    )
+        rates[client] = entry
     return rates, problems
 
 

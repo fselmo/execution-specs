@@ -366,6 +366,11 @@ class CampaignState:
     parallel: Dict[str, Dict[str, int]] = field(default_factory=dict)
     """Per lane, BAL-carrying blocks judged and how many it decided to run
     in parallel, from the series' `FUZZ-PAR-DECISION` lines."""
+    negatives: Dict[str, List[int]] = field(default_factory=dict)
+    """Per client, [answered INVALID, judged] over the negative cases it
+    returned a verdict on. A pass on a negative fixture is the client
+    answering INVALID, so every negative should land in the first count;
+    it is the engine lane's control."""
     timing: Dict[str, float] = field(default_factory=dict)
     """Seconds the loop spent, summed over batches: waiting for a fill,
     judging (runners working), and processing afterwards. Runners sit
@@ -467,6 +472,37 @@ class CampaignState:
                 if decisions and blocks
             }
 
+    def record_negatives(
+        self, judged: Mapping[str, Sequence[int]], calibration_cases: int
+    ) -> None:
+        """
+        Add a batch's negative verdicts to the totals, and calibrate the
+        open segment's per-client baseline from its opening batches, as
+        `record_control` does for the positive control.
+        """
+        for client, (invalid, cases) in judged.items():
+            total = self.negatives.setdefault(client, [0, 0])
+            total[0] += invalid
+            total[1] += cases
+        if not self.segments or "negative_baseline" in self.segments[-1]:
+            return
+        calibration = self.segments[-1].setdefault(
+            "negative_calibration", {"cases": 0, "clients": {}}
+        )
+        calibration["cases"] += max(
+            (cases for _, cases in judged.values()), default=0
+        )
+        for client, (invalid, cases) in judged.items():
+            counts = calibration["clients"].setdefault(client, [0, 0])
+            counts[0] += invalid
+            counts[1] += cases
+        if calibration["cases"] >= calibration_cases:
+            self.segments[-1]["negative_baseline"] = {
+                client: list(counts)
+                for client, counts in calibration["clients"].items()
+                if counts[1]
+            }
+
     def record_control(
         self, hits: int, cases: int, calibration_cases: int
     ) -> None:
@@ -565,6 +601,7 @@ class CampaignState:
                 health=data.get("health", {}),
                 timing=data.get("timing", {}),
                 parallel=data.get("parallel", {}),
+                negatives=data.get("negatives", {}),
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
             return state
@@ -601,6 +638,7 @@ class CampaignState:
                     "timing": self.timing,
                     "running_seconds": self.active_seconds(),
                     "parallel": self.parallel,
+                    "negatives": self.negatives,
                     # Written for readers of the file, the status page
                     # among them, so none has to derive it.
                     "summary": {
@@ -2239,6 +2277,7 @@ def run_campaign(
             )
 
             keep_file = False
+            batch_negatives: Dict[str, List[int]] = {}
             runner_seconds: Dict[str, float] = {}
             if names:
                 batch_file = Path(slice_result["path"])
@@ -2377,11 +2416,25 @@ def run_campaign(
                             fixture_name
                         ]
                 batch_failures = dict.fromkeys(judges, 0)
+                negative_names = {
+                    name
+                    for name in names
+                    if batch_fixtures.get(name, {})
+                    .get("_info", {})
+                    .get("negative")
+                }
                 for fixture_name in names:
                     verdicts = {
                         name: results[name][fixture_name] for name in judges
                     }
                     verdicts, errored = partition_runner_errors(verdicts)
+                    if fixture_name in negative_names:
+                        # The fixture expects INVALID, so a pass is the
+                        # client refusing the modified block.
+                        for name, verdict in verdicts.items():
+                            refused = batch_negatives.setdefault(name, [0, 0])
+                            refused[0] += int(verdict.passed)
+                            refused[1] += 1
                     for name in errored:
                         state.runner_errors[name] = (
                             state.runner_errors.get(name, 0) + 1
@@ -2564,6 +2617,10 @@ def run_campaign(
                     )
 
             state.next_seed = seeds.stop
+            if options.health.negative_control and names:
+                state.record_negatives(
+                    batch_negatives, options.health.negative_baseline_cases
+                )
             sample = batch_sample(
                 before,
                 health_snapshot(state, options.health),
