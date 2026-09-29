@@ -16,6 +16,7 @@ import random
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from execution_testing.base_types import (
+    AccessList,
     Address,
     Bytes,
     Hash,
@@ -49,7 +50,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 29
+GENERATOR_VERSION = 30
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -525,6 +526,19 @@ def max_initcode_creator_code() -> bytes:
     return bytes(Op.SSTORE(0, Op.CREATE(0, 0, Op.CALLDATALOAD(0))) + Op.STOP)
 
 
+DELEGATED_ACCOUNT_ADDRESS = 0x2D000
+"""An account that already holds a delegation to one of the case's
+contracts, as one delegated in an earlier block would. Transactions are
+sent straight to it, so the delegated code runs as the transaction's
+own, and the delegated address is warm or cold as the transaction's
+access list makes it."""
+
+
+def delegation_designator(target: int) -> bytes:
+    """The code an account holds once delegated to ``target``."""
+    return b"\xef\x01\x00" + target.to_bytes(20, "big")
+
+
 REQUEST_TX_GAS = 1_000_000
 """Gas for a transaction to a request system contract: enough for the
 deposit contract's tree update and a queue contract's four slots."""
@@ -947,6 +961,14 @@ def generate_fuzzer_output(
             nonce=HexNumber(nonce),
             code=Bytes(deployer_code(opcode)),
         )
+    # A case with no contracts has nothing to delegate to.
+    delegate = rng.choice(contract_ints) if contract_ints else None
+    if delegate is not None:
+        accounts[Address(DELEGATED_ACCOUNT_ADDRESS)] = FuzzerAccountInput(
+            balance=HexNumber(10**18),
+            nonce=HexNumber(1),
+            code=Bytes(delegation_designator(delegate)),
+        )
     accounts[Address(MAX_INITCODE_CREATOR_ADDRESS)] = FuzzerAccountInput(
         balance=HexNumber(0),
         nonce=HexNumber(1),
@@ -999,6 +1021,7 @@ def generate_fuzzer_output(
         initcode: Optional[bytes] = None
         requested: Optional[Tuple[Address, int, bytes]] = None
         initcode_size: Optional[int] = None
+        delegated_warm: Optional[bool] = None
         if rng.random() < domains.failing_tx_rate:
             to = Address(FAILER_ADDRESS)
         elif rng.random() < domains.toucher_tx_rate:
@@ -1051,6 +1074,12 @@ def generate_fuzzer_output(
         ):
             to = Address(MAX_INITCODE_CREATOR_ADDRESS)
             initcode_size = fork.max_initcode_size() + rng.choice((0, 1))
+        elif (
+            delegate is not None
+            and rng.random() < domains.delegated_call_tx_rate
+        ):
+            to = Address(DELEGATED_ACCOUNT_ADDRESS)
+            delegated_warm = rng.random() < 0.5
         elif (
             rng.random() < domains.deployer_tx_rate
             and DEPLOYER_TX_GAS <= min(tx_gas_cap, budgets[block])
@@ -1127,6 +1156,10 @@ def generate_fuzzer_output(
             tx_type = 2
             data = Bytes(initcode)
             value = 0
+        if delegated_warm is not None:
+            # Type 2 carries the access list; no authorizations, which
+            # would warm addresses of their own.
+            tx_type = 2
         if initcode_size is not None:
             gas = MAX_INITCODE_TX_GAS
             tx_type = 2
@@ -1162,6 +1195,10 @@ def generate_fuzzer_output(
             fields["gas_price"] = HexNumber(2 * base_fee)
         else:
             fields.update(_fee_market_fields(rng, base_fee))
+        if delegated_warm and delegate is not None:
+            fields["access_list"] = [
+                AccessList(address=Address(delegate), storage_keys=[])
+            ]
         if tx_type == 4:
             fields["authorization_list"] = _authorizations(
                 rng,

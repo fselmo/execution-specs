@@ -325,6 +325,11 @@ class ValueDomains:
     """Share of transactions sent to the helper that creates from the
     fork's largest initcode, or one byte more. At v26 no CREATE came near
     the limit."""
+    delegated_call_tx_rate: float = 0.05
+    """Share of transactions sent straight to an account that already
+    holds a delegation, half of them with the delegated contract in their
+    access list. At v26 no transaction was sent to a delegated account,
+    so the dispatch through a delegation never ran."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays

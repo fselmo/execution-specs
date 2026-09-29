@@ -432,6 +432,20 @@ def _tally_max_initcode(
         tally["max_initcode_size"]["one_over" if over else "exact"] += 1
 
 
+def _tally_delegated_calls(case: Any, tally: Dict[str, Counter]) -> None:
+    """Count transactions to the delegated account, warm and cold."""
+    from execution_testing.base_types import Address
+
+    from .generator import DELEGATED_ACCOUNT_ADDRESS
+
+    delegated = Address(DELEGATED_ACCOUNT_ADDRESS)
+    owned = [tx for tx in case.transactions if tx.to == delegated]
+    tally["delegated_call_tx"]["present" if owned else "absent"] += 1
+    for tx in owned:
+        warm = bool(tx.access_list)
+        tally["delegated_target"]["warm" if warm else "cold"] += 1
+
+
 def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     """
     Share of draws holding each value of every multi-valued input axis.
@@ -488,6 +502,8 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "request_valid": Counter(),
         "max_initcode_tx": Counter(),
         "max_initcode_size": Counter(),
+        "delegated_call_tx": Counter(),
+        "delegated_target": Counter(),
         "deployer_initcode": Counter(),
     }
     reads = _blockhash_signatures()
@@ -578,6 +594,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         _tally_deployer(case, tally)
         _tally_requests(case, fork, tally)
         _tally_max_initcode(case, fork, tally)
+        _tally_delegated_calls(case, tally)
         maxed = [tx for tx in case.transactions if int(tx.nonce) >= 2**64 - 2]
         tally["max_nonce_block"]["present" if maxed else "absent"] += 1
         if maxed:
@@ -745,6 +762,8 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "request_valid": ("yes", "no"),
     "max_initcode_tx": ("present", "absent"),
     "max_initcode_size": ("exact", "one_over"),
+    "delegated_call_tx": ("present", "absent"),
+    "delegated_target": ("warm", "cold"),
     "deployer_initcode": ("empty", "nonempty"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
