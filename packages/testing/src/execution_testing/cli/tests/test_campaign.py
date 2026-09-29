@@ -276,8 +276,14 @@ def _campaign(
     )
 
     def detect(
-        _cls: Any, name: str, _binary: Any, flags: Any = (), env: Any = None
+        _cls: Any,
+        name: str,
+        _binary: Any,
+        flags: Any = (),
+        env: Any = None,
+        engine: bool = False,
     ) -> Any:
+        del engine
         made = make(name, flags)
         if env:
             made.env = dict(env)

@@ -1856,6 +1856,8 @@ def run_campaign(
             path,
             options.runner_flags.get(name, ()),
             env=options.client_env.get(name, {}),
+            # An engine-format campaign judges through the engine path.
+            engine=options.fixture_format == "blockchain_test_engine",
         )
         for name, path in options.clients.items()
     }

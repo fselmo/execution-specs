@@ -160,6 +160,16 @@ def strip_nethermind_suffix(name: str) -> str:
     return _NETHERMIND_SUFFIX.sub("", name)
 
 
+ENGINE_RUNNERS = ("NethtestFixtureConsumer",)
+"""Runners with an Engine API path wired. besu's `evmtool engine-test`
+waits on the parallel-processor unlock its import path needed; geth and
+erigon have no engine runner."""
+
+
+class EngineRunnerUnsupportedError(ValueError):
+    """An engine-format campaign named a client with no engine runner."""
+
+
 @dataclass
 class FixtureRunner:
     """One client's standalone runner, keyed by EEST's consumer class."""
@@ -174,6 +184,10 @@ class FixtureRunner:
     `EXEC3_WORKERS` and `IGNORE_BAL` -- so a contrast run that only varies
     argv cannot reach them."""
     timeout: float = 1800.0
+    engine: bool = False
+    """Judge through the client's Engine API path (`blockchain_test_engine`
+    fixtures) instead of its block import. Only nethermind's `nethtest
+    --engineTest` is wired; see `ENGINE_RUNNERS`."""
     _last_error: str = ""
     last_stderr: str = ""
     """Standard error of the latest run: where a client prints what its
@@ -186,6 +200,7 @@ class FixtureRunner:
         binary: Path,
         flags: Sequence[str] = (),
         env: Optional[Mapping[str, str]] = None,
+        engine: bool = False,
     ) -> "FixtureRunner":
         """
         Identify the runner behind ``binary`` via EEST detection.
@@ -196,12 +211,19 @@ class FixtureRunner:
         """
         with client_environment(env or {}):
             consumer = FixtureConsumerTool.from_binary_path(binary_path=binary)
+        kind = type(consumer).__name__
+        if engine and kind not in ENGINE_RUNNERS:
+            raise EngineRunnerUnsupportedError(
+                f"{name}: {kind} has no engine runner wired; an engine-format "
+                f"campaign can judge only with {', '.join(ENGINE_RUNNERS)}"
+            )
         return cls(
             name=name,
             binary=binary,
-            kind=type(consumer).__name__,
+            kind=kind,
             flags=tuple(flags),
             env=dict(env or {}),
+            engine=engine,
         )
 
     def with_flags(self, flags: Sequence[str]) -> "FixtureRunner":
@@ -371,7 +393,8 @@ class FixtureRunner:
         return verdicts
 
     def _run_nethermind(self, path: Path) -> Dict[str, Verdict]:
-        proc = self._run(["--blockTest", *self.flags, "--input", str(path)])
+        mode = "--engineTest" if self.engine else "--blockTest"
+        proc = self._run([mode, *self.flags, "--input", str(path)])
         parsed = parse_json_array(proc.stdout)
         verdicts = {strip_nethermind_suffix(n): v for n, v in parsed.items()}
         if not verdicts and proc.returncode != 0:

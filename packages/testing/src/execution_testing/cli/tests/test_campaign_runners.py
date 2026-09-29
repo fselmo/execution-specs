@@ -266,3 +266,98 @@ def test_parse_besu_ndjson_reads_test_or_name() -> None:
     verdicts = parse_besu_ndjson(out)
     assert verdicts["a"].passed
     assert not verdicts["b"].passed and "state root" in verdicts["b"].error
+
+
+def test_an_engine_campaign_judges_nethermind_through_its_engine_path(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """
+    `blockchain_test_engine` fixtures go to `nethtest --engineTest`, whose
+    result list is the one `--blockTest` prints, so it parses the same.
+    """
+    runner = FixtureRunner(
+        "nethermind",
+        Path("/bin/nethtest"),
+        "NethtestFixtureConsumer",
+        engine=True,
+    )
+    seen: List[List[str]] = []
+    stdout = (
+        '[{"name": "seed_0", "pass": true, "fork": "Amsterdam", '
+        '"lastPayloadStatus": "VALID"}]'
+    )
+
+    def fake_run(args: Any) -> Any:
+        seen.append(list(args))
+        return type("P", (), {"stdout": stdout, "stderr": "", "returncode": 0})
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    fixture = tmp_path / "batch.json"
+    fixture.write_text("{}")
+    verdicts = runner.run_file(fixture, ["seed_0"])
+    (args,) = seen
+    assert args[0] == "--engineTest"
+    assert verdicts == {"seed_0": Verdict(True)}
+
+
+def test_an_engine_campaign_refuses_a_client_with_no_engine_runner(
+    monkeypatch: Any,
+) -> None:
+    """
+    Geth and erigon have no engine runner and besu's waits on its
+    parallel unlock: an engine-format campaign naming one stops before it
+    fills anything, rather than judging on import and calling it engine.
+    """
+    from ..fuzzer_bridge import runners as runners_module
+    from ..fuzzer_bridge.runners import EngineRunnerUnsupportedError
+
+    monkeypatch.setattr(
+        runners_module.FixtureConsumerTool,
+        "from_binary_path",
+        lambda **_: type("GethFixtureConsumer", (), {})(),
+    )
+    with pytest.raises(EngineRunnerUnsupportedError, match="geth"):
+        FixtureRunner.detect("geth", Path("/bin/evm"), engine=True)
+    assert FixtureRunner.detect("geth", Path("/bin/evm")).engine is False
+
+
+def test_nethtest_judges_generated_engine_fixtures() -> None:
+    """
+    A real `nethtest --engineTest` passes fixtures EELS filled in the
+    engine format. `NETHTEST` names the binary; skipped without one.
+    """
+    import contextlib
+    import io
+    import json
+    import os
+    import tempfile
+    import warnings
+
+    from ..fuzzer_bridge import campaign as mod
+    from ..fuzzer_bridge.generator import generate_fuzzer_output
+
+    binary = os.environ.get("NETHTEST")
+    if not binary or not Path(binary).is_file():
+        pytest.skip("set NETHTEST to a nethtest binary")
+    mod._init_fill_worker("Amsterdam")
+    fork, eels = mod._FILL["fork"], mod._FILL["eels"]
+    engine = mod.campaign_format("blockchain_test_engine")
+    fixtures = {}
+    for seed in range(3):
+        with contextlib.redirect_stdout(io.StringIO()):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                fixtures[f"seed_{seed}"] = mod.fill_case(
+                    generate_fuzzer_output(fork, seed),
+                    fork,
+                    eels,
+                    fixture_format=engine,
+                )
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "batch.json"
+        path.write_text(json.dumps(fixtures))
+        runner = FixtureRunner(
+            "nethermind", Path(binary), "NethtestFixtureConsumer", engine=True
+        )
+        verdicts = runner.run_file(path, list(fixtures))
+    assert all(v.passed for v in verdicts.values()), verdicts
