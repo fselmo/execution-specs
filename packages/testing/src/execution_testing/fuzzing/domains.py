@@ -313,6 +313,14 @@ class ValueDomains:
     max_nonce_rejected_share: float = 0.5
     """Share of those blocks where an account at the highest nonce then
     sends one, which must be rejected."""
+    request_tx_rate: float = 0.08
+    """Share of the remaining transactions sent to a request system
+    contract: a deposit, withdrawal request, consolidation, builder deposit
+    or builder exit. At v26 no generated case produced a request, and none
+    of the request paths ran."""
+    request_invalid_share: float = 0.25
+    """Share of requests drawn to be refused: a queued request under the
+    minimum fee, or a deposit that is not a whole number of gwei."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays

@@ -49,7 +49,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 27
+GENERATOR_VERSION = 28
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -510,6 +510,45 @@ def deployer_initcode(words: int, deployed: int) -> bytes:
     return code.ljust(32 * words, b"\0")
 
 
+REQUEST_TX_GAS = 1_000_000
+"""Gas for a transaction to a request system contract: enough for the
+deposit contract's tree update and a queue contract's four slots."""
+
+REQUEST_FEE = 10**15
+"""What a queued request pays: far above the fee at any excess a case can
+build up, so a request drawn to be valid is never refused for its fee."""
+
+
+def request_call(
+    fork: Fork, kind: int, index: int, valid: bool
+) -> Tuple[Address, int, bytes]:
+    """
+    The system contract, value and calldata of one request of ``kind``.
+
+    A valid queued request pays `REQUEST_FEE` on top of anything it stakes;
+    an invalid one pays no fee, under the minimum. A valid deposit sends
+    its amount; an invalid one sends a wei more, not a whole number of
+    gwei.
+    """
+    (cls,) = [
+        c for c in fork.system_contract_request_types() if c.type == kind
+    ]
+    request = cls.from_index(index)
+    # The class prices its own call: a queue's fee on top of whatever it
+    # stakes, a deposit's amount plus any extra wei.
+    if "fee" in type(request).model_fields:
+        request = request.model_copy(
+            update={"fee": REQUEST_FEE if valid else 0}
+        )
+    elif not valid:
+        request = request.model_copy(update={"extra_wei": 1})
+    return (
+        Address(cls.system_contract_address),
+        request.value,
+        bytes(request.calldata),
+    )
+
+
 RESERVOIR_TX_RATE = 0.35
 """Fraction of transactions drawn above the execution-gas cap, so the
 transaction carries a non-empty state gas reservoir.
@@ -931,12 +970,14 @@ def generate_fuzzer_output(
         base_fee = _highest_base_fee(fork, domains, block)
         sender = rng.choice(sender_addresses)
         to = Address(rng.choice(tx_targets))
+        drawn_to = to
         gas_need_fraction = None
         exhaust: Optional[Tuple[int, int]] = None
         exact_gas: Optional[int] = None
         grave: Optional[Tuple[Address, int]] = None
         creation: Optional[str] = None
         initcode: Optional[bytes] = None
+        requested: Optional[Tuple[Address, int, bytes]] = None
         if rng.random() < domains.failing_tx_rate:
             to = Address(FAILER_ADDRESS)
         elif rng.random() < domains.toucher_tx_rate:
@@ -1002,6 +1043,24 @@ def generate_fuzzer_output(
                 DEPLOYER_ADDRESSES[rng.choice(("near_max_nonce", "max_nonce"))]
             )
             initcode = deployer_initcode(1, 1)
+        # Drawn only for a transaction no motif above has claimed.
+        if (
+            to == drawn_to
+            and creation is None
+            and fork.system_contract_request_types()
+            and rng.random() < domains.request_tx_rate
+            and REQUEST_TX_GAS <= min(tx_gas_cap, budgets[block])
+        ):
+            request_types = [
+                c.type for c in fork.system_contract_request_types()
+            ]
+            requested = request_call(
+                fork,
+                rng.choice(request_types),
+                rng.randrange(0, 1 << 16),
+                rng.random() >= domains.request_invalid_share,
+            )
+            to = requested[0]
         choices = tx_gas_choices
         if domains.reservoir_tx_gas and rng.random() < RESERVOIR_TX_RATE:
             choices = domains.reservoir_tx_gas + tx_gas_choices
@@ -1041,6 +1100,12 @@ def generate_fuzzer_output(
             tx_type = 2
             data = Bytes(initcode)
             value = 0
+        if requested is not None:
+            # No authorizations: they would come out of the request's gas.
+            gas = REQUEST_TX_GAS
+            tx_type = 2
+            value = requested[1]
+            data = Bytes(requested[2])
         tx_to: Optional[Address] = to
         if creation is not None:
             # A creation cannot carry authorizations, and its address is

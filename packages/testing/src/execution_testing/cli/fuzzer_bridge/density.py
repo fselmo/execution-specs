@@ -390,6 +390,31 @@ def _tally_deployer(case: Any, tally: Dict[str, Counter]) -> None:
         ] += 1
 
 
+def _tally_requests(
+    case: Any, fork: "Fork", tally: Dict[str, Counter]
+) -> None:
+    """Count request transactions, their type and whether they pay."""
+    from execution_testing.base_types import Address
+
+    from .generator import REQUEST_FEE
+
+    by_address = {
+        Address(c.system_contract_address): c
+        for c in fork.system_contract_request_types()
+    }
+    owned = [tx for tx in case.transactions if tx.to in by_address]
+    tally["request_tx"]["present" if owned else "absent"] += 1
+    for tx in owned:
+        assert tx.to is not None
+        cls = by_address[tx.to]
+        tally["request_kind"][cls.__name__] += 1
+        if hasattr(cls, "min_fee"):
+            valid = int(tx.value) >= REQUEST_FEE
+        else:
+            valid = int(tx.value) % 10**9 == 0
+        tally["request_valid"]["yes" if valid else "no"] += 1
+
+
 def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     """
     Share of draws holding each value of every multi-valued input axis.
@@ -441,6 +466,9 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "deployer_kind": Counter(),
         "max_nonce_block": Counter(),
         "max_nonce_rejected": Counter(),
+        "request_tx": Counter(),
+        "request_kind": Counter(),
+        "request_valid": Counter(),
         "deployer_initcode": Counter(),
     }
     reads = _blockhash_signatures()
@@ -529,6 +557,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         _tally_creation(case, tally)
         _tally_near_full(case, fork, tally)
         _tally_deployer(case, tally)
+        _tally_requests(case, fork, tally)
         maxed = [tx for tx in case.transactions if int(tx.nonce) >= 2**64 - 2]
         tally["max_nonce_block"]["present" if maxed else "absent"] += 1
         if maxed:
@@ -685,6 +714,15 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "deployer_kind": ("CREATE", "CREATE2", "near_max_nonce", "max_nonce"),
     "max_nonce_block": ("present", "absent"),
     "max_nonce_rejected": ("yes", "no"),
+    "request_tx": ("present", "absent"),
+    "request_kind": (
+        "DepositRequest",
+        "WithdrawalRequest",
+        "ConsolidationRequest",
+        "BuilderDepositRequest",
+        "BuilderExitRequest",
+    ),
+    "request_valid": ("yes", "no"),
     "deployer_initcode": ("empty", "nonempty"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to

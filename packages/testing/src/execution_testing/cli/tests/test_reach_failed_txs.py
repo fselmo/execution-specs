@@ -70,8 +70,16 @@ def _send_to_failer(code: bytes, storage: Dict) -> FuzzerOutput:
             "authorization_list": None,
         }
     )
+    # A block drawn to be rejected runs transactions no receipt records.
+    rejected = {tx.block for tx in transactions if tx.error}
     return case.model_copy(
-        update={"accounts": accounts, "transactions": transactions}
+        update={
+            "accounts": accounts,
+            "transactions": [
+                tx for tx in transactions if tx.block not in rejected
+            ],
+            "block_count": case.block_count - len(rejected),
+        }
     )
 
 
@@ -189,6 +197,8 @@ def test_the_outcome_tally_matches_the_receipts() -> None:
     succeeded = sum(
         bool(receipt["status"])
         for block in fixture["blocks"]
+        # A block drawn to be rejected has no receipts.
+        if "expectException" not in block
         for receipt in block["receipts"]
     )
     assert outcomes.get("success", 0) == succeeded

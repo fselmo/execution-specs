@@ -494,6 +494,7 @@ def test_a_real_destroy_of_pending_writes_is_still_a_read() -> None:
     (entry,) = [
         e
         for block in fixture["blocks"]
+        if "expectException" not in block
         for e in block["blockAccessList"]
         if e["address"].lower() == str(created).lower()
     ]
