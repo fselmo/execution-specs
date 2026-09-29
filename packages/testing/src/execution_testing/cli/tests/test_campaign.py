@@ -2287,3 +2287,29 @@ def test_the_control_sits_out_the_batches_it_does_not_sample(
     )
     assert state.client_failures == {"gate": 4}
     assert state.counts["agreed"] == 4 and state.counts["divergence"] == 4
+
+
+def test_client_findings_leave_out_the_control_known_and_producer(
+    tmp_path: Path,
+) -> None:
+    """
+    The rate counts clients' own findings: the health control's bug, a
+    known signature and the producer disagreeing with the spec are not.
+    """
+    state = CampaignState.load(tmp_path / "state.json", seed_start=0)
+    state.health = {"control_client": "besu-gate"}
+    for client, reason, known in (
+        ("geth", "gas mismatch", False),
+        ("erigon:contrast", "contrast run failed", False),
+        ("besu-gate", "Chain header mismatch", False),
+        ("besu", "System call halted", True),
+        ("producer:evmone", "header: stateRoot", False),
+    ):
+        state.record_signature(
+            client, reason, seed=1, bundle=None, known=known, events=[]
+        )
+    state.counts["agreed"] = 8000
+    state.save()
+    summary = json.loads((tmp_path / "state.json").read_text())["summary"]
+    assert summary["client_findings"] == 2
+    assert summary["client_findings_per_million_cases"] == 250.0

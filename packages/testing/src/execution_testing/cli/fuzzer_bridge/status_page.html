@@ -117,6 +117,10 @@ function render(s) {
   if (s.started) run.push(row("first started", ago(s.served_at - s.started) + " ago"));
   run.push(row("cases", summary.cases === undefined ? "-" : summary.cases));
   run.push(row("cases/s", summary.cases_per_second === undefined ? "-" : summary.cases_per_second.toFixed(1)));
+  if (summary.client_findings !== undefined) {
+    const rate = summary.client_findings_per_million_cases;
+    run.push(row("client findings", summary.client_findings + " (" + (rate === null || rate === undefined ? "-" : rate.toFixed(1)) + " per million cases)"));
+  }
   if (s.next_seed !== null && s.next_seed !== undefined) run.push(row("next seed", s.next_seed));
   if (seg.id) {
     run.push(row("segment", seg.id + " (generator v" + seg.generator_version + ", " + seg.fork + ")"));

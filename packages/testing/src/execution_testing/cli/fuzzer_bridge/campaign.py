@@ -583,6 +583,12 @@ class CampaignState:
                         "cases_per_second": self.cases
                         / max(self.active_seconds(), 1e-9),
                         "running_seconds": self.active_seconds(),
+                        "client_findings": self.client_findings(),
+                        "client_findings_per_million_cases": (
+                            self.client_findings() * 1e6 / self.cases
+                            if self.cases
+                            else None
+                        ),
                         "saved_at": time.time(),
                     },
                 },
@@ -643,6 +649,21 @@ class CampaignState:
     def unique_findings(self) -> int:
         """Distinct signatures that are not configured as known."""
         return sum(1 for e in self.signatures.values() if not e.get("known"))
+
+    def client_findings(self) -> int:
+        """
+        Distinct signatures that are a client's: not known, not the health
+        control's bug (which it must keep firing), and not the producer
+        disagreeing with the spec.
+        """
+        control = self.health.get("control_client")
+        return sum(
+            1
+            for e in self.signatures.values()
+            if not e.get("known")
+            and e.get("client") != control
+            and not str(e.get("client", "")).startswith("producer:")
+        )
 
 
 TX_TYPE_LABELS: Dict[int, str] = {

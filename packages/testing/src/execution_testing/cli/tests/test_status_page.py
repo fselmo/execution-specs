@@ -306,7 +306,8 @@ def test_shards_are_shown_together_with_their_totals(
     assert [s["campaign"] for s in view["shards"]] == ["main", "main-b"]
     assert view["status"] == "paused"
     assert view["status_reason"] == "main-b paused"
-    assert view["summary"] == {"cases": 4000, "cases_per_second": 9.0}
+    assert view["summary"]["cases"] == 4000
+    assert view["summary"]["cases_per_second"] == 9.0
     assert view["counts"]["divergence"] == 4
     assert view["clients"]["geth"]["failures"] == 4
     (finding,) = view["findings"]
@@ -314,6 +315,9 @@ def test_shards_are_shown_together_with_their_totals(
     assert finding["shards"] == ["main", "main-b"]
     assert finding["first_seed"] == 999
     assert view["health"] == {}
+    # One client finding, the same signature on both shards, in 4000.
+    assert view["summary"]["client_findings"] == 1
+    assert view["summary"]["client_findings_per_million_cases"] == 250.0
 
 
 def test_the_page_has_a_row_per_shard(

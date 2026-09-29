@@ -198,6 +198,9 @@ def combined_view(outputs: Sequence[Path]) -> Dict[str, Any]:
     shards = [status_view(output) for output in outputs]
     if len(shards) == 1:
         return dict(shards[0], shards=shards)
+    controls = {s.get("health", {}).get("control_client") for s in shards} - {
+        None
+    }
     status = min(
         (s["status"] for s in shards),
         key=lambda x: SEVERITY.index(x) if x in SEVERITY else 0,
@@ -226,6 +229,18 @@ def combined_view(outputs: Sequence[Path]) -> Dict[str, Any]:
         _add(clients, shard.get("clients", {}))
         _add(contrast, shard.get("contrast", {}))
         _add(parallel, shard.get("parallel", {}))
+    findings = _merged_findings(shards)
+    client = [
+        f
+        for f in findings
+        if not f.get("known")
+        and f.get("client") not in controls
+        and not str(f.get("client", "")).startswith("producer:")
+    ]
+    summary["client_findings"] = len(client)
+    summary["client_findings_per_million_cases"] = (
+        len(client) * 1e6 / summary["cases"] if summary.get("cases") else None
+    )
     segments = {s.get("segment", {}).get("id") for s in shards}
     started = [s["started"] for s in shards if s.get("started")]
     return {
@@ -243,7 +258,7 @@ def combined_view(outputs: Sequence[Path]) -> Dict[str, Any]:
         "clients": clients,
         "contrast": contrast,
         "parallel": parallel,
-        "findings": _merged_findings(shards),
+        "findings": findings,
         "shards": shards,
     }
 
