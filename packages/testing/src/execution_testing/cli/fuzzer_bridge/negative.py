@@ -4,16 +4,25 @@ Negative cases: a filled block modified so every client must refuse it.
 A case drawn negative is filled once as it is, then again with its last
 block modified, and the fixture expects that block rejected. Two families:
 
-- **BAL:** the block access list is changed one way. In the `delivered`
-  variant only the list delivered beside the payload changes, and the
-  header keeps the hash of the true list, so what is tested is the client
-  comparing what it was given with what it executes. In the `rehashed`
-  variant the header commits to the changed list, so the block's own
-  validation must refuse it.
-- **header:** one header field is corrupted and the block hash
-  recomputed. The requests are the exception: the engine payload carries
-  the requests and not their hash, so a request the block never produced
-  is delivered and the header commits to it.
+- **BAL:** the block access list is changed one way, and the header
+  commits to the changed list, so the block's own validation must refuse
+  it.
+- **header:** one header field is corrupted. The requests are the
+  exception: the engine payload carries the requests and not their hash,
+  so a request the block never produced is delivered and the header
+  commits to it.
+
+Every kind recomputes the block hash from the header rebuilt from the
+modified payload, since that is the header a client derives from it.
+
+A list delivered beside a header that keeps the true list's hash cannot
+be a negative on the engine path: a client derives the header's list hash
+from the list it is given, so the block hash no longer matches and the
+payload is refused on its hash before any list check runs (669 besu and
+nethermind failures at v32 were that, not client bugs). It belongs on the
+import lane, where the parallel-path series attach the fixture's own list
+beside an unchanged header; it is not built there, and EELS could not
+witness it, since its import never reads that list.
 
 A client that answers VALID to a negative case fails its fixture, as one
 that answers INVALID to a clean case does: both are findings, through the
@@ -42,7 +51,6 @@ BAL_KINDS: Tuple[str, ...] = (
     "reorder",
     "duplicate",
 )
-BAL_VARIANTS: Tuple[str, ...] = ("delivered", "rehashed")
 HEADER_KINDS: Tuple[str, ...] = (
     "number",
     "timestamp",
@@ -180,7 +188,6 @@ def last_block_overrides(
     clean `blockchain_test` fixture; None when the draw has nothing to
     change in this case.
     """
-    from execution_testing.base_types import Bytes
     from execution_testing.test_types.block_access_list import (
         BlockAccessListExpectation,
     )
@@ -192,22 +199,12 @@ def last_block_overrides(
         modifier = bal_modifier(draw["kind"], bal, draw["pick"])
         if modifier is None:
             return None
-        exception = BlockException.INVALID_BLOCK_ACCESS_LIST
-        if draw["variant"] == "delivered":
-            return {
-                "engine_new_payload_block_access_list": Bytes(
-                    modifier(bal).rlp
-                ),
-                "exception": exception,
-            }
-        if draw["variant"] == "rehashed":
-            return {
-                "expected_block_access_list": BlockAccessListExpectation(
-                    account_expectations={}
-                ).modify(modifier),
-                "exception": exception,
-            }
-        raise ValueError(f"unknown BAL variant {draw['variant']!r}")
+        return {
+            "expected_block_access_list": BlockAccessListExpectation(
+                account_expectations={}
+            ).modify(modifier),
+            "exception": BlockException.INVALID_BLOCK_ACCESS_LIST,
+        }
     if draw["family"] == "header":
         parent = (
             blocks[-2]["blockHeader"]

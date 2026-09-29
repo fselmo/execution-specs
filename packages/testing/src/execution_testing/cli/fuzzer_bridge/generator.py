@@ -46,13 +46,13 @@ from .models import (
     FuzzerTransactionInput,
     FuzzerWithdrawalInput,
 )
-from .negative import BAL_KINDS, BAL_VARIANTS, HEADER_KINDS
+from .negative import BAL_KINDS, HEADER_KINDS
 
 # Contract bodies and calldata come from the shared strategy library
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 32
+GENERATOR_VERSION = 33
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -1376,7 +1376,6 @@ def generate_fuzzer_output(
             negative = FuzzerNegativeInput(
                 family="bal",
                 kind=rng.choice(BAL_KINDS),
-                variant=rng.choice(BAL_VARIANTS),
                 pick=rng.getrandbits(32),
             )
         else:

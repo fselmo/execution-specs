@@ -63,15 +63,17 @@ The oracle is the fixture's expected status, not EELS: EELS computes its own lis
 - **Findings:** a client that answers `VALID` to a modified list is a finding, as is one that answers `INVALID` to an unmodified one. The parallel-path series already showed the stock import path accepting a corrupted delivered list that the series rejects, so this is where the lane is expected to pay.
 - **Clients:** nethermind and besu from the start, geth after #34650's rebase.
 
-### As built (generator v32)
+### As built (generator v33)
 
 `fuzzer_bridge/negative.py`. A tenth of cases with no block already expected rejected are drawn negative, six in ten of them BAL and the rest header. An engine-format fill fills the case clean first, picks the target from the block's real list or header, then fills it again with the last block modified and its exception expected; other formats ignore the draw. The fixture's `_info.negative` records the draw and whether it applied.
 
-- **BAL:** all seven modifications, each `delivered` (`engine_new_payload_block_access_list`, header unchanged) or `rehashed` (`expected_block_access_list` modifier, header re-hashed). A list with nothing the kind can change (no storage read, one block access index, one account for `reorder`) fills clean and records `applied: false`.
+- **BAL:** all seven modifications, through the `expected_block_access_list` modifier, with the header re-hashed to the modified list. A list with nothing the kind can change (no storage read, one block access index, one account for `reorder`) fills clean and records `applied: false`.
+- **Every kind's block hash is the one its modified payload rebuilds to**, since that is the header a client derives on `newPayload`.
+- **The variant above that keeps the true list's hash is not on the engine path** (dropped at v33). A client derives the header's list hash from the delivered list, so the payload fails its block hash before any list check runs: at v32 that was 669 besu and nethermind failures, a harness artefact rather than findings. The variant belongs on the import lane, where the parallel-path series attach the fixture's own list beside an unchanged header. It is not built there, and EELS could not witness it, because its import never reads that list.
 - **Header:** `number`, `timestamp` (equal to the parent's), `gas_used` (limit + 1), `receipts_root`. The requests are corrupted through `Block.requests`, one random deposit, because the engine payload carries the requests and not their hash: a header-only hash change would test only the block hash on that path.
 - **Not built: block RLP above the size limit.** No generated block comes near it within the block's gas, and one that did would be a ten-megabyte fixture per case.
-- **Witnesses** (`test_negative_cases.py`): every header kind and every re-hashed BAL kind is refused by EELS's import, the same case unmodified imports, and the two headers differ only in the kind's field. Every delivered kind differs from the clean payload in `blockAccessList` alone, and that list is not the one the block produces. Breaking `number` to a no-op fails its witness with "expected INVALID_BLOCK_NUMBER, imported".
-- **Guard axes:** `negative_case`, `negative_family`, `negative_bal_kind`, `negative_bal_variant`, `negative_header_kind`.
+- **Witnesses** (`test_negative_cases.py`): every kind's engine fixture, imported as `newPayload` receives it, hashes to its block hash and is refused with the exception it names. In the blockchain format every kind is refused, the same case unmodified imports, and the two headers differ only in the kind's field. Breaking `number` to a no-op fails its witness with "expected INVALID_BLOCK_NUMBER, imported". In a campaign, a negative EELS does not refuse as named is dropped before any client sees it.
+- **Guard axes:** `negative_case`, `negative_family`, `negative_bal_kind`, `negative_header_kind`.
 - **To check on the first engine run:** a client may answer a payload whose `number` is off by one with `SYNCING` rather than `INVALID`, which the runner would score as a finding. Classify it before counting it.
 
 ## Order

@@ -133,13 +133,12 @@ class FuzzerNegativeInput(BaseModel):
     """
     How a negative case's last block is modified; see `negative.py`.
 
-    `variant` is set for the BAL family only. `pick` seeds the choice of
-    what to modify, which is made from the clean fill's block.
+    `pick` seeds the choice of what to modify, which is made from the
+    clean fill's block.
     """
 
     family: str
     kind: str
-    variant: str | None = None
     pick: int
 
 

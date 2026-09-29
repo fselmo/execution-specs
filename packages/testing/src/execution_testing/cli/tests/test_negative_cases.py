@@ -2,11 +2,10 @@
 Negative cases: a filled block modified so every client must refuse it.
 
 Each kind is witnessed on EELS: its engine fixture, imported as
-`newPayload` receives it, is refused with the exception it names. A kind
-the block's own RLP can carry is also filled in the blockchain format,
-where the same case unmodified imports and the two headers differ only
-where the kind says. A delivered list is shown to differ from the clean
-payload in that list alone.
+`newPayload` receives it, must hash to its block hash and then be refused
+with the exception it names. Each kind is also filled in the blockchain
+format, where the same case unmodified imports and the two headers differ
+only where the kind says.
 """
 
 import contextlib
@@ -16,14 +15,12 @@ from typing import Any, Dict, Optional, Type
 
 import pytest
 
-from execution_testing.base_types import Bytes
 from execution_testing.fixtures import (
     BaseFixture,
     BlockchainEngineFixture,
     BlockchainFixture,
 )
 from execution_testing.forks import Amsterdam
-from execution_testing.test_types.block_access_list import BlockAccessList
 
 from ..fuzzer_bridge import campaign as mod
 from ..fuzzer_bridge.converter import blockchain_test_from_fuzzer
@@ -34,13 +31,12 @@ from ..fuzzer_bridge.measured_gas import measuring_filler, resolve_measured_gas
 from ..fuzzer_bridge.models import FuzzerNegativeInput, FuzzerOutput
 from ..fuzzer_bridge.negative import (
     BAL_KINDS,
-    BAL_VARIANTS,
     HEADER_KINDS,
     last_block_overrides,
     modify_last_block,
 )
 
-SEED = 0
+SEED = 1
 """A one-block case whose list every BAL modification can change."""
 
 HEADER_FIELD = {
@@ -99,10 +95,7 @@ def _header_diff(clean: Dict[str, Any], modified: Dict[str, Any]) -> set:
             for kind in HEADER_KINDS
         ),
         *(
-            pytest.param(
-                {"family": "bal", "kind": kind, "variant": "rehashed"},
-                id=f"rehashed-{kind}",
-            )
+            pytest.param({"family": "bal", "kind": kind}, id=f"bal-{kind}")
             for kind in BAL_KINDS
         ),
     ],
@@ -137,12 +130,8 @@ ALL_DRAWS = [
         for kind in HEADER_KINDS
     ),
     *(
-        pytest.param(
-            {"family": "bal", "kind": kind, "variant": variant},
-            id=f"{variant}-{kind}",
-        )
+        pytest.param({"family": "bal", "kind": kind}, id=f"bal-{kind}")
         for kind in BAL_KINDS
-        for variant in BAL_VARIANTS
     ),
 ]
 
@@ -161,7 +150,11 @@ def _engine_negative(draw: Dict[str, Any]) -> Dict[str, Any]:
 def test_every_kind_is_refused_on_the_engine_path(
     draw: Dict[str, Any],
 ) -> None:
-    """EELS refuses the modified payload with the exception it names."""
+    """
+    EELS rebuilds the header from the modified payload, finds it hashes to
+    the payload's block hash, and refuses it with the exception it names:
+    a refusal on the block hash would name no kind's exception.
+    """
     mod._init_fill_worker("Amsterdam")
     fixture = _engine_negative(draw)
     assert fixture["_info"]["negative"]["applied"]
@@ -185,42 +178,6 @@ def test_a_refusal_for_another_reason_is_a_disagreement() -> None:
     assert "refused as BlockException.INVALID_BLOCK_NUMBER" in result.reason
 
 
-@pytest.mark.parametrize("kind", BAL_KINDS)
-def test_a_delivered_list_changes_only_the_payload_list(
-    clean: Dict[str, Any], kind: str
-) -> None:
-    """
-    A delivered-list case differs from the clean payload in its list alone,
-    and that list is not the one the block produces, so the header still
-    commits to the true list.
-    """
-    negative = FuzzerNegativeInput(
-        family="bal", kind=kind, variant="delivered", pick=0
-    )
-    fixture = mod.fill_case(
-        _case(negative),
-        Amsterdam,
-        mod._FILL["eels"],
-        fixture_format=BlockchainEngineFixture,
-    )
-    assert fixture["_info"]["negative"]["applied"]
-    unmodified = _fill(_case(None), BlockchainEngineFixture)
-    before = unmodified["engineNewPayloads"][-1]
-    after = fixture["engineNewPayloads"][-1]
-    assert after["validationError"]
-    payload_before, payload_after = before["params"][0], after["params"][0]
-    assert {
-        f for f in payload_before if payload_before[f] != payload_after[f]
-    } == {"blockAccessList"}
-    delivered = BlockAccessList.from_rlp(
-        Bytes(payload_after["blockAccessList"])
-    )
-    produced = BlockAccessList.model_validate(
-        clean["blocks"][-1]["blockAccessList"]
-    )
-    assert delivered.rlp != produced.rlp
-
-
 def test_negatives_are_drawn_only_where_no_block_is_rejected() -> None:
     """
     A case that already rejects a block is never drawn negative, and both
@@ -237,7 +194,7 @@ def test_negatives_are_drawn_only_where_no_block_is_rejected() -> None:
 
 def test_every_negative_axis_keeps_all_its_values() -> None:
     """
-    Presence, both families, every kind and both BAL variants stay drawn.
+    Presence, both families and every kind stay drawn.
     A tenth of cases split fourteen ways needs more seeds than the other
     axes to see each kind.
     """

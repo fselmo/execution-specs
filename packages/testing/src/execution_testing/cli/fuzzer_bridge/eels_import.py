@@ -137,16 +137,8 @@ def refused_as(exc: EthereumException) -> List[str]:
     return [f"{type(exc).__name__} under `{condition}`"]
 
 
-def _expected_matches(
-    expected: str, refusal: List[str], *, engine: bool
-) -> bool:
-    accepted = set(expected.split("|"))
-    if engine and str(BlockException.INVALID_BLOCK_ACCESS_LIST) in accepted:
-        # A delivered list is hashed into the rebuilt header, so a list
-        # the header does not commit to first shows as a block hash
-        # mismatch, as it does to a client.
-        accepted.add(str(BlockException.INVALID_BLOCK_HASH))
-    return bool(accepted.intersection(refusal))
+def _expected_matches(expected: str, refusal: List[str]) -> bool:
+    return bool(set(expected.split("|")).intersection(refusal))
 
 
 Build = Callable[[], Any]
@@ -301,7 +293,7 @@ def import_fixture(
                     f"block {position} expected valid, refused as "
                     f"{'|'.join(refusal)}: {exc}",
                 )
-            if not _expected_matches(expected, refusal, engine=engine):
+            if not _expected_matches(expected, refusal):
                 return ImportResult(
                     False,
                     f"block {position} expected {expected}, refused as "
