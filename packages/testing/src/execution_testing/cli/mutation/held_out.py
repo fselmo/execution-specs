@@ -331,6 +331,35 @@ def freeze_held_out(
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
+def split_held_out(
+    held: Sequence[HeldOutMutant], *, seed: int
+) -> Dict[str, List[int]]:
+    """
+    Split a frozen set into tuning and evaluation halves, stratum by
+    stratum, by position.
+
+    Motifs may be aimed only at the tuning half's survivors, so the
+    evaluation half measures what a motif buys on mutants nobody tuned
+    for. Each stratum's positions are shuffled by the seed and halved; a
+    stratum with an odd count gives its extra one to the halves in turn.
+    """
+    by: Dict[str, List[int]] = {}
+    for index, mutant in enumerate(held):
+        by.setdefault(mutant.stratum, []).append(index)
+    halves: Dict[str, List[int]] = {"tuning": [], "evaluation": []}
+    odd = 0
+    for stratum in sorted(by):
+        indices = list(by[stratum])
+        random.Random(f"split:{seed}:{stratum}").shuffle(indices)
+        cut = len(indices) // 2
+        if len(indices) % 2:
+            cut += odd % 2 == 0
+            odd += 1
+        halves["tuning"] += indices[:cut]
+        halves["evaluation"] += indices[cut:]
+    return {half: sorted(indices) for half, indices in halves.items()}
+
+
 def load_held_out(path: Path) -> List[HeldOutMutant]:
     """Load a frozen set (pure I/O; drift is a separate check)."""
     data = json.loads(path.read_text())

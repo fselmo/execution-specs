@@ -350,3 +350,28 @@ def test_a_stratum_can_draw_from_named_functions_only() -> None:
     held = picked[0]
     mutant = resolve(held, source)
     assert mutant is not None and mutant.lineno == 2
+
+
+def test_a_split_halves_every_stratum_and_is_fixed_by_its_seed() -> None:
+    """
+    Each stratum lands half in each half, odd strata alternating their
+    extra one, and the same seed gives the same split.
+    """
+    from execution_testing.cli.mutation.held_out import (
+        HeldOutMutant,
+        split_held_out,
+    )
+
+    held = [
+        HeldOutMutant(s, "m.py", "binop", f"{s}{i}", "x")
+        for s, n in (("a", 4), ("b", 3), ("c", 3))
+        for i in range(n)
+    ]
+    split = split_held_out(held, seed=1)
+    assert split == split_held_out(held, seed=1)
+    assert sorted(split["tuning"] + split["evaluation"]) == list(range(10))
+    for stratum in "abc":
+        mine = {i for i, h in enumerate(held) if h.stratum == stratum}
+        tuned = len(mine & set(split["tuning"]))
+        assert tuned in (len(mine) // 2, -(-len(mine) // 2))
+    assert len(split["tuning"]) == len(split["evaluation"]) == 5
