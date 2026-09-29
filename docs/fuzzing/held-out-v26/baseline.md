@@ -8,8 +8,11 @@ The set is split into a tuning half and an evaluation half (`split.json`, seed 2
 
 | version | tuning killed | evaluation killed |
 | --- | --- | --- |
+| v20 generator | 21/42 (50%) | 24/40 (60%) |
 | v26 (baseline) | 22/42 (52%) | 26/41 (63%) |
 | v27 (maximum nonce) | 20/42 (48%) | 26/41 (63%) |
+
+**Generalization.** The v20 generator on this set kills 45 of 102, where v26 kills 48. Of the mutants it was not built for, v21–v26 bought four kills (25, 29, 74 and 91) and lost one (30). On the evaluation half the gain is 24 of 40 to 26 of 41. The v20 generator has one more invalid mutant in the evaluation half. The motifs were aimed at v20's survivors, and what carried over to other mutants is small.
 
 v27 loses two tuning kills, 23 and 101. Each was killed on 1 of 300 seeds at v26, which is sampling noise, not a regression.
 
@@ -41,6 +44,11 @@ Ordered by survivors a generator change could fix.
 | evm-interpreter | 2 | 0 | 1 | 0 | 0 | 1 |
 | evm-gas | 3 | 1 | 0 | 0 | 0 | 0 |
 | **all** | **48** | **27** | **2** | **6** | **7** | **12** |
+
+## Tuning survivors that no motif can kill
+
+- **59, the deposit log's layout check**, is unreachable by construction. A deposit log comes from the deposit contract fixed in a chain's genesis, and the canonical contract always emits the well-formed layout. A client never receives a malformed deposit log on a real chain. EEST checks the parsing with a replaced contract under `pre_alloc_mutable` (`tests/prague/eip6110_deposits/test_modified_contract.py`), which a test can do and a network cannot. 56 and 57 are the same checks in the evaluation half, and are not considered.
+- **63, the authorization's `r` range check**, is equivalent. `secp256k1_recover` rejects every `r` the check does (zero, the curve order and above) with the same `InvalidSignatureError`, so no case can tell the mutant apart.
 
 ## Survivors, ranked by stratum
 

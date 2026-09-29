@@ -1,0 +1,28 @@
+{
+  "fork": "Amsterdam",
+  "generator_version": 20,
+  "clients": [
+    "geth"
+  ],
+  "eels_commit": "67da9eae4fcfba7e7c756f10daea17d6948bd86a",
+  "seed_start": 0,
+  "seeds": 300,
+  "agreed": 0,
+  "diverged": 197,
+  "compared": 197,
+  "tool_rejected": 0,
+  "runner_error": 0,
+  "not_compared": 0,
+  "crashed": 103,
+  "first_crash": {
+    "seed": 4,
+    "reason": "eels crashed: measuring fill: UnexpectedExecutionFailError: Unexpected fail for Block ({'number': 1}):\n   What: Block unexpectedly failed!\n  Error: \"Block access list exceeds gas limit, 35 items exceeds limit of 16777.\" ([BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED] Block access list exceeds gas limit, 35 items exceeds limit of 16777.)"
+  },
+  "rejected_by": {},
+  "errored": {
+    "eels": 197
+  },
+  "eels_runs": 300,
+  "first_divergent_seed": 0,
+  "fields": {}
+}
