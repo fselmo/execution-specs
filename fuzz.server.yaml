@@ -448,12 +448,13 @@ campaigns:
       - {client: besu-par-main, reason: "System call did not execute to completion"}
     health:
       control: {client: besu-gate, reason: "Chain header mismatch"}
-      # besu-gate's 2d29706a runs at 4.56% here (sd 0.47% per 2,000-case
-      # window). The floor stays at 3%: with control_every: 5 the band
-      # already widens for the control judging a fifth of the window,
-      # putting 3% at about 1.2% (control_band_for). A 2% floor on top of
-      # that widening would catch only a control that stopped firing.
-      control_band: [0.03, 0.08]
+      # No fixed floor: the control's rate moves with the generator (4.56%
+      # at v26, about 3.5% at v28 and v30), so each segment calibrates its
+      # own baseline and a drop is judged against it by the binomial test
+      # at the sampled count. Zero hits where the baseline predicts several
+      # pause as a stopped control, and so do any control runner errors.
+      # Only the upper edge is held here.
+      control_band: [0.0, 0.08]
       # Every client's primary is its parallel path on this panel.
       parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main]
       parallel_baseline_blocks: 2000
@@ -511,12 +512,13 @@ campaigns:
       - {client: besu-par-main, reason: "System call did not execute to completion"}
     health:
       control: {client: besu-gate, reason: "Chain header mismatch"}
-      # besu-gate's 2d29706a runs at 4.56% here (sd 0.47% per 2,000-case
-      # window). The floor stays at 3%: with control_every: 5 the band
-      # already widens for the control judging a fifth of the window,
-      # putting 3% at about 1.2% (control_band_for). A 2% floor on top of
-      # that widening would catch only a control that stopped firing.
-      control_band: [0.03, 0.08]
+      # No fixed floor: the control's rate moves with the generator (4.56%
+      # at v26, about 3.5% at v28 and v30), so each segment calibrates its
+      # own baseline and a drop is judged against it by the binomial test
+      # at the sampled count. Zero hits where the baseline predicts several
+      # pause as a stopped control, and so do any control runner errors.
+      # Only the upper edge is held here.
+      control_band: [0.0, 0.08]
       # Every client's primary is its parallel path on this panel.
       parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main]
       parallel_baseline_blocks: 2000

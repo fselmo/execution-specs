@@ -37,14 +37,60 @@ def test_nothing_is_checked_until_the_window_is_full() -> None:
     assert rates["checking"] is False and problems == []
 
 
-def test_a_control_outside_its_band_pauses_either_way() -> None:
-    """Gone quiet and firing too often are both out of band."""
-    quiet = evaluate([_sample(100, control=1)], CONTROLLED, [], runners=2)
-    loud = evaluate([_sample(100, control=20)], CONTROLLED, [], runners=2)
-    inside = evaluate([_sample(100, control=5)], CONTROLLED, [], runners=2)
-    assert "control besu-gate at 1.00%" in quiet[1][0]
-    assert "control besu-gate at 20.00%" in loud[1][0]
-    assert inside[1] == [] and inside[0]["control_rate"] == 0.05
+BASELINE = {"control_baseline": [100, 2000]}
+"""A segment whose control fired on 5.00% of its calibration cases."""
+
+
+def test_a_control_is_held_to_its_segment_baseline() -> None:
+    """
+    The control's rate moves with the generator, so a drop is judged
+    against the segment's own baseline, by the binomial test: 3% against
+    a 5% baseline over 2000 cases pauses, 4.6% is noise; too loud still
+    pauses on the band's upper edge.
+    """
+    fell = evaluate([_sample(2000, control=60)], CONTROLLED, [], 2, BASELINE)
+    noise = evaluate([_sample(2000, control=92)], CONTROLLED, [], 2, BASELINE)
+    loud = evaluate([_sample(2000, control=400)], CONTROLLED, [], 2, BASELINE)
+    assert "control rate fell" in fell[1][0]
+    assert noise[1] == [] and noise[0]["control_baseline"] == 0.05
+    assert "above" in loud[1][0]
+
+
+def test_a_control_cannot_pause_on_a_drop_while_it_calibrates() -> None:
+    """Before the segment's baseline is set, only the upper edge holds."""
+    rates, problems = evaluate(
+        [_sample(2000, control=0)],
+        CONTROLLED,
+        [],
+        2,
+        {"control_calibration": {"hits": 0, "cases": 800}},
+    )
+    assert problems == [] and "calibrating (800/2000" in rates["control_note"]
+
+
+def test_a_control_that_stops_or_never_fired_pauses() -> None:
+    """
+    Zero hits where the baseline predicts several is a control that
+    stopped, and a baseline of zero hits is no control at all.
+    """
+    _, stopped = evaluate([_sample(2000)], CONTROLLED, [], 2, BASELINE)
+    _, never = evaluate(
+        [_sample(2000)], CONTROLLED, [], 2, {"control_baseline": [0, 2000]}
+    )
+    assert "stopped firing" in stopped[0]
+    assert "never fired" in never[0]
+
+
+def test_control_runner_errors_pause_without_waiting_for_the_window() -> None:
+    """
+    A control that returns no verdict is not judging: on v28 it returned
+    none on every case and only the gate noticed. One is enough, before
+    the window fills.
+    """
+    _, problems = evaluate(
+        [_sample(10, control_runner_errors=3)], CONTROLLED, [], 2
+    )
+    assert problems == ["control besu-gate returned no verdict on 3 case(s)"]
 
 
 def test_runner_errors_producer_drift_and_silent_lanes_pause() -> None:
@@ -143,16 +189,16 @@ def test_a_slack_webhook_gets_json(monkeypatch: Any) -> None:
 
 def test_the_control_band_widens_for_a_sampled_control() -> None:
     """
-    At `control_every` 5 the control judges 400 of a 2,000-case window.
-    Its rate over those carries the extra noise of p(1 - p)(1/400 -
-    1/2000), so 2.5% is within the widened band where, judging every
-    case, it would pause; 1% is outside either way.
+    At `control_every` 5 the control judges 400 of a 2,000-case window,
+    and its rate over those carries the extra noise of p(1 - p)(1/400 -
+    1/2000): the upper edge moves out by that much at `control_alpha`.
+    Judging every case, it is exactly the configured edge.
     """
     import math
     from statistics import NormalDist
 
     policy = HealthPolicy(
-        window=2000, control_client="besu-gate", control_band=(0.03, 0.08)
+        window=2000, control_client="besu-gate", control_band=(0.0, 0.08)
     )
 
     def window(hits: int, every: int) -> List[Dict[str, Any]]:
@@ -164,17 +210,9 @@ def test_the_control_band_widens_for_a_sampled_control() -> None:
 
     z = NormalDist().inv_cdf(0.99)
     extra = 1 / 400 - 1 / 2000
-    sampled, problems = evaluate(window(5, 5), policy, [], runners=2)
+    sampled, _ = evaluate(window(18, 5), policy, [], 2, BASELINE)
     assert sampled["control_cases"] == 400
-    assert sampled["control_rate"] == 0.025
-    low, high = sampled["control_band"]
-    assert math.isclose(low, 0.03 - z * math.sqrt(0.03 * 0.97 * extra))
+    (_, high) = sampled["control_band"]
     assert math.isclose(high, 0.08 + z * math.sqrt(0.08 * 0.92 * extra))
-    assert problems == []
-
-    every, problems = evaluate(window(5, 1), policy, [], runners=2)
-    assert every["control_band"] == [0.03, 0.08]
-    assert "control besu-gate at 2.50%" in problems[0]
-
-    _, problems = evaluate(window(2, 5), policy, [], runners=2)
-    assert "control besu-gate at 1.00% over 400 sampled cases" in problems[0]
+    every, _ = evaluate(window(18, 1), policy, [], 2, BASELINE)
+    assert every["control_band"] == [0.0, 0.08]

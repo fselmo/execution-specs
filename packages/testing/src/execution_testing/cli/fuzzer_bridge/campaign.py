@@ -466,6 +466,30 @@ class CampaignState:
                 if decisions and blocks
             }
 
+    def record_control(
+        self, hits: int, cases: int, calibration_cases: int
+    ) -> None:
+        """
+        Calibrate the open segment's control baseline from its opening
+        sampled batches.
+
+        The control's rate moves with the generator, so a fixed floor goes
+        stale at every version; the baseline is the segment's own, set once
+        its opening batches hold ``calibration_cases`` sampled cases.
+        """
+        if not self.segments or "control_baseline" in self.segments[-1]:
+            return
+        calibration = self.segments[-1].setdefault(
+            "control_calibration", {"hits": 0, "cases": 0}
+        )
+        calibration["hits"] += hits
+        calibration["cases"] += cases
+        if calibration["cases"] >= calibration_cases:
+            self.segments[-1]["control_baseline"] = [
+                calibration["hits"],
+                calibration["cases"],
+            ]
+
     def record_timing(
         self, fill_wait: float, judging: float, processing: float
     ) -> None:
@@ -2439,19 +2463,25 @@ def run_campaign(
                     )
 
             state.next_seed = seeds.stop
+            sample = batch_sample(
+                before,
+                health_snapshot(state, options.health),
+                len(names),
+                contrast_sampled=batch.contrast_sampled,
+                control_sampled=batch.control_sampled,
+                verdicts=len(names) * len(batch.primary),
+            )
+            if (
+                options.health.control_client is not None
+                and batch.control_sampled
+            ):
+                state.record_control(
+                    sample["control"],
+                    len(names),
+                    options.health.control_baseline_cases,
+                )
             state.health_window = trim_window(
-                [
-                    *state.health_window,
-                    batch_sample(
-                        before,
-                        health_snapshot(state, options.health),
-                        len(names),
-                        contrast_sampled=batch.contrast_sampled,
-                        control_sampled=batch.control_sampled,
-                        verdicts=len(names) * len(batch.primary),
-                    ),
-                ],
-                options.health.window,
+                [*state.health_window, sample], options.health.window
             )
             state.health, problems = evaluate_health(
                 state.health_window,

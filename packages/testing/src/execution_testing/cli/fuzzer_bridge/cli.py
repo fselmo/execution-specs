@@ -297,6 +297,9 @@ def campaign(
             control_client=health.control.client if health.control else None,
             control_reason=health.control.reason if health.control else None,
             control_band=health.control_band,
+            control_baseline_cases=health.control_baseline_cases,
+            control_drop_tolerance=health.control_drop_tolerance,
+            control_dead_expected=health.control_dead_expected,
             max_runner_error_rate=health.max_runner_error_rate,
             max_producer_disagreement_rate=(
                 health.max_producer_disagreement_rate

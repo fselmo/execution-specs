@@ -34,10 +34,20 @@ class HealthPolicy:
     control_reason: Optional[str] = None
     """Substring of the control's signature reason, as `known:` matches."""
     control_band: Tuple[float, float] = (0.0, 1.0)
-    """Share of cases the control must fail within: below it the lane
-    has gone quiet, above it something else is failing the control. Set
-    for a control judging every case in the window; when it judges a
-    sample, see `control_band_for`."""
+    """Only the upper edge is held: above it something else is failing
+    the control (widened for a sampled control, see `control_band_for`).
+    The lower edge is not a fixed floor any more: the control's rate moves
+    with the generator (4.56% at v26, about 3.5% at v28 and v30), so a
+    drop is judged against the segment's own calibrated baseline."""
+    control_baseline_cases: int = 2000
+    """Sampled cases the control judges at a segment's opening before its
+    baseline rate is set; until then the relative check cannot pause."""
+    control_drop_tolerance: float = 0.0
+    """Proportional drop the control's rate may take before the binomial
+    test is asked; 0 leaves the test alone to decide."""
+    control_dead_expected: float = 5.0
+    """Hits the baseline must predict in the window for zero hits to read
+    as a control that stopped firing, whatever the drop test says."""
     control_alpha: float = 0.01
     """One-sided chance of pausing on sampling noise alone that the band
     is widened to, when the control judges a sample of the window."""
@@ -82,6 +92,8 @@ def batch_sample(
         "contrast_sampled": contrast_sampled,
         "control_sampled": control_sampled,
         "verdicts": verdicts,
+        "control_runner_errors": after.get("control_runner_errors", 0)
+        - before.get("control_runner_errors", 0),
         "control": after["control"] - before["control"],
         "runner_errors": after["runner_errors"] - before["runner_errors"],
         "producer_disagreements": after["producer_disagreements"]
@@ -122,6 +134,11 @@ def snapshot(state: Any, policy: HealthPolicy) -> Dict[str, Any]:
             lane: [tally.get("parallel", 0), tally.get("bal_blocks", 0)]
             for lane, tally in state.parallel.items()
         },
+        "control_runner_errors": (
+            state.runner_errors.get(policy.control_client, 0)
+            if policy.control_client is not None
+            else 0
+        ),
     }
 
 
@@ -186,26 +203,23 @@ def evaluate(
             policy.max_producer_disagreement_rate
         ),
     }
+    problems = []
+    # A control that returns no verdict is not judging at all, and no
+    # window of noise explains it: this check does not wait for the window.
+    control_errors = sum(s.get("control_runner_errors", 0) for s in window)
+    if policy.control_client is not None and control_errors:
+        problems.append(
+            f"control {policy.control_client} returned no verdict on "
+            f"{control_errors} case(s)"
+        )
     if cases < policy.window:
         rates["checking"] = False
-        return rates, []
+        return rates, problems
     rates["checking"] = True
-    problems = []
     if policy.control_client is not None:
-        # The control is measured over the batches it judged.
-        judged = [s for s in window if s.get("control_sampled", True)]
-        sampled = sum(s["cases"] for s in judged)
-        rates["control_cases"] = sampled
-        if sampled:
-            rate = sum(s["control"] for s in judged) / sampled
-            rates["control_rate"] = rate
-            low, high = control_band_for(policy, sampled, cases)
-            rates["control_band"] = [low, high]
-            if not low <= rate <= high:
-                problems.append(
-                    f"control {policy.control_client} at {rate:.2%} over "
-                    f"{sampled} sampled cases, outside {low:.2%}-{high:.2%}"
-                )
+        problems += _control_checks(
+            window, policy, cases, rates, segment or {}
+        )
     errors = sum(s["runner_errors"] for s in window)
     verdicts = sum(
         s["cases"] * max(runners, 1)
@@ -247,6 +261,72 @@ def evaluate(
     )
     problems += dropped
     return rates, problems
+
+
+def _control_checks(
+    window: List[Dict[str, Any]],
+    policy: HealthPolicy,
+    cases: int,
+    rates: Dict[str, Any],
+    segment: Mapping[str, Any],
+) -> List[str]:
+    """
+    The control's rate over the batches it judged, against the segment's
+    baseline and the band's upper edge.
+    """
+    from .density import significant_drops
+
+    problems: List[str] = []
+    judged = [s for s in window if s.get("control_sampled", True)]
+    sampled = sum(s["cases"] for s in judged)
+    hits = sum(s["control"] for s in judged)
+    rates["control_cases"] = sampled
+    if not sampled:
+        return problems
+    rate = hits / sampled
+    rates["control_rate"] = rate
+    _, high = control_band_for(policy, sampled, cases)
+    rates["control_band"] = [0.0, high]
+    name = policy.control_client or "control"
+    if rate > high:
+        problems.append(
+            f"control {name} at {rate:.2%} over {sampled} sampled cases, "
+            f"above {high:.2%}: something else is failing it"
+        )
+    baseline = segment.get("control_baseline")
+    if baseline is None:
+        calibrated = segment.get("control_calibration", {}).get("cases", 0)
+        rates["control_baseline"] = None
+        rates["control_note"] = (
+            f"calibrating ({calibrated}/{policy.control_baseline_cases} "
+            "sampled cases): cannot pause on a drop yet"
+        )
+        return problems
+    base_hits, base_cases = baseline
+    rates["control_baseline"] = base_hits / base_cases if base_cases else 0
+    if not base_hits:
+        problems.append(
+            f"control {name} never fired in the segment's {base_cases} "
+            "calibration cases: it is no control"
+        )
+        return problems
+    expected = base_hits / base_cases * sampled
+    if not hits and expected >= policy.control_dead_expected:
+        problems.append(
+            f"control {name} stopped firing: 0 in {sampled} sampled cases, "
+            f"where its baseline predicts {expected:.1f}"
+        )
+        return problems
+    drops = significant_drops(
+        {name: base_hits},
+        {name: hits},
+        base_cases,
+        sampled,
+        tolerance=policy.control_drop_tolerance,
+    )
+    if drops:
+        problems.append(f"control rate fell: {drops[0]}")
+    return problems
 
 
 def _parallel_checks(

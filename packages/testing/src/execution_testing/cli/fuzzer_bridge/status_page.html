@@ -90,7 +90,10 @@ function healthRows(s, prefix) {
     const rate = h.control_rate;
     const out = rate !== undefined && (rate < band[0] || rate > band[1]);
     const over = h.control_cases !== undefined ? " over " + h.control_cases + " cases" : "";
-    checks.push(row(prefix + "control " + h.control_client + ", " + every(h.control_every), pct(rate) + over + " (band " + pct(band[0]) + "-" + pct(band[1]) + ")", out));
+    const against = h.control_baseline === null || h.control_baseline === undefined
+      ? (h.control_note || "no baseline yet")
+      : "baseline " + pct(h.control_baseline) + ", at most " + pct(band[1]);
+    checks.push(row(prefix + "control " + h.control_client + ", " + every(h.control_every), pct(rate) + over + " (" + against + ")", out));
   }
   if (h.runner_error_rate !== undefined) checks.push(row(prefix + "runner errors", pct(h.runner_error_rate) + " (max " + pct(h.max_runner_error_rate) + ")", h.runner_error_rate > h.max_runner_error_rate));
   if (h.producer_disagreement_rate !== undefined) checks.push(row(prefix + "producer disagreement", pct(h.producer_disagreement_rate) + " (max " + pct(h.max_producer_disagreement_rate) + ")", h.producer_disagreement_rate > h.max_producer_disagreement_rate));
