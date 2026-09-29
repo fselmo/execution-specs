@@ -49,7 +49,7 @@ from .models import (
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 28
+GENERATOR_VERSION = 29
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -510,6 +510,21 @@ def deployer_initcode(words: int, deployed: int) -> bytes:
     return code.ljust(32 * words, b"\0")
 
 
+MAX_INITCODE_CREATOR_ADDRESS = 0x1FFF0
+"""Helper that creates from as many zero bytes of memory as its calldata
+asks, drawn at the fork's largest initcode or one byte more: the first
+deploys an empty account, the second must fail the frame."""
+
+MAX_INITCODE_TX_GAS = 1_000_000
+"""Gas for a transaction to it: the memory, the initcode charge and the
+new account fit with room."""
+
+
+def max_initcode_creator_code() -> bytes:
+    """CREATE from calldata word 0's size of zeroed memory, then stop."""
+    return bytes(Op.SSTORE(0, Op.CREATE(0, 0, Op.CALLDATALOAD(0))) + Op.STOP)
+
+
 REQUEST_TX_GAS = 1_000_000
 """Gas for a transaction to a request system contract: enough for the
 deposit contract's tree update and a queue contract's four slots."""
@@ -932,6 +947,11 @@ def generate_fuzzer_output(
             nonce=HexNumber(nonce),
             code=Bytes(deployer_code(opcode)),
         )
+    accounts[Address(MAX_INITCODE_CREATOR_ADDRESS)] = FuzzerAccountInput(
+        balance=HexNumber(0),
+        nonce=HexNumber(1),
+        code=Bytes(max_initcode_creator_code()),
+    )
     accounts[Address(STATE_FILLER_ADDRESS)] = FuzzerAccountInput(
         balance=HexNumber(0),
         nonce=HexNumber(1),
@@ -978,6 +998,7 @@ def generate_fuzzer_output(
         creation: Optional[str] = None
         initcode: Optional[bytes] = None
         requested: Optional[Tuple[Address, int, bytes]] = None
+        initcode_size: Optional[int] = None
         if rng.random() < domains.failing_tx_rate:
             to = Address(FAILER_ADDRESS)
         elif rng.random() < domains.toucher_tx_rate:
@@ -1024,6 +1045,12 @@ def generate_fuzzer_output(
             and CREATION_TX_GAS <= min(tx_gas_cap, budgets[block])
         ):
             creation = rng.choice(domains.creation_targets)
+        elif (
+            rng.random() < domains.max_initcode_tx_rate
+            and MAX_INITCODE_TX_GAS <= min(tx_gas_cap, budgets[block])
+        ):
+            to = Address(MAX_INITCODE_CREATOR_ADDRESS)
+            initcode_size = fork.max_initcode_size() + rng.choice((0, 1))
         elif (
             rng.random() < domains.deployer_tx_rate
             and DEPLOYER_TX_GAS <= min(tx_gas_cap, budgets[block])
@@ -1100,6 +1127,10 @@ def generate_fuzzer_output(
             tx_type = 2
             data = Bytes(initcode)
             value = 0
+        if initcode_size is not None:
+            gas = MAX_INITCODE_TX_GAS
+            tx_type = 2
+            data = Bytes(initcode_size.to_bytes(32, "big"))
         if requested is not None:
             # No authorizations: they would come out of the request's gas.
             gas = REQUEST_TX_GAS

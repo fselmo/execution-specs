@@ -44,6 +44,13 @@ _ARITHMETIC = [
     Op.SAR,
     Op.BYTE,
     Op.SIGNEXTEND,
+    # Absent until v29: MULMOD never ran in 300 seeds at v26.
+    Op.ADDMOD,
+    Op.MULMOD,
+    Op.SDIV,
+    Op.SMOD,
+    Op.SLT,
+    Op.SGT,
 ]
 _MEMORY = [Op.MSTORE, Op.MSTORE8, Op.MLOAD, Op.MSIZE]
 _STORAGE = [Op.SSTORE, Op.SLOAD]

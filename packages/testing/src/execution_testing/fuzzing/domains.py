@@ -321,6 +321,10 @@ class ValueDomains:
     request_invalid_share: float = 0.25
     """Share of requests drawn to be refused: a queued request under the
     minimum fee, or a deposit that is not a whole number of gwei."""
+    max_initcode_tx_rate: float = 0.03
+    """Share of transactions sent to the helper that creates from the
+    fork's largest initcode, or one byte more. At v26 no CREATE came near
+    the limit."""
     wrong_auth_nonce_share: float = 0.15
     """Share of set-code authorizations carrying the wrong nonce. Such an
     authorization is skipped, not rejected, so the transaction stays

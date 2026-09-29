@@ -16,6 +16,7 @@ from ..fuzzer_bridge.generator import (
     GENERATOR_VERSION,
     GRAVER_ADDRESS,
     INTERLEAVER_ADDRESS,
+    MAX_INITCODE_CREATOR_ADDRESS,
     SPILLER_ADDRESS,
     STATE_EXHAUSTER_ADDRESS,
     STATE_FILLER_ADDRESS,
@@ -74,6 +75,7 @@ def test_generated_shape() -> None:
             Address(GRAVER_ADDRESS),
             Address(EMPTY_BENEFICIARY_ADDRESS),
             Address(STATE_FILLER_ADDRESS),
+            Address(MAX_INITCODE_CREATOR_ADDRESS),
             *(Address(a) for a in DEPLOYER_ADDRESSES.values()),
         )
     ]
@@ -259,3 +261,32 @@ def test_a_filled_case_carries_the_fork_s_system_contracts() -> None:
     # The predeploy mapping is keyed by int, not Address.
     predeploys = {int(a) for a in Amsterdam.pre_allocation_blockchain()}
     assert predeploys <= pre
+
+
+def test_every_arithmetic_opcode_runs_in_generated_code() -> None:
+    """
+    MULMOD never ran in 300 seeds at v26: the palette left it and five
+    other arithmetic opcodes out. Each of them now executes in generated
+    cases.
+    """
+    import contextlib
+    import io
+    import warnings
+
+    from ..fuzzer_bridge import campaign as mod
+
+    wanted = {"ADDMOD", "MULMOD", "SDIV", "SMOD", "SLT", "SGT"}
+    mod._init_fill_worker("Amsterdam")
+    fork, eels = mod._FILL["fork"], mod._FILL["eels"]
+    eels.compute_signature = True
+    ran: set = set()
+    for seed in range(40):
+        eels.last_signature = None
+        with contextlib.redirect_stdout(io.StringIO()):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                mod.fill_case(generate_fuzzer_output(fork, seed), fork, eels)
+        ran |= {op for pair in eels.last_signature.bigrams for op in pair}
+        if wanted <= ran:
+            break
+    assert wanted <= ran

@@ -378,3 +378,62 @@ def test_a_drawn_rejection_fills_through_the_evmone_producer(
             warnings.simplefilter("ignore")
             fixture = mod.fill_case(case(), Amsterdam, evmone)
     assert "expectException" in fixture["blocks"][-1]
+
+
+@pytest.mark.parametrize(
+    "over,deploys",
+    [
+        pytest.param(0, True, id="the_largest_initcode"),
+        pytest.param(1, False, id="one_byte_more"),
+    ],
+)
+def test_initcode_of_the_largest_size_creates(
+    over: int, deploys: bool
+) -> None:
+    """
+    A CREATE from exactly the fork's largest initcode deploys; one byte
+    more fails the frame, and the transaction with it.
+    """
+    from ..fuzzer_bridge.generator import (
+        MAX_INITCODE_CREATOR_ADDRESS,
+        MAX_INITCODE_TX_GAS,
+    )
+
+    creator = Address(MAX_INITCODE_CREATOR_ADDRESS)
+    size = Amsterdam.max_initcode_size() + over
+    case = generate_fuzzer_output(Amsterdam, 0)
+    (first, *_) = case.transactions
+    tx = first.model_copy(
+        update={
+            "to": creator,
+            "gas": HexNumber(MAX_INITCODE_TX_GAS),
+            "data": Bytes(size.to_bytes(32, "big")),
+            "value": HexNumber(0),
+            "authorization_list": None,
+            "gas_need_fraction": None,
+            "block": 0,
+        }
+    )
+    fixture = _fill(
+        case.model_copy(
+            update={"transactions": [tx], "block_count": 1, "withdrawals": []}
+        )
+    )
+    (block,) = fixture["blocks"]
+    (receipt,) = block["receipts"]
+    assert bool(receipt["status"]) is deploys
+    if deploys:
+        entry = _entry(fixture, creator)
+        (slot,) = entry["storageChanges"]
+        assert int(slot["slotChanges"][-1]["postValue"], 16) != 0
+
+
+def test_every_max_initcode_axis_keeps_all_its_values() -> None:
+    """Presence, and the exact size and one over, stay drawn."""
+    coverage = axis_coverage(Amsterdam, range(0, 400))
+    warnings_ = [
+        w
+        for w in axis_collapse_warnings(coverage)
+        if w.startswith("max_initcode")
+    ]
+    assert warnings_ == []

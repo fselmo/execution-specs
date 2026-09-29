@@ -415,6 +415,23 @@ def _tally_requests(
         tally["request_valid"]["yes" if valid else "no"] += 1
 
 
+def _tally_max_initcode(
+    case: Any, fork: "Fork", tally: Dict[str, Counter]
+) -> None:
+    """Count creations at the largest initcode and one byte over it."""
+    from execution_testing.base_types import Address
+
+    from .generator import MAX_INITCODE_CREATOR_ADDRESS
+
+    creator = Address(MAX_INITCODE_CREATOR_ADDRESS)
+    owned = [tx for tx in case.transactions if tx.to == creator]
+    tally["max_initcode_tx"]["present" if owned else "absent"] += 1
+    for tx in owned:
+        size = int.from_bytes(bytes(tx.data)[:32], "big")
+        over = size > fork.max_initcode_size()
+        tally["max_initcode_size"]["one_over" if over else "exact"] += 1
+
+
 def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
     """
     Share of draws holding each value of every multi-valued input axis.
@@ -469,6 +486,8 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "request_tx": Counter(),
         "request_kind": Counter(),
         "request_valid": Counter(),
+        "max_initcode_tx": Counter(),
+        "max_initcode_size": Counter(),
         "deployer_initcode": Counter(),
     }
     reads = _blockhash_signatures()
@@ -558,6 +577,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         _tally_near_full(case, fork, tally)
         _tally_deployer(case, tally)
         _tally_requests(case, fork, tally)
+        _tally_max_initcode(case, fork, tally)
         maxed = [tx for tx in case.transactions if int(tx.nonce) >= 2**64 - 2]
         tally["max_nonce_block"]["present" if maxed else "absent"] += 1
         if maxed:
@@ -723,6 +743,8 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
         "BuilderExitRequest",
     ),
     "request_valid": ("yes", "no"),
+    "max_initcode_tx": ("present", "absent"),
+    "max_initcode_size": ("exact", "one_over"),
     "deployer_initcode": ("empty", "nonempty"),
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
