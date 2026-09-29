@@ -202,6 +202,21 @@ clients:
       # 0003 prints FUZZ-PAR-DECISION in core, admitted by name.
       patch_paths: [cmd/evm/, tests/, core/state_processor.go]
     contrast_flags: [--bal.sequential]
+  # The engine lane: geth-par-main's series plus #34650's enginetest (0004)
+  # and --bal.sequential threaded into it (0005).
+  - name: geth-eng-main
+    build:
+      recipe: geth
+      repo: ethereum/go-ethereum
+      ref: 920c07774c65ebb3023536f85df642c44478b540
+      patches:
+        - patches/geth-main/0001-cmd-evm-add-bal.sequential-to-blocktest.patch
+        - patches/geth-main/0002-tests-attach-a-fixture-s-block-access-list-to-the-bl.patch
+        - patches/geth-main/0003-core-print-the-parallel-execution-decision-for-each-.patch
+        - patches/geth-main/0004-cmd-evm-add-enginetest-the-direct-engine-fixture-run.patch
+        - patches/geth-main/0005-cmd-evm-run-enginetest-on-the-parallel-path-with-bal.patch
+      patch_paths: [cmd/evm/, tests/, core/state_processor.go]
+    contrast_flags: [--bal.sequential]
   - name: geth-main
     build: {recipe: geth, repo: ethereum/go-ethereum, ref: 920c07774c65ebb3023536f85df642c44478b540}
   - name: erigon-par-main
