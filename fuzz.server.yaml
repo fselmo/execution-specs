@@ -18,17 +18,22 @@ clients:
 
   # Gate clients are pinned by full 40-char SHA: the marker becomes
   # ref-<sha> and is immutable. Abbreviated SHAs fail to fetch.
-  # Pre-fix erigon. Like besu-gate, the binary the `erigon` entry built at
+  # Pre-fix erigon: the binary the `erigon` entry built at
   # this commit -- the one amsterdam-blind recorded (3.7.0-dev-1880a8e3).
   - name: erigon-gate
     path: ~/.cache/eels-fuzz/erigon/1880a8e319aef66cbd752515e4c55bd08fd83394/evm
-  # Pre-fix besu, the campaign's positive control. Points at the binary the
-  # `besu` entry already built at this commit -- the cache is commit-keyed,
-  # so a rebuild onto a newer head leaves it in place. A build entry here
-  # would re-clone besu and re-run gradle for a byte-identical artifact.
-  # Rebuild it properly if the cache is ever pruned.
+  # Pre-fix besu, the campaign's positive control (2d29706a).
   - name: besu-gate
-    path: ~/.cache/eels-fuzz/besu/eea3174daed416bb092b122389759765e240b53f/evmtool
+    build:
+      recipe: besu
+      repo: besu-eth/besu
+      ref: eea3174daed416bb092b122389759765e240b53f
+      # besu's own 305897eaf3 (#11180): the reference-test loader decodes a
+      # BAL postNonce of 2**64 - 1, which v27 puts in every case. Without
+      # it the whole batch file fails to parse and the control is blind.
+      patches:
+        - patches/besu-gate/0001-fix-test-fix-post-nonce-decoding-in-NonceChange-in-r.patch
+      patch_paths: [ethereum/referencetests/]
     env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
           PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
   # Pre-fix parent of 7150854c (PR 12965); verified 0 occurrences of

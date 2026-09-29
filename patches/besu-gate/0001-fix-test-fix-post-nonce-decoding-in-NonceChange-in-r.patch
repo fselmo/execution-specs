@@ -1,0 +1,38 @@
+From 305897eaf3374c9eca5c4c0a3a8c6824c340bf69 Mon Sep 17 00:00:00 2001
+From: Gabriel-Trintinalia <gabriel.trintinalia@consensys.net>
+Date: Fri, 28 Aug 2026 14:44:25 +1000
+Subject: [PATCH] fix(test): fix post nonce decoding in NonceChange in
+ reference tests (#11180)
+
+fix(referencetests): decode uint64 nonces in block access list fixtures
+
+Signed-off-by: Gabriel-Trintinalia <gabriel.trintinalia@consensys.net>
+---
+ .../besu/ethereum/referencetests/AccountChangesJson.java      | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/ethereum/referencetests/src/main/java/org/hyperledger/besu/ethereum/referencetests/AccountChangesJson.java b/ethereum/referencetests/src/main/java/org/hyperledger/besu/ethereum/referencetests/AccountChangesJson.java
+index 992143f27d..c8131b5ea6 100644
+--- a/ethereum/referencetests/src/main/java/org/hyperledger/besu/ethereum/referencetests/AccountChangesJson.java
++++ b/ethereum/referencetests/src/main/java/org/hyperledger/besu/ethereum/referencetests/AccountChangesJson.java
+@@ -14,6 +14,8 @@
+  */
+ package org.hyperledger.besu.ethereum.referencetests;
+ 
++import static org.hyperledger.besu.evm.internal.Words.decodeUnsignedLong;
++
+ import org.hyperledger.besu.datatypes.Address;
+ import org.hyperledger.besu.datatypes.StorageSlotKey;
+ import org.hyperledger.besu.datatypes.Wei;
+@@ -156,7 +158,7 @@ public class AccountChangesJson {
+ 
+     public NonceChange toNonceChange() {
+       return new NonceChange(
+-          decodeIndex(blockAccessIndex), postNonce != null ? Long.decode(postNonce) : 0L);
++          decodeIndex(blockAccessIndex), postNonce != null ? decodeUnsignedLong(postNonce) : 0L);
+     }
+   }
+ 
+-- 
+2.47.3
+
