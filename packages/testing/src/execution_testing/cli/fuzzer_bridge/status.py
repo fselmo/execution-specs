@@ -48,6 +48,8 @@ COUNTS_SHOWN = (
     "contrast-mismatch",
     "producer-disagreement",
     "escalated",
+    "self-checked",
+    "self-check",
     "BAL-RETRY",
     "BAL-FALLBACK",
 )

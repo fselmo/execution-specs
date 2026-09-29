@@ -91,3 +91,31 @@ def test_a_valid_block_refused_on_import_is_a_disagreement() -> None:
     ]
     result = import_fixture(broken, "amsterdam")
     assert not result.agreed and "expected valid, refused" in result.reason
+
+
+def test_a_self_checked_slice_reports_every_case_checked(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """
+    A slice the campaign samples fills each case again on a plain EELS
+    tool and imports it back: clean cases come back checked and agreeing,
+    and a disagreement comes back named by its case.
+    """
+    from ..fuzzer_bridge import eels_import
+    from ..fuzzer_bridge.eels_import import ImportResult
+
+    mod._init_fill_worker("Amsterdam")
+    clean = mod._fill_slice(([0, 1], str(tmp_path), True))
+    assert clean["self_checked"] == 2 and clean["self_checks"] == {}
+    unsampled = mod._fill_slice(([0], str(tmp_path)))
+    assert unsampled["self_checked"] == 0
+
+    monkeypatch.setattr(
+        eels_import,
+        "import_fixture",
+        lambda *_: ImportResult(False, "block 1 expected valid, refused"),
+    )
+    refused = mod._fill_slice(([0], str(tmp_path), True))
+    assert refused["self_checks"] == {
+        "seed_0": "block 1 expected valid, refused"
+    }

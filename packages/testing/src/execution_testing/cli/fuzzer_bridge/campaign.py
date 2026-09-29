@@ -1534,15 +1534,40 @@ class MixedGeneratorError(RuntimeError):
     """
 
 
-def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
+def _self_check_case(case: FuzzerOutput, fork: Fork) -> Tuple[str, str]:
+    """
+    Fill ``case`` on a plain EELS tool and import it back through EELS's
+    block import: ("", "") when they agree, else a failure or a crash.
+    """
+    from .eels_import import ImportCrashError, import_fixture
+    from .measured_gas import measuring_filler, resolve_measured_gas
+
+    filler = measuring_filler(fork)
+    try:
+        fixture = filler(resolve_measured_gas(case, fork, filler))
+        result = import_fixture(fixture, fork.name().lower())
+    except ImportCrashError as exc:
+        return "", f"import crashed: {exc}"[:200]
+    except Exception as exc:  # noqa: BLE001 - the self-check's own fill
+        return "", f"self-check fill raised: {type(exc).__name__}: {exc}"[:200]
+    return ("" if result.agreed else result.reason[:200]), ""
+
+
+def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
     """
     Fill a slice of seeds, write its shard and metadata, return a summary.
 
     The worker writes the fixture file itself and hands back only names,
     errors, and telemetry: per-case dispatch through the pool leaves
     workers idle, and the fixtures never need to transit the parent.
+    With a third, true element the slice is self-checked: each case is
+    filled again on a plain EELS tool and imported back through EELS, and
+    the disagreements come back with the summary.
     """
-    seeds, fixtures_dir = args
+    seeds, fixtures_dir = args[0], args[1]
+    self_check = len(args) > 2 and bool(args[2])
+    self_checks: Dict[str, str] = {}
+    self_check_crashes: Dict[str, str] = {}
     fork = _FILL["fork"]
     started = time.perf_counter()
     fixtures: Dict[str, Dict[str, Any]] = {}
@@ -1587,6 +1612,12 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
                 violating[seed] = [v.invariant for v in seen]
             for witness in getattr(_FILL["eels"], "bal_witnesses", []):
                 widest = max(widest, bracket_width(witness))
+            if self_check:
+                failed, crashed = _self_check_case(case, fork)
+                if failed:
+                    self_checks[f"seed_{seed}"] = failed
+                if crashed:
+                    self_check_crashes[f"seed_{seed}"] = crashed
         case_ms.append((seed, (time.perf_counter() - case_started) * 1000))
     seconds = time.perf_counter() - started
     path = shard_path(Path(fixtures_dir), seeds)
@@ -1632,6 +1663,9 @@ def _fill_slice(args: Tuple[List[int], str]) -> Dict[str, Any]:
         "errors": errors,
         "timeouts": timeouts,
         "violations": violating,
+        "self_checked": len(fixtures) if self_check else 0,
+        "self_checks": self_checks,
+        "self_check_crashes": self_check_crashes,
         # The worker's own value, not the parent's: a pool worker
         # respawned mid-run imports whatever is on disk at that moment.
         "generator_version": GENERATOR_VERSION,
@@ -2012,7 +2046,15 @@ def run_campaign(
             if end_seed is not None:
                 stop = min(stop, end_seed)
             seeds = range(submit_cursor, stop)
-            future = pool.submit(_fill_slice, (list(seeds), str(fixtures_dir)))
+            future = pool.submit(
+                _fill_slice,
+                (
+                    list(seeds),
+                    str(fixtures_dir),
+                    # Sampled like the contrasts: one batch in k.
+                    options.sampled(seeds, options.contrast_every),
+                ),
+            )
             pending.append((seeds, future))
             submit_cursor = stop
             return True
@@ -2115,6 +2157,27 @@ def run_campaign(
                     f"run is v{GENERATOR_VERSION}: a worker respawned onto a "
                     "different checkout, so the batch is a mix of two "
                     "generators. Stop, do not quote the run."
+                )
+            state.counts["self-checked"] = state.counts.get(
+                "self-checked", 0
+            ) + slice_result.get("self_checked", 0)
+            state.counts["self-check-crash"] = state.counts.get(
+                "self-check-crash", 0
+            ) + len(slice_result.get("self_check_crashes", {}))
+            for fixture_name, reason in slice_result.get(
+                "self_checks", {}
+            ).items():
+                # EELS refusing a block it filled as valid, or importing
+                # one it filled as rejected: a finding of the spec itself.
+                state.counts["self-check"] = (
+                    state.counts.get("self-check", 0) + 1
+                )
+                state.record_signature(
+                    "eels:self-check",
+                    reason,
+                    seed=_seed_of(fixture_name),
+                    bundle=None,
+                    events=[],
                 )
             state.counts["fill_timeout"] = state.counts.get(
                 "fill_timeout", 0

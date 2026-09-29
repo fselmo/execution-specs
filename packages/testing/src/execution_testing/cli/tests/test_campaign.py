@@ -165,7 +165,7 @@ class _FakePool:
     def submit(self, _fn: Any, args: Any) -> Any:
         from concurrent.futures import Future
 
-        seeds, fixtures_dir = args
+        seeds, fixtures_dir = args[0], args[1]
         fixtures = {
             f"seed_{s}": {
                 "blocks": [
