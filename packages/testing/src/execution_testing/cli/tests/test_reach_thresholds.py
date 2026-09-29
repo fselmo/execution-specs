@@ -342,3 +342,39 @@ def test_every_max_nonce_axis_keeps_all_its_values() -> None:
         if w.startswith("max_nonce")
     ]
     assert warnings_ == []
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(lambda: _near_full(1), id="state_gas_one_over"),
+        pytest.param(
+            lambda: _max_nonce_case([2**64 - 2, 2**64 - 1]),
+            id="nonce_at_the_highest",
+        ),
+    ],
+)
+def test_a_drawn_rejection_fills_through_the_evmone_producer(
+    case: Any,
+) -> None:
+    """
+    A producer fills the campaign's cases, so each rejection a motif draws
+    must be one the producer's own message maps to. The Amsterdam evmone
+    t8n reports an exception by its name, which no mapping recognised:
+    every v24 full-block case failed to fill. `EVMONE_T8N` names the
+    binary; the test is skipped without one.
+    """
+    import os
+    from pathlib import Path
+
+    from execution_testing.client_clis import TransitionTool
+
+    binary = os.environ.get("EVMONE_T8N")
+    if not binary or not Path(binary).is_file():
+        pytest.skip("set EVMONE_T8N to an evmone-t8n binary")
+    evmone = TransitionTool.from_binary_path(binary_path=Path(binary))
+    with contextlib.redirect_stdout(io.StringIO()):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fixture = mod.fill_case(case(), Amsterdam, evmone)
+    assert "expectException" in fixture["blocks"][-1]

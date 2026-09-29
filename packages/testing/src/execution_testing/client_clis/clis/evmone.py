@@ -406,4 +406,14 @@ class EvmoneExceptionMapper(ExceptionMapper):
             "system contract empty or failed"
         ),
     }
-    mapping_regex: ClassVar[Dict[ExceptionBase, str]] = {}
+    mapping_regex: ClassVar[Dict[ExceptionBase, str]] = {
+        # Newer evmone t8n builds (the Amsterdam t8n, a4664725) report an
+        # exception by its name rather than by a message; the substrings
+        # above cover the older builds. Word boundaries keep a name from
+        # matching inside a longer one.
+        **{
+            exception: rf"\b{type(exception).__name__}\.{exception.name}\b"
+            for enum in (TransactionException, BlockException)
+            for exception in enum
+        },
+    }
