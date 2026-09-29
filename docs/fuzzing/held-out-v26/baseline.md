@@ -11,8 +11,11 @@ The set is split into a tuning half and an evaluation half (`split.json`, seed 2
 | v20 generator | 21/42 (50%) | 24/40 (60%) |
 | v26 (baseline) | 22/42 (52%) | 26/41 (63%) |
 | v27 (maximum nonce) | 20/42 (48%) | 26/41 (63%) |
+| v28 (requests) | 23/42 (55%) | 29/41 (71%) |
 
 **Generalization.** The v20 generator on this set kills 45 of 102, where v26 kills 48. Of the mutants it was not built for, v21–v26 bought four kills (25, 29, 74 and 91) and lost one (30). On the evaluation half the gain is 24 of 40 to 26 of 41. The v20 generator has one more invalid mutant in the evaluation half. The motifs were aimed at v20's survivors, and what carried over to other mutants is small.
+
+v28 is the first version to move the evaluation half. The requests motif was aimed at tuning survivors 49, 53, 58 and 59, and killed 49, 58 and 59. It also killed three evaluation mutants in the same code: 48 (the deposit-request branch), and 56 and 57 (the deposit's withdrawal-credentials and signature slices). 53 survives.
 
 v27 loses two tuning kills, 23 and 101. Each was killed on 1 of 300 seeds at v26, which is sampling noise, not a regression.
 
