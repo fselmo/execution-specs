@@ -1,8 +1,11 @@
 """Test cases for the execution_testing.fixtures.base module."""
 
+import hashlib
+import json
 from typing import List
 
 import pytest
+from pydantic import Field
 
 from execution_testing.base_types import (
     Address,
@@ -14,7 +17,12 @@ from execution_testing.base_types import (
 from execution_testing.forks import Fork, Prague, TransitionFork
 from execution_testing.test_types import Transaction
 
-from ..base import BaseFixture, LabeledFixtureFormat
+from ..base import (
+    _HASH_LIST_BATCH_SIZE,
+    _HASH_TEXT_CHUNK_SIZE,
+    BaseFixture,
+    LabeledFixtureFormat,
+)
 from ..blockchain import (
     BlockchainEngineFixture,
     BlockchainEngineStatefulFixture,
@@ -37,6 +45,54 @@ def test_json_dict() -> None:
     assert "_info" not in fixture.json_dict, (
         "json_dict should exclude the 'info' field"
     )
+
+
+class HashTestFixture(BaseFixture):
+    """A fixture with no `format_name`, so it never registers as a format."""
+
+    items: List[int] = Field(default_factory=list)
+    text: str = ""
+
+    def get_fork(self) -> Fork | TransitionFork | None:
+        """Return None; this fixture has no associated fork."""
+        return None
+
+
+def whole_document_hash(fixture: BaseFixture) -> str:
+    """Return the digest of the whole compact JSON text `hash` replaces."""
+    json_str = json.dumps(
+        fixture.json_dict, sort_keys=True, separators=(",", ":")
+    )
+    return f"0x{hashlib.sha256(json_str.encode()).hexdigest()}"
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    [
+        pytest.param(
+            HashTestFixture(items=[], text="x"), id="empty_list_field"
+        ),
+        pytest.param(
+            HashTestFixture(items=list(range(_HASH_LIST_BATCH_SIZE))),
+            id="list_of_exactly_one_batch",
+        ),
+        pytest.param(
+            HashTestFixture(items=list(range(_HASH_LIST_BATCH_SIZE + 1))),
+            id="list_one_batch_plus_one_item",
+        ),
+        pytest.param(
+            HashTestFixture(items=list(range(2 * _HASH_LIST_BATCH_SIZE + 1))),
+            id="list_more_than_two_batches",
+        ),
+        pytest.param(
+            HashTestFixture(text="a" * (_HASH_TEXT_CHUNK_SIZE + 7)),
+            id="string_crosses_a_slice_boundary",
+        ),
+    ],
+)
+def test_hash_matches_whole_document_digest(fixture: BaseFixture) -> None:
+    """Test that `hash` still equals sha256 of the whole compact JSON text."""
+    assert fixture.hash == whole_document_hash(fixture)
 
 
 @pytest.mark.parametrize(

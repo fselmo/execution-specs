@@ -9,6 +9,7 @@ from typing import (
     Any,
     ClassVar,
     Dict,
+    Iterator,
     List,
     Protocol,
     Set,
@@ -64,6 +65,39 @@ class FixtureFillingPhase(Enum):
     PRE_ALLOC_GENERATION = auto()
     FILL_AFTER_PRE_ALLOC_GENERATION = auto()
     FILL_STATEFUL = auto()
+
+
+_HASH_LIST_BATCH_SIZE = 256
+_HASH_TEXT_CHUNK_SIZE = 1 << 20  # 1 MiB
+
+
+def _compact_json(value: Any) -> str:
+    """Return value as compact JSON text with sorted keys."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _text_chunks(text: str) -> Iterator[bytes]:
+    """Yield text as UTF-8 chunks, without encoding it whole."""
+    for i in range(0, len(text), _HASH_TEXT_CHUNK_SIZE):
+        yield text[i : i + _HASH_TEXT_CHUNK_SIZE].encode()
+
+
+def _list_chunks(value: List[Any]) -> Iterator[bytes]:
+    """
+    Yield a JSON list as `[`, its items in batches, then `]`.
+
+    Dumping the whole list at once would build one string as large as the
+    list; dumping it batch by batch keeps every intermediate string bounded
+    by the batch size.
+    """
+    yield b"["
+    for start in range(0, len(value), _HASH_LIST_BATCH_SIZE):
+        if start:
+            yield b","
+        batch = _compact_json(value[start : start + _HASH_LIST_BATCH_SIZE])
+        # Drop the batch's own brackets; the loop supplies `[`, `]`, `,`.
+        yield from _text_chunks(batch[1:-1])
+    yield b"]"
 
 
 class BaseFixture(CamelModel):
@@ -146,12 +180,29 @@ class BaseFixture(CamelModel):
 
     @cached_property
     def hash(self) -> str:
-        """Returns the hash of the fixture."""
-        json_str = json.dumps(
-            self.json_dict, sort_keys=True, separators=(",", ":")
-        )
-        h = hashlib.sha256(json_str.encode("utf-8")).hexdigest()
-        return f"0x{h}"
+        """
+        Return the hash of the fixture.
+
+        Hashes the same compact JSON text `json.dumps` would produce, but
+        one top-level key at a time, and lists in batches, so memory peaks
+        at the largest single value instead of the whole document.
+        """
+        digest = hashlib.sha256()
+        document = self.json_dict
+        digest.update(b"{")
+        for i, key in enumerate(sorted(document)):
+            if i:
+                digest.update(b",")
+            digest.update(_compact_json(key).encode() + b":")
+            value = document[key]
+            if isinstance(value, list):
+                chunks = _list_chunks(value)
+            else:
+                chunks = _text_chunks(_compact_json(value))
+            for chunk in chunks:
+                digest.update(chunk)
+        digest.update(b"}")
+        return f"0x{digest.hexdigest()}"
 
     def json_dict_with_info(self, hash_only: bool = False) -> Dict[str, Any]:
         """Return JSON representation of the fixture with the info field."""
