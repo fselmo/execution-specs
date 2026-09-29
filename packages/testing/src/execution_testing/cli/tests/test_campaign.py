@@ -2376,3 +2376,25 @@ def test_a_client_that_stops_refusing_negatives_pauses(
     assert state.status == "paused"
     assert "answered INVALID by nethermind fell" in state.status_reason
     assert "geth" not in state.status_reason
+
+
+def test_a_health_check_that_raises_pauses_the_campaign(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A broken check pauses with its exception as the reason instead of
+    ending the run, and every batch judged is still counted.
+    """
+    from ..fuzzer_bridge import campaign as campaign_module
+
+    def broken(*_args: Any, **_kwargs: Any) -> Any:
+        raise OverflowError("int too large to convert to float")
+
+    monkeypatch.setattr(campaign_module, "evaluate_health", broken)
+    failing = {"geth": lambda _s: False, "erigon": lambda _s: False}
+    state = _campaign(tmp_path, monkeypatch, failing, count=6, batch=3)
+    assert state.status == "paused"
+    assert state.status_reason == (
+        "health check raised OverflowError: int too large to convert to float"
+    )
+    assert state.counts["agreed"] == state.next_seed

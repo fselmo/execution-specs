@@ -2617,37 +2617,43 @@ def run_campaign(
                     )
 
             state.next_seed = seeds.stop
-            if options.health.negative_control and names:
-                state.record_negatives(
-                    batch_negatives, options.health.negative_baseline_cases
-                )
-            sample = batch_sample(
-                before,
-                health_snapshot(state, options.health),
-                len(names),
-                contrast_sampled=batch.contrast_sampled,
-                control_sampled=batch.control_sampled,
-                verdicts=len(names) * len(batch.primary),
-            )
-            if (
-                options.health.control_client is not None
-                and batch.control_sampled
-            ):
-                state.record_control(
-                    sample["control"],
+            # A health check that raises is a broken check, not a verdict
+            # on the campaign: it pauses with its exception rather than
+            # ending the run and losing the batch's state.
+            try:
+                if options.health.negative_control and names:
+                    state.record_negatives(
+                        batch_negatives, options.health.negative_baseline_cases
+                    )
+                sample = batch_sample(
+                    before,
+                    health_snapshot(state, options.health),
                     len(names),
-                    options.health.control_baseline_cases,
+                    contrast_sampled=batch.contrast_sampled,
+                    control_sampled=batch.control_sampled,
+                    verdicts=len(names) * len(batch.primary),
                 )
-            state.health_window = trim_window(
-                [*state.health_window, sample], options.health.window
-            )
-            state.health, problems = evaluate_health(
-                state.health_window,
-                options.health,
-                lanes=sorted(contrast_runners),
-                runners=len(runners),
-                segment=state.segments[-1] if state.segments else None,
-            )
+                if (
+                    options.health.control_client is not None
+                    and batch.control_sampled
+                ):
+                    state.record_control(
+                        sample["control"],
+                        len(names),
+                        options.health.control_baseline_cases,
+                    )
+                state.health_window = trim_window(
+                    [*state.health_window, sample], options.health.window
+                )
+                state.health, problems = evaluate_health(
+                    state.health_window,
+                    options.health,
+                    lanes=sorted(contrast_runners),
+                    runners=len(runners),
+                    segment=state.segments[-1] if state.segments else None,
+                )
+            except Exception as exc:  # noqa: BLE001 - pause, never crash
+                problems = [f"health check raised {type(exc).__name__}: {exc}"]
             state.health["contrast_every"] = options.contrast_every
             state.health["control_every"] = options.control_every
             found_new = new_findings(state, seen)
