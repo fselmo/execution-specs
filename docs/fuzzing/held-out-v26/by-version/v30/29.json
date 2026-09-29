@@ -1,0 +1,34 @@
+{
+  "fork": "Amsterdam",
+  "generator_version": 30,
+  "clients": [
+    "geth"
+  ],
+  "eels_commit": "b26faea22cf0bceb27f990533223a3abb8628ce4",
+  "seed_start": 0,
+  "seeds": 300,
+  "agreed": 280,
+  "diverged": 20,
+  "compared": 300,
+  "tool_rejected": 0,
+  "runner_error": 0,
+  "not_compared": 0,
+  "crashed": 0,
+  "first_crash": null,
+  "rejected_by": {},
+  "errored": {},
+  "eels_runs": 300,
+  "first_divergent_seed": 9,
+  "fields": {
+    "state_root": 16,
+    "gas_used": 16,
+    "block_access_list_hash": 16,
+    "block2.state_root": 10,
+    "block2.block_access_list_hash": 10,
+    "block3.state_root": 4,
+    "block3.block_access_list_hash": 4,
+    "block4.state_root": 1,
+    "block4.block_access_list_hash": 1,
+    "block2.gas_used": 5
+  }
+}

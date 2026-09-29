@@ -12,10 +12,13 @@ The set is split into a tuning half and an evaluation half (`split.json`, seed 2
 | v26 (baseline) | 22/41 (54%) | 26/41 (63%) |
 | v27 (maximum nonce) | 20/41 (49%) | 26/41 (63%) |
 | v28 (requests) | 23/41 (56%) | 29/41 (71%) |
+| v30 (arithmetic, largest initcode, delegated dispatch) | 26/41 (63%) | 28/41 (68%) |
 
 **Generalization.** The v20 generator on this set kills 45 of 102, where v26 kills 48. Of the mutants it was not built for, v21–v26 bought four kills (25, 29, 74 and 91) and lost one (30). On the evaluation half the gain is 24 of 40 to 26 of 41. The v20 generator has one more invalid mutant in the evaluation half. The motifs were aimed at v20's survivors, and what carried over to other mutants is small.
 
 v28 is the first version to move the evaluation half. The requests motif was aimed at tuning survivors 49, 53, 58 and 59, and killed 49, 58 and 59. It also killed three evaluation mutants in the same code: 48 (the deposit-request branch), and 56 and 57 (the deposit's withdrawal-credentials and signature slices). 53 turns out to crash wherever it is reached: its subtraction of two byte strings raises `TypeError` on each of the 8 seeds that queue a builder exit. It moves to that category, and every row above is scored with it there.
+
+v30, which includes v29, kills its three tuning targets: 60 on 21 seeds, 80 on 15 and 99 on 2. It moves nothing in the evaluation half, and loses 74 there, which v28 killed on 2 seeds. v20's set holds at 23 kills with none lost. Motif work pauses here: from v21 to v30, the evaluation half gained only where a motif's own code covered it, in v28's deposits and requests.
 
 v27 loses two tuning kills, 23 and 101. Each was killed on 1 of 300 seeds at v26, which is sampling noise, not a regression.
 
