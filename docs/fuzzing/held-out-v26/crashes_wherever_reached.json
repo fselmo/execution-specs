@@ -2,11 +2,12 @@
   "positions": [
     27,
     37,
+    53,
     65,
     81,
     86,
     89,
     98
   ],
-  "why": "survivor diagnostic at v26, liveness-v26.txt; 37 changes execution only where it crashes"
+  "why": "survivor diagnostic at v26, liveness-v26.txt; 37 changes execution only where it crashes; 53 raises TypeError (bytes - bytes) on every seed that queues a builder exit, found once v28 reached it"
 }

@@ -15,7 +15,7 @@ The set is split into a tuning half and an evaluation half (`split.json`, seed 2
 
 **Generalization.** The v20 generator on this set kills 45 of 102, where v26 kills 48. Of the mutants it was not built for, v21–v26 bought four kills (25, 29, 74 and 91) and lost one (30). On the evaluation half the gain is 24 of 40 to 26 of 41. The v20 generator has one more invalid mutant in the evaluation half. The motifs were aimed at v20's survivors, and what carried over to other mutants is small.
 
-v28 is the first version to move the evaluation half. The requests motif was aimed at tuning survivors 49, 53, 58 and 59, and killed 49, 58 and 59. It also killed three evaluation mutants in the same code: 48 (the deposit-request branch), and 56 and 57 (the deposit's withdrawal-credentials and signature slices). 53 survives.
+v28 is the first version to move the evaluation half. The requests motif was aimed at tuning survivors 49, 53, 58 and 59, and killed 49, 58 and 59. It also killed three evaluation mutants in the same code: 48 (the deposit-request branch), and 56 and 57 (the deposit's withdrawal-credentials and signature slices). 53 turns out to crash wherever it is reached: its subtraction of two byte strings raises `TypeError` on each of the 8 seeds that queue a builder exit. It moves to that category, and the v28 tuning rate above counts it as a survivor.
 
 v27 loses two tuning kills, 23 and 101. Each was killed on 1 of 300 seeds at v26, which is sampling noise, not a regression.
 
@@ -95,4 +95,4 @@ Killing them needs transactions that queue EIP-7002 withdrawal requests and EIP-
 
 ## Crashes wherever reached
 
-27, 37, 65, 81, 86, 89 and 98. 37 changes the execution only on the seeds where it crashes (159 of the 226 that reach it). Everywhere else its value differs and the execution does not.
+27, 37, 53 (found at v28), 65, 81, 86, 89 and 98. 37 changes the execution only on the seeds where it crashes (159 of the 226 that reach it). Everywhere else its value differs and the execution does not.
