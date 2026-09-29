@@ -216,7 +216,11 @@ clients:
         - patches/geth-main/0004-cmd-evm-add-enginetest-the-direct-engine-fixture-run.patch
         - patches/geth-main/0005-cmd-evm-run-enginetest-on-the-parallel-path-with-bal.patch
       patch_paths: [cmd/evm/, tests/, core/state_processor.go]
-    contrast_flags: [--bal.sequential]
+    # enginetest defaults --workers to every core, and the campaign already
+    # judges several batches at once. A contrast replaces runner_flags, so
+    # the cap is repeated there.
+    runner_flags: [--workers, "2"]
+    contrast_flags: [--bal.sequential, --workers, "2"]
   - name: geth-main
     build: {recipe: geth, repo: ethereum/go-ethereum, ref: 920c07774c65ebb3023536f85df642c44478b540}
   - name: erigon-par-main
@@ -270,7 +274,9 @@ clients:
         - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/AbstractBlockProcessor.java
     env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
           PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
-    contrast_flags: [--bal.sequential]
+    # engine-test defaults --workers to every core; capped as geth's is.
+    runner_flags: [--workers, "2"]
+    contrast_flags: [--bal.sequential, --workers, "2"]
   # Proof only, never on a panel: besu-eng-main plus a print at
   # ParallelTransactionPreprocessing.run.
   - name: besu-eng-probe
@@ -619,9 +625,13 @@ campaigns:
   # Fixtures are blockchain_test_engine, so every client imports through
   # newPayload: nethermind's parallel and stock builds (--engineTest),
   # besu-eng-main (engine-test) and geth-eng-main (#34650's enginetest).
-  # A tenth of cases are negative (generator v32): EELS imports each first
-  # and drops it unless refused with the exception it names, so a client
-  # answering VALID to one is a finding. EELS fills: the evmone producer's
+  # A tenth of cases are negative: EELS imports each first and drops it
+  # unless refused with the exception it names, so a client answering VALID
+  # to one is a finding. From v33 every negative's block hash is the one
+  # its modified payload rebuilds to. The 669 besu and nethermind failures
+  # at v32 were a harness artefact, not findings: v32's delivered-list
+  # negatives kept the true header, so the payload failed on its block
+  # hash, which cannot happen on newPayload (see negative.py). EELS fills: the evmone producer's
   # engine fills are unverified here.
   engine-main:
     fork: Amsterdam
@@ -638,8 +648,8 @@ campaigns:
       # cannot serve here.
       negative_control: true
       # geth and besu decided parallel on all 518 engine payloads of the
-      # server's probe. nethermind-par-main joins once its first run shows
-      # FUZZ-PAR-DECISION on the engine path.
-      parallel_lanes: [geth-eng-main, besu-eng-main]
+      # server's probe; nethermind-par-main on all 4,040 blocks it printed
+      # a decision for on the engine path.
+      parallel_lanes: [geth-eng-main, besu-eng-main, nethermind-par-main]
       parallel_baseline_blocks: 2000
       parallel_proof_floor: 0.9
