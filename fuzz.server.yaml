@@ -235,6 +235,27 @@ clients:
     env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
           PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
     contrast_flags: [--bal.sequential]
+  # The engine lane (engine-test), parallel by default.
+  - name: besu-eng-main
+    build:
+      recipe: besu
+      repo: besu-eth/besu
+      ref: cf89071f9d6dddf7997f35e09929fe059f82ecd1
+      # besu-par-main's series plus 0005, engine-test on the parallel path.
+      patches:
+        - patches/besu-main/0001-referencetests-let-a-caller-ask-for-the-parallel-blo.patch
+        - patches/besu-main/0002-evmtool-run-block-test-on-the-parallel-path-on-the-f.patch
+        - patches/besu-main/0003-core-print-the-parallel-processor-s-sequential-fallb.patch
+        - patches/besu-main/0004-core-print-the-parallel-execution-decision-for-each-.patch
+        - patches/besu-main/0005-evmtool-run-engine-test-on-the-parallel-path-on-the-.patch
+      patch_paths:
+        - ethereum/evmtool/
+        - ethereum/referencetests/
+        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
+        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/AbstractBlockProcessor.java
+    env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
+          PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
+    contrast_flags: [--bal.sequential]
   - name: besu-main
     build: {recipe: besu, repo: besu-eth/besu, ref: cf89071f9d6dddf7997f35e09929fe059f82ecd1}
     env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
