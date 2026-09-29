@@ -2,7 +2,7 @@
 
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Tuple
 
 import pytest
 
@@ -237,6 +237,52 @@ def test_a_rare_event_s_noise_is_not_a_regression() -> None:
         == []
     )
     assert significant_drops({"x": 297}, {"x": 133}, 400, 400)
+
+
+def test_counts_in_the_thousands_are_judged_not_overflowed() -> None:
+    """
+    A campaign's control and lanes reach counts in the thousands, where a
+    binomial coefficient no longer fits a float and the plain sum raised
+    `OverflowError` out of the health check. A real drop still pauses and
+    noise still does not.
+    """
+    from execution_testing.cli.fuzzer_bridge.density import significant_drops
+
+    fell = significant_drops({"x": 4000}, {"x": 3700}, 4000, 4000, 0.0)
+    assert fell and fell[0].startswith("x 4000/4000 -> 3700/4000")
+    assert significant_drops({"x": 4000}, {"x": 3995}, 4000, 4000, 0.0) == []
+    assert significant_drops({"x": 180}, {"x": 150}, 4040, 4040, 0.0) == []
+
+
+@pytest.mark.parametrize(
+    "at_most, total, share",
+    [
+        (2, 8, (1, 2)),
+        (130, 430, (1, 2)),
+        (3700, 7700, (1, 2)),
+        (1490, 3500, (4, 9)),
+        (0, 5000, (1, 1000)),
+    ],
+)
+def test_the_log_space_tail_matches_the_exact_sum(
+    at_most: int, total: int, share: Tuple[int, int]
+) -> None:
+    """The log-space tail agrees with the sum in exact rationals."""
+    from fractions import Fraction
+    from math import comb
+
+    from execution_testing.cli.fuzzer_bridge.density import (
+        binomial_lower_tail,
+    )
+
+    p = Fraction(*share)
+    exact = sum(
+        comb(total, k) * p**k * (1 - p) ** (total - k)
+        for k in range(at_most + 1)
+    )
+    assert binomial_lower_tail(at_most, total, float(p)) == pytest.approx(
+        float(exact), rel=1e-9, abs=1e-300
+    )
 
 
 def test_landed_capabilities_still_fire() -> None:

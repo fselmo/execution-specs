@@ -32,7 +32,7 @@ Coverage proves reach. Density finds bugs. Both need a guard.
 """
 
 from collections import Counter
-from math import comb, erfc, sqrt
+from math import erfc, exp, lgamma, log, sqrt
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 from .negative import BAL_KINDS, BAL_VARIANTS, HEADER_KINDS
@@ -832,6 +832,29 @@ REGRESSION_ALPHA = 0.01
 a regression rather than sampling."""
 
 
+def binomial_lower_tail(at_most: int, total: int, share: float) -> float:
+    """
+    P(X <= ``at_most``) for X binomial over ``total`` trials at ``share``.
+
+    Summed in log space: at counts in the thousands a term's binomial
+    coefficient no longer fits a float, and the plain product raised
+    `OverflowError` out of the health check.
+    """
+    if share >= 1:
+        return 1.0 if at_most >= total else 0.0
+    log_share, log_rest = log(share), log(1 - share)
+    logs = [
+        lgamma(total + 1)
+        - lgamma(k + 1)
+        - lgamma(total - k + 1)
+        + k * log_share
+        + (total - k) * log_rest
+        for k in range(at_most + 1)
+    ]
+    peak = max(logs)
+    return min(1.0, exp(peak) * sum(exp(v - peak) for v in logs))
+
+
 def significant_drops(
     previous: Dict[str, int],
     current: Dict[str, int],
@@ -862,11 +885,7 @@ def significant_drops(
         after_rate = after / current_seeds
         if (before_rate - after_rate) / before_rate <= tolerance:
             continue
-        total = before + after
-        chance = sum(
-            comb(total, k) * share**k * (1 - share) ** (total - k)
-            for k in range(after + 1)
-        )
+        chance = binomial_lower_tail(after, before + after, share)
         if chance < alpha:
             drops.append(
                 f"{name} {before}/{previous_seeds} -> "
