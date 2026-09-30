@@ -160,6 +160,8 @@ class _FakePool:
     """
 
     negative: Any = staticmethod(lambda _seed: False)
+    worker_results: Any = staticmethod(lambda _seeds: {})
+    """Extra fields of a slice's summary, as a fill worker returns them."""
 
     def __enter__(self) -> "_FakePool":
         return self
@@ -208,6 +210,7 @@ class _FakePool:
                 "seconds": 0.01,
                 "rss_mb": 1,
                 "generator_version": GENERATOR_VERSION,
+                **type(self).worker_results(seeds),
             }
         )
         return future
@@ -2398,3 +2401,35 @@ def test_a_health_check_that_raises_pauses_the_campaign(
         "health check raised OverflowError: int too large to convert to float"
     )
     assert state.counts["agreed"] == state.next_seed
+
+
+def test_a_producer_self_check_failure_is_a_producer_disagreement(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A slice's adjudicated self-check failures count as the producer's
+    disagreements, under its signature, not as the spec's own findings.
+    """
+    monkeypatch.setattr(
+        _FakePool,
+        "worker_results",
+        staticmethod(
+            lambda seeds: {
+                "self_check_producer": {f"seed_{seeds[0]}": ["stateRoot"]}
+            }
+        ),
+    )
+    failing = {"geth": lambda _s: False, "erigon": lambda _s: False}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        count=6,
+        batch=3,
+        producer_name="evmone",
+    )
+    assert state.counts["producer-disagreement"] == 2
+    assert state.counts.get("self-check", 0) == 0
+    (entry,) = state.signatures.values()
+    assert entry["client"] == "producer:evmone"
+    assert entry["reason"] == "header: stateRoot" and entry["count"] == 2

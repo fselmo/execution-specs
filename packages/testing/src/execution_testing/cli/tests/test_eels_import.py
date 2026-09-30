@@ -10,7 +10,7 @@ it expects rejected must be refused.
 import contextlib
 import io
 import warnings
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from execution_testing.forks import Amsterdam
 
@@ -134,16 +134,25 @@ def test_a_self_checked_slice_reports_every_case_checked(
     tmp_path: Any, monkeypatch: Any
 ) -> None:
     """
-    A slice the campaign samples fills each case again on a plain EELS
-    tool and imports it back: clean cases come back checked and agreeing,
-    and a disagreement comes back named by its case.
+    A slice the campaign samples imports each fixture it filled through
+    EELS, without filling it again: clean cases come back checked and
+    agreeing, and a disagreement comes back named by its case.
     """
     from ..fuzzer_bridge import eels_import
     from ..fuzzer_bridge.eels_import import ImportResult
 
     mod._init_fill_worker("Amsterdam")
+    fills: List[int] = []
+    fill_case = mod.fill_case
+
+    def counted(case: Any, *args: Any, **kwargs: Any) -> Any:
+        fills.append(1)
+        return fill_case(case, *args, **kwargs)
+
+    monkeypatch.setattr(mod, "fill_case", counted)
     clean = mod._fill_slice(([0, 1], str(tmp_path), True))
     assert clean["self_checked"] == 2 and clean["self_checks"] == {}
+    assert len(fills) == 2
     unsampled = mod._fill_slice(([0], str(tmp_path)))
     assert unsampled["self_checked"] == 0
 
@@ -194,3 +203,59 @@ def test_a_negative_is_witnessed_in_every_slice_and_dropped_on_failure(
     }
     assert not shard_path(tmp_path / "b", [seed]).exists()
     mod._init_fill_worker("Amsterdam")
+
+
+def test_a_producer_fixture_failing_its_import_is_adjudicated(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """
+    Under a producer the import reads the producer's fixture. When it
+    fails, EELS fills the case: a header that differs from EELS's is the
+    producer's disagreement, and one that matches leaves the failure to
+    EELS's import.
+    """
+    from ..fuzzer_bridge import eels_import
+    from ..fuzzer_bridge.eels_import import ImportResult
+
+    mod._init_fill_worker("Amsterdam")
+    fill_case = mod.fill_case
+
+    def produced(case: Any, *args: Any, **kwargs: Any) -> Any:
+        fixture = fill_case(case, *args, **kwargs)
+        if args[1] is not mod._FILL.get("plain_eels"):
+            fixture["blocks"][0]["blockHeader"]["stateRoot"] = "0x" + "11" * 32
+        return fixture
+
+    monkeypatch.setattr(mod, "fill_case", produced)
+    monkeypatch.setitem(mod._FILL, "producer", "/bin/evmone-t8n")
+    monkeypatch.setattr(
+        eels_import,
+        "import_fixture",
+        lambda *_: ImportResult(False, "block 1 expected valid, refused"),
+    )
+    wrong = mod._fill_slice(([0], str(tmp_path), True))
+    assert wrong["self_check_producer"] == {"seed_0": ["stateRoot"]}
+    assert wrong["self_checks"] == {}
+
+    monkeypatch.setattr(mod, "fill_case", fill_case)
+    right = mod._fill_slice(([0], str(tmp_path), True))
+    assert right["self_check_producer"] == {}
+    assert right["self_checks"] == {
+        "seed_0": "block 1 expected valid, refused"
+    }
+
+
+def test_self_checks_sample_at_the_contrasts_rate_unless_set() -> None:
+    """`self_check_every` defaults to `contrast_every`."""
+    from pathlib import Path
+
+    from ..fuzzer_bridge.campaign import CampaignOptions
+
+    base: Dict[str, Any] = {
+        "fork": Amsterdam,
+        "clients": {},
+        "output": Path("out"),
+        "contrast_every": 5,
+    }
+    assert CampaignOptions(**base).self_check_rate == 5
+    assert CampaignOptions(**base, self_check_every=25).self_check_rate == 25

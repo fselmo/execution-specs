@@ -258,6 +258,7 @@ def campaign(
         runner_concurrency=campaign_config.runner_concurrency,
         contrast_every=campaign_config.contrast_every,
         control_every=campaign_config.control_every,
+        self_check_every=campaign_config.self_check_every,
         seed_start=campaign_config.seed_start,
         hours=hours,
         count=count,

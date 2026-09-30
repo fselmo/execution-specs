@@ -287,6 +287,9 @@ class CampaignConfig(BaseModel):
     `CampaignOptions.contrast_every`."""
     control_every: int = Field(default=1, ge=1)
     """Run the health control's client on one batch in this many."""
+    self_check_every: Optional[int] = Field(default=None, ge=1)
+    """Import every fixture of one batch in this many through EELS; the
+    contrasts' rate when unset. See `CampaignOptions.self_check_every`."""
     health: HealthConfig = Field(default_factory=HealthConfig)
     """Bands checked after every batch; one out of band pauses the run.
     The alert webhook is never configured here: see `FUZZ_ALERT_URL`."""

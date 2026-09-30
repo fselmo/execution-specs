@@ -1591,31 +1591,47 @@ class MixedGeneratorError(RuntimeError):
     """
 
 
-def _self_check_case(case: FuzzerOutput, fork: Fork) -> Tuple[str, str]:
+def _self_check_case(
+    fixture: Mapping[str, Any], fork: Fork
+) -> Tuple[str, str]:
     """
-    Fill ``case`` on a plain EELS tool, in the campaign's format and so
-    with its negative modification when it has one, and import it back
-    through EELS's block import: ("", "") when they agree, else a failure
-    or a crash. For a negative case this is the lane's own witness: EELS
-    must refuse the modified block with the exception the fixture names.
+    Import ``fixture``, the one the campaign filled, through EELS's block
+    import: ("", "") when they agree, else a failure or a crash.
+
+    Nothing is filled again: under a producer the fixture is the
+    producer's, so the import checks what the clients are judged on. For a
+    negative case this is the lane's own witness: EELS must refuse the
+    modified block with the exception the fixture names.
     """
     from .eels_import import ImportCrashError, import_fixture
 
-    if "plain_eels" not in _FILL:
-        _FILL["plain_eels"] = ExecutionSpecsTransitionTool()
     try:
-        fixture = fill_case(
-            case,
-            fork,
-            _FILL["plain_eels"],
-            fixture_format=_FILL.get("format", BlockchainFixture),
-        )
         result = import_fixture(fixture, fork.name().lower())
     except ImportCrashError as exc:
         return "", f"import crashed: {exc}"[:200]
-    except Exception as exc:  # noqa: BLE001 - the self-check's own fill
-        return "", f"self-check fill raised: {type(exc).__name__}: {exc}"[:200]
     return ("" if result.agreed else result.reason[:200]), ""
+
+
+def _adjudicate_self_check(
+    case: FuzzerOutput, fork: Fork, produced: Mapping[str, Any]
+) -> List[str]:
+    """
+    The header fields on which a producer's fixture that failed its
+    self-check differs from EELS's own fill of the case.
+
+    Either side can be wrong, as when a producer disagrees on an escalated
+    case: a difference is the producer's, and none leaves the refusal to
+    EELS's import. Only a failure pays for the EELS fill.
+    """
+    if "plain_eels" not in _FILL:
+        _FILL["plain_eels"] = ExecutionSpecsTransitionTool()
+    spec = fill_case(
+        case,
+        fork,
+        _FILL["plain_eels"],
+        fixture_format=_FILL.get("format", BlockchainFixture),
+    )
+    return header_differences(produced, spec)
 
 
 def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
@@ -1625,15 +1641,16 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
     The worker writes the fixture file itself and hands back only names,
     errors, and telemetry: per-case dispatch through the pool leaves
     workers idle, and the fixtures never need to transit the parent.
-    With a third, true element the slice is self-checked: each case is
-    filled again on a plain EELS tool and imported back through EELS, and
-    the disagreements come back with the summary. A negative case is
+    With a third, true element the slice is self-checked: each fixture it
+    filled is imported through EELS, and the disagreements come back with
+    the summary, a producer's adjudicated apart. A negative case is
     self-checked in every slice, and one that fails is not written.
     """
     seeds, fixtures_dir = args[0], args[1]
     self_check = len(args) > 2 and bool(args[2])
     self_checks: Dict[str, str] = {}
     self_check_crashes: Dict[str, str] = {}
+    self_check_producer: Dict[str, List[str]] = {}
     self_checked = 0
     fork = _FILL["fork"]
     started = time.perf_counter()
@@ -1683,7 +1700,21 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
             negative = "negative" in info
             if self_check or negative:
                 self_checked += 1
-                failed, crashed = _self_check_case(case, fork)
+                name = f"seed_{seed}"
+                failed, crashed = _self_check_case(fixtures[name], fork)
+                if failed and _FILL.get("producer") and not negative:
+                    try:
+                        differing = _adjudicate_self_check(
+                            case, fork, fixtures[name]
+                        )
+                    except Exception as exc:  # noqa: BLE001 - recorded
+                        crashed = (
+                            f"adjudication raised {type(exc).__name__}: {exc}"
+                        )[:200]
+                    else:
+                        if differing:
+                            self_check_producer[name] = differing
+                            failed = ""
                 if failed:
                     self_checks[f"seed_{seed}"] = failed
                 if crashed:
@@ -1740,6 +1771,7 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
         "self_checked": self_checked,
         "self_checks": self_checks,
         "self_check_crashes": self_check_crashes,
+        "self_check_producer": self_check_producer,
         # The worker's own value, not the parent's: a pool worker
         # respawned mid-run imports whatever is on disk at that moment.
         "generator_version": GENERATOR_VERSION,
@@ -1838,6 +1870,17 @@ class CampaignOptions:
     control_every: int = 1
     """The health control's client judges one batch in this many. Its
     rate is then measured over those batches alone."""
+    self_check_every: Optional[int] = None
+    """One batch in this many has every fixture imported through EELS;
+    the contrasts' rate when unset. Negatives are imported in every
+    batch whatever this is."""
+
+    @property
+    def self_check_rate(self) -> int:
+        """`self_check_every`, or `contrast_every` when it is unset."""
+        if self.self_check_every is None:
+            return self.contrast_every
+        return self.self_check_every
 
     def sampled(self, seeds: range, every: int) -> bool:
         """
@@ -2125,8 +2168,7 @@ def run_campaign(
                 (
                     list(seeds),
                     str(fixtures_dir),
-                    # Sampled like the contrasts: one batch in k.
-                    options.sampled(seeds, options.contrast_every),
+                    options.sampled(seeds, options.self_check_rate),
                 ),
             )
             pending.append((seeds, future))
@@ -2238,6 +2280,22 @@ def run_campaign(
             state.counts["self-check-crash"] = state.counts.get(
                 "self-check-crash", 0
             ) + len(slice_result.get("self_check_crashes", {}))
+            for fixture_name, differing in slice_result.get(
+                "self_check_producer", {}
+            ).items():
+                # The producer's fixture failed its import and EELS's own
+                # fill of the case differs: the producer's, as on an
+                # escalated case.
+                state.counts["producer-disagreement"] = (
+                    state.counts.get("producer-disagreement", 0) + 1
+                )
+                state.record_signature(
+                    f"producer:{options.producer_name}",
+                    "header: " + ", ".join(differing),
+                    seed=_seed_of(fixture_name),
+                    bundle=None,
+                    events=[],
+                )
             for fixture_name, reason in slice_result.get(
                 "self_checks", {}
             ).items():
@@ -2656,6 +2714,7 @@ def run_campaign(
                 problems = [f"health check raised {type(exc).__name__}: {exc}"]
             state.health["contrast_every"] = options.contrast_every
             state.health["control_every"] = options.control_every
+            state.health["self_check_every"] = options.self_check_rate
             found_new = new_findings(state, seen)
             if found_new:
                 failure = send_alert(
