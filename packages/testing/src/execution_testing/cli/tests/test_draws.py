@@ -160,18 +160,16 @@ def test_triage_narrows_a_finding_to_the_label_it_needs(
             verdicts["erigon"][name] = Verdict(True)
         return verdicts
 
-    outcomes = {
-        o.label: o
-        for o in triage(
-            Amsterdam,
-            record_case(Amsterdam, seed)[1],
-            target,
-            judge,
-            runs=4,
-            labels=["near_full/margin", "tx:0/value"],
-            workdir=tmp_path,
-        )
-    }
+    result = triage(
+        Amsterdam,
+        record_case(Amsterdam, seed)[1],
+        target,
+        judge,
+        runs=4,
+        labels=["near_full/margin", "tx:0/value"],
+        workdir=tmp_path,
+    )
+    outcomes = {o.label: o for o in result.outcomes}
     margin, value = outcomes["near_full/margin"], outcomes["tx:0/value"]
     assert margin.lost >= 1 and margin.kept == 0 and 0 in margin.losing
     assert value.lost == 0
@@ -327,3 +325,57 @@ def test_a_tree_from_this_version_replays_unchanged() -> None:
     assert replayed.values() == tree.values()
     assert migration.replayed == len(tree.draws)
     assert not (migration.redrawn or migration.gone or migration.new)
+
+
+def test_triage_keeps_the_whole_panel_and_other_clients_failures(
+    tmp_path: Path,
+) -> None:
+    """
+    Every client's verdict on every variant is kept, and another client
+    failing on a variant comes back as a failure of its own, with the
+    variant's tree, queued for the campaign to take in as a finding.
+    """
+    import json
+
+    from ..fuzzer_bridge.focus import queue_failures
+
+    seed = _seed_with(**{"near_full": True, "near_full/margin": 1})
+    target = signature_id(("geth", "boom"))
+
+    def judge(path: Path, names: List[str]) -> Dict[str, Any]:
+        fixtures = json.loads(path.read_text())
+        verdicts: Dict[str, Dict[str, Verdict]] = {"geth": {}, "erigon": {}}
+        for name in names:
+            rejects = any(
+                "expectException" in b for b in fixtures[name]["blocks"]
+            )
+            verdicts["geth"][name] = Verdict(not rejects, "boom")
+            # Erigon fails exactly where the finding is lost.
+            verdicts["erigon"][name] = Verdict(rejects, "erigon broke")
+        return verdicts
+
+    result = triage(
+        Amsterdam,
+        record_case(Amsterdam, seed)[1],
+        target,
+        judge,
+        runs=2,
+        labels=["near_full/margin"],
+        workdir=tmp_path,
+    )
+    (margin,) = result.outcomes
+    assert margin.others == margin.lost >= 1
+    assert all(
+        set(v["verdicts"]) == {"geth", "erigon"} for v in result.variants
+    )
+    failure = result.failures[0]
+    assert (failure.client, failure.reason) == ("erigon", "erigon broke")
+    assert failure.tree.values()["near_full/margin"] == 0
+    (queued, *_) = queue_failures(tmp_path, target, result.failures)
+    item = json.loads(queued.read_text())
+    assert item["origin"] == {
+        "triage": target,
+        "label": "near_full/margin",
+        "value": 0,
+    }
+    assert DrawTree.from_json(item["tree"]).values() == failure.tree.values()

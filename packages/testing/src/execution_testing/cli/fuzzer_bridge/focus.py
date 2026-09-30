@@ -12,6 +12,7 @@ import contextlib
 import io
 import json
 import tempfile
+import time
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -216,6 +217,35 @@ class LabelOutcome:
     """Runs whose draw came out the same case as the finding's."""
     losing: List[Any] = field(default_factory=list)
     """The values that lost the finding."""
+    others: int = 0
+    """Runs where a client other than the finding's failed."""
+
+
+@dataclass
+class PanelFailure:
+    """A client other than the finding's failing on a triage variant."""
+
+    client: str
+    reason: str
+    """The client's error, normalized as a signature's reason."""
+    label: str
+    value: Any
+    tree: DrawTree
+    """The variant's draw tree, which replays its case."""
+    fixture: Dict[str, Any]
+    verdicts: Dict[str, Dict[str, Any]]
+    """Every client's verdict on the variant."""
+
+
+@dataclass
+class Triage:
+    """What a triage found: per label, per variant, and beyond the finding."""
+
+    outcomes: List[LabelOutcome]
+    variants: List[Dict[str, Any]]
+    """Each variant: its label, value, and every client's verdict."""
+    failures: List[PanelFailure]
+    """Other clients failing on a variant: findings of their own."""
 
 
 def triage_table(outcomes: Sequence[LabelOutcome]) -> str:
@@ -227,7 +257,7 @@ def triage_table(outcomes: Sequence[LabelOutcome]) -> str:
     width = max((len(o.label) for o in ordered), default=5)
     lines = [
         f"{'label':<{width}}  {'kind':<10}  tried  kept  lost  other  "
-        "unfillable  same  lost at"
+        "unfillable  same  others  lost at"
     ]
     for o in ordered:
         shown = ", ".join(str(v) for v in o.losing[:3])
@@ -236,7 +266,7 @@ def triage_table(outcomes: Sequence[LabelOutcome]) -> str:
         lines.append(
             f"{o.label:<{width}}  {o.kind:<10}  {o.tried:>5}  {o.kept:>4}  "
             f"{o.lost:>4}  {o.other:>5}  {o.unfillable:>10}  "
-            f"{o.unchanged:>4}  {shown}"
+            f"{o.unchanged:>4}  {o.others:>6}  {shown}"
         )
     return "\n".join(lines)
 
@@ -342,11 +372,13 @@ def triage(
     labels: Optional[Sequence[str]] = None,
     fixture_format: Any = None,
     workdir: Optional[Path] = None,
-) -> List[LabelOutcome]:
+) -> Triage:
     """
     Vary each label of the finding's case on its own, and count the
     variants whose panel verdicts keep the ``target`` signature id, lose
-    it, or fail the same client another way.
+    it, or fail the same client another way. Every client's verdict on
+    every variant is kept, and any other client failing is returned as a
+    failure of its own, with the variant's tree.
 
     A label whose domain is small is tried at every other value once; a
     large one is resampled ``runs`` times, plus its least value when it is
@@ -373,7 +405,7 @@ def triage(
     outcomes: Dict[str, LabelOutcome] = {
         label: LabelOutcome(label, kinds[label]) for label in chosen
     }
-    names: Dict[str, Tuple[str, Any]] = {}
+    names: Dict[str, Tuple[str, Any, DrawTree]] = {}
     base_json = base_case.model_dump_json()
     for label in chosen:
         for how, value in _alternatives(tree, label, runs):
@@ -388,7 +420,7 @@ def triage(
                     continue
                 name = f"v{len(names)}"
                 fixtures[name] = fill(case, fork, fixture_format)
-                names[name] = (label, drawn.values().get(label))
+                names[name] = (label, drawn.values().get(label), drawn)
             except Exception:  # noqa: BLE001 - counted, not raised
                 outcome.unfillable += 1
     with tempfile.TemporaryDirectory(dir=workdir) as tmp:
@@ -406,7 +438,14 @@ def triage(
             f"{target} does not reproduce on seed {seed}'s case: the panel "
             f"gives {signatures('base') or 'no failure'}"
         )
-    for name, (label, value) in names.items():
+    variants: List[Dict[str, Any]] = []
+    failures: List[PanelFailure] = []
+    for name, (label, value, drawn) in names.items():
+        panel = {c: v[name] for c, v in verdicts.items() if name in v}
+        shown = {
+            c: {"pass": v.passed, "error": v.error} for c, v in panel.items()
+        }
+        variants.append({"label": label, "value": value, "verdicts": shown})
         found = signatures(name)
         if target in found:
             outcomes[label].kept += 1
@@ -415,7 +454,59 @@ def triage(
         else:
             outcomes[label].lost += 1
             outcomes[label].losing.append(value)
-    return list(outcomes.values())
+        others = {
+            c: v
+            for c, v in panel.items()
+            if c != target_client and not v.passed
+        }
+        if others:
+            outcomes[label].others += 1
+        for client, reason in per_client_signatures(others):
+            failures.append(
+                PanelFailure(
+                    client,
+                    reason,
+                    label,
+                    value,
+                    drawn,
+                    fixtures[name],
+                    shown,
+                )
+            )
+    return Triage(list(outcomes.values()), variants, failures)
+
+
+def queue_failures(
+    output: Path, target: str, failures: Sequence[PanelFailure]
+) -> List[Path]:
+    """
+    Queue each failure for the campaign in ``output`` to take in as a
+    finding, bundled with its variant's tree, at its next batch.
+    """
+    queue = output / "ingest"
+    queue.mkdir(parents=True, exist_ok=True)
+    written = []
+    for i, f in enumerate(failures):
+        path = queue / f"{int(time.time() * 1000)}-{i}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "client": f.client,
+                    "reason": f.reason,
+                    "tree": f.tree.to_json(),
+                    "fixture": f.fixture,
+                    "verdicts": f.verdicts,
+                    "origin": {
+                        "triage": target,
+                        "label": f.label,
+                        "value": f.value,
+                    },
+                },
+                indent=1,
+            )
+        )
+        written.append(path)
+    return written
 
 
 def finding_seed(output: Path, entry: Mapping[str, Any]) -> int:

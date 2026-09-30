@@ -2438,3 +2438,37 @@ def test_a_producer_self_check_failure_is_a_producer_disagreement(
     (entry,) = state.signatures.values()
     assert entry["client"] == "producer:evmone"
     assert entry["reason"] == "header: stateRoot" and entry["count"] == 2
+
+
+def test_a_queued_triage_failure_becomes_a_finding(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A failure `fuzz triage` queued is taken in at the next batch as a
+    signature, bundled with its variant's case and tree, and its queue
+    file is moved aside.
+    """
+    from ..fuzzer_bridge.campaign import signature_id
+    from ..fuzzer_bridge.corpus import load_case
+    from ..fuzzer_bridge.focus import PanelFailure, queue_failures
+    from ..fuzzer_bridge.generator import record_case
+
+    case, tree = record_case(Osaka, 4)
+    failure = PanelFailure(
+        "nethermind", "state root mismatch", "tx:0/value", 7, tree, {}, {}
+    )
+    (queued,) = queue_failures(tmp_path / "out", "geth--x-00000000", [failure])
+    failing = {"geth": lambda _s: False, "erigon": lambda _s: False}
+    state = _campaign(tmp_path, monkeypatch, failing, count=3, batch=3)
+    key = signature_id(("nethermind", "state root mismatch"))
+    entry = state.signatures[key]
+    assert entry["origins"] == [
+        {"triage": "geth--x-00000000", "label": "tx:0/value", "value": 7}
+    ]
+    bundle = Path(entry["bundle"])
+    saved = json.loads((bundle / "draws.json").read_text())
+    assert saved["draws"] == json.loads(tree.to_json())["draws"]
+    bundled = load_case(bundle / "case.json")
+    assert bundled.model_dump_json() == case.model_dump_json()
+    assert not queued.exists()
+    assert (queued.parent / "done" / queued.name).is_file()

@@ -59,6 +59,7 @@ from execution_testing.fixtures import (
     BlockchainFixture,
 )
 from execution_testing.forks import Fork
+from execution_testing.fuzzing.draws import DrawTree
 from execution_testing.specs.invariants import (
     InvariantViolationWarning,
     enable_invariant_checks,
@@ -2736,6 +2737,9 @@ def run_campaign(
             state.health["contrast_every"] = options.contrast_every
             state.health["control_every"] = options.control_every
             state.health["self_check_every"] = options.self_check_rate
+            _ingest_triage_failures(
+                state, options, output, corpus_dir, runners
+            )
             found_new = new_findings(state, seen)
             if found_new:
                 failure = send_alert(
@@ -2944,6 +2948,64 @@ def _split(
         _split(runner, batch_file, fixtures, part, verdicts, stderr)
 
 
+def _ingest_triage_failures(
+    state: CampaignState,
+    options: CampaignOptions,
+    output: Path,
+    corpus_dir: Path,
+    runners: Mapping[str, FixtureRunner],
+) -> None:
+    """
+    Take in the failures `fuzz triage` queued for this campaign: each is
+    recorded as a signature and bundled like any finding, with its
+    variant's case and tree, so it is reproduced, minimized and triaged
+    the same way. A taken item moves to `ingest/done`.
+    """
+    queue = output / "ingest"
+    if not queue.is_dir():
+        return
+    from execution_testing.fuzzing.draws import Plan
+
+    from .focus import migrate
+
+    done = queue / "done"
+    for path in sorted(queue.glob("*.json")):
+        item = json.loads(path.read_text())
+        recorded = DrawTree.from_json(item["tree"])
+        tree, _ = migrate(options.fork, recorded)
+        case, tree = record_case(
+            options.fork, tree.seed, plan=Plan(values=tree.values())
+        )
+        client, reason = item["client"], item["reason"]
+        bundle = corpus_dir / signature_id((client, reason))
+        new = state.record_signature(
+            client, reason, seed=tree.seed, bundle=str(bundle)
+        )
+        entry = state.signatures[signature_id((client, reason))]
+        entry.setdefault("origins", []).append(item["origin"])
+        if new:
+            _write_bundle(
+                bundle,
+                options,
+                f"seed_{tree.seed}",
+                item["fixture"],
+                {
+                    c: Verdict(v["pass"], v["error"])
+                    for c, v in item["verdicts"].items()
+                },
+                runners,
+                focus_client=client if client in runners else None,
+                segment=state.segment,
+                case=case,
+                tree=tree,
+            )
+            (bundle / "origin.json").write_text(
+                json.dumps(item["origin"], indent=1)
+            )
+        done.mkdir(exist_ok=True)
+        path.rename(done / path.name)
+
+
 def _write_bundle(
     bundle: Path,
     options: CampaignOptions,
@@ -2955,9 +3017,15 @@ def _write_bundle(
     focus_client: Optional[str],
     events: Sequence[str] = (),
     segment: str = "",
+    case: Optional[FuzzerOutput] = None,
+    tree: Optional[DrawTree] = None,
 ) -> None:
     """
     Save what a reviewer needs to reproduce a new signature.
+
+    ``case`` and ``tree`` are the finding's when it did not come from a
+    seed as drawn, such as a triage variant; otherwise both are drawn
+    from the fixture's seed.
 
     ``segment.json`` names the segment the finding came from, whose
     manifest in the campaign's `segments/` holds the exact binaries.
@@ -2975,8 +3043,8 @@ def _write_bundle(
             {"segment": segment, "manifest": f"segments/{segment}.json"}
         )
     )
-    seed = _seed_of(fixture_name)
-    case, tree = record_case(options.fork, seed)
+    if case is None or tree is None:
+        case, tree = record_case(options.fork, _seed_of(fixture_name))
     save_case(case, bundle / "case.json")
     # The tree, with its generator version, is what replays this case on
     # a later generator: a seed alone names another case there.

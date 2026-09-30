@@ -1,6 +1,7 @@
 """The `fuzz` command group."""
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -504,6 +505,7 @@ def triage_command(
         FindingNotReproducedError,
         finding_seed,
         migrate,
+        queue_failures,
         triage,
         triage_table,
     )
@@ -574,7 +576,7 @@ def triage_command(
         f"{runs} resamples of a large one"
     )
     try:
-        outcomes = triage(
+        result = triage(
             fork,
             tree,
             target,
@@ -599,7 +601,28 @@ def triage_command(
             else ", which is the recorded case exactly"
         )
     )
-    click.echo(triage_table(outcomes))
+    click.echo(triage_table(result.outcomes))
+    record = output / "triage" / f"{target}-{int(time.time())}.json"
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(
+        json.dumps(
+            {"target": target, "seed": tree.seed, "variants": result.variants},
+            indent=1,
+        )
+    )
+    runs_total = len(result.variants)
+    click.echo(
+        f"every client's verdict on the {runs_total} variants: {record}"
+    )
+    if result.failures:
+        queued = queue_failures(output, target, result.failures)
+        click.echo(
+            f"{len(result.failures)} failure(s) of other clients queued as "
+            f"findings, with their variants' trees, for the campaign's next "
+            f"batch: {queued[0].parent}"
+        )
+    else:
+        click.echo(f"no other client failed in {runs_total} runs")
 
 
 @fuzz.command("status")
