@@ -500,7 +500,13 @@ def triage_command(
     from execution_testing.fuzzing.draws import DrawTree
 
     from .campaign import campaign_format
-    from .focus import finding_seed, migrate, triage, triage_table
+    from .focus import (
+        FindingNotReproducedError,
+        finding_seed,
+        migrate,
+        triage,
+        triage_table,
+    )
     from .generator import GENERATOR_VERSION, record_case
     from .runners import FixtureRunner
 
@@ -523,12 +529,14 @@ def triage_command(
         # A campaign directory copied from another machine.
         bundle = output / "corpus" / bundle.name
     saved = bundle / "draws.json"
+    drifted: List[str] = []
     if seed is not None:
         tree = record_case(fork, seed)[1]
         click.echo(f"seed {seed}, as this generator draws it")
     elif entry.get("bundle") and saved.is_file():
         recorded = DrawTree.from_json(saved.read_text())
         tree, migration = migrate(fork, recorded)
+        drifted = migration.drifted
         click.echo(
             f"the finding's saved tree: generator v"
             f"{recorded.generator_version}, seed {recorded.seed}, on "
@@ -541,7 +549,10 @@ def triage_command(
         except ValueError as exc:
             raise click.UsageError(str(exc)) from exc
         tree = record_case(fork, seed)[1]
-        click.echo(f"no saved tree; seed {seed} of this generator's segment")
+        click.echo(
+            f"no saved tree; seed {seed} is a hit this finding recorded "
+            f"under v{GENERATOR_VERSION}, so it is that hit's own case"
+        )
     engine = campaign_config.fixture_format == "blockchain_test_engine"
     resolved = resolve_campaign(config, campaign_config.clients)
     runners = {
@@ -562,14 +573,31 @@ def triage_command(
         f"triage {target}: every value of a small domain, "
         f"{runs} resamples of a large one"
     )
-    outcomes = triage(
-        fork,
-        tree,
-        target,
-        judge,
-        runs=runs,
-        labels=labels or None,
-        fixture_format=campaign_format(campaign_config.fixture_format),
+    try:
+        outcomes = triage(
+            fork,
+            tree,
+            target,
+            judge,
+            runs=runs,
+            labels=labels or None,
+            fixture_format=campaign_format(campaign_config.fixture_format),
+        )
+    except FindingNotReproducedError as exc:
+        cause = (
+            "the replay drifted from the recording at the labels listed "
+            "above, so it may be another case"
+            if drifted
+            else "nothing drifted, so the client's verdict changed"
+        )
+        raise click.ClickException(f"{exc}; {cause}") from exc
+    click.echo(
+        f"reproduced: {target} fails on the replayed case"
+        + (
+            f", despite {len(drifted)} drifted labels"
+            if drifted
+            else ", which is the recorded case exactly"
+        )
     )
     click.echo(triage_table(outcomes))
 

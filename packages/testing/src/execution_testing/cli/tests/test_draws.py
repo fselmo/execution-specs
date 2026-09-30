@@ -288,7 +288,34 @@ def test_a_tree_from_another_version_replays_what_still_exists() -> None:
     for d in draws:
         if d.label not in ("tx:0/retired", "blocks"):
             assert values[d.label] == d.value, d.label
-    assert "warning: 1 labels no longer exist" in migration.render()
+    rendered = migration.render()
+    assert "warning: 1 labels no longer exist" in rendered
+    for label in ("tx:0/retired", "blocks", dropped):
+        assert f"  {label}" in rendered
+    assert migration.drifted == sorted(["blocks", "tx:0/retired", dropped])
+
+
+def test_triage_says_when_the_finding_does_not_reproduce(
+    tmp_path: Path,
+) -> None:
+    """
+    A replay whose case no longer fails is reported as that, not narrowed:
+    a count of labels replayed does not say the bug came back.
+    """
+    from ..fuzzer_bridge.focus import FindingNotReproducedError
+
+    def passing(_path: Path, names: List[str]) -> Dict[str, Any]:
+        return {"geth": {name: Verdict(True) for name in names}}
+
+    with pytest.raises(FindingNotReproducedError, match="does not reproduce"):
+        triage(
+            Amsterdam,
+            record_case(Amsterdam, 3)[1],
+            signature_id(("geth", "boom")),
+            passing,
+            labels=["tx:0/value"],
+            workdir=tmp_path,
+        )
 
 
 def test_a_tree_from_this_version_replays_unchanged() -> None:

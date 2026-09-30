@@ -274,6 +274,10 @@ def _plan_for(tree: DrawTree, label: str, how: str, value: Any) -> Plan:
     return focus_plan(tree, sets={label: value})
 
 
+class FindingNotReproducedError(ValueError):
+    """The finding's signature does not fail on its replayed case."""
+
+
 @dataclass
 class Migration:
     """How a recorded tree replayed on the current generator."""
@@ -287,8 +291,16 @@ class Migration:
     new: List[str]
     """Labels the recording does not have, drawn fresh."""
 
+    @property
+    def drifted(self) -> List[str]:
+        """Every label whose value is not the recorded one, or is gone."""
+        return sorted({*self.redrawn, *self.gone, *self.new})
+
     def render(self) -> str:
-        """One line per kind of label, with a warning when any moved."""
+        """
+        The replay's drift, every drifted label named: a count alone
+        cannot say whether one sat on the failing path.
+        """
         lines = [f"replayed {self.replayed} labels at their recorded values"]
         for what, labels in (
             ("no longer accept their value, redrawn", self.redrawn),
@@ -296,11 +308,8 @@ class Migration:
             ("are new, drawn fresh", self.new),
         ):
             if labels:
-                shown = ", ".join(labels[:5])
-                more = f", ... ({len(labels)})" if len(labels) > 5 else ""
-                lines.append(
-                    f"warning: {len(labels)} labels {what}: {shown}{more}"
-                )
+                lines.append(f"warning: {len(labels)} labels {what}:")
+                lines.extend(f"  {label}" for label in labels)
         return "\n".join(lines)
 
 
@@ -393,7 +402,7 @@ def triage(
         return [signature_id(s) for s in per_client_signatures(failing)]
 
     if target not in signatures("base"):
-        raise ValueError(
+        raise FindingNotReproducedError(
             f"{target} does not reproduce on seed {seed}'s case: the panel "
             f"gives {signatures('base') or 'no failure'}"
         )
