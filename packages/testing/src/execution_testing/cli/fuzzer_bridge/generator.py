@@ -13,7 +13,7 @@ worth running.
 """
 
 import random
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from execution_testing.base_types import (
     AccessList,
@@ -38,6 +38,15 @@ from execution_testing.test_types.account_types import EOA
 from execution_testing.vm import Bytecode
 from execution_testing.vm import Opcodes as Op
 
+from .draws import (
+    PARAM,
+    STRUCTURAL,
+    Domain,
+    Draws,
+    DrawTree,
+    Plan,
+    integers,
+)
 from .models import (
     FuzzerAccountInput,
     FuzzerAuthorizationInput,
@@ -52,7 +61,7 @@ from .negative import BAL_KINDS, HEADER_KINDS
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 34
+GENERATOR_VERSION = 35
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -614,14 +623,35 @@ majority leave them absent, so a value-bearing call to one pays the
 account-creation charge -- the historically bug-productive path."""
 
 
-def _derive_key(rng: random.Random) -> Hash:
+SECP256K1_ORDER = (
+    0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+)
+
+KEYS = integers(1, SECP256K1_ORDER - 1)
+"""Any valid secp256k1 private key."""
+
+GAS = integers(0, 2**63 - 1)
+WEI = integers(0, 2**256 - 1)
+NONCE = integers(0, 2**64 - 1)
+FRACTION = Domain(
+    "number in (0, 100]",
+    lambda v: isinstance(v, (int, float))
+    and not isinstance(v, bool)
+    and 0 < v <= 100,
+)
+"""A multiple of a measured need, or of one fresh store's state gas."""
+
+
+def _derive_key(d: Draws, name: str) -> Hash:
     """Draw a valid secp256k1 private key deterministically."""
-    # secp256k1 order; any value in [1, n-1] is a valid key.
-    n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
-    return Hash((rng.randrange(1, n)).to_bytes(32, "big"))
+    return Hash(
+        d.integer(name, 1, SECP256K1_ORDER - 1, domain=KEYS).to_bytes(
+            32, "big"
+        )
+    )
 
 
-def _fee_market_fields(rng: random.Random, base: int) -> Dict[str, Any]:
+def _fee_market_fields(d: Draws, base: int) -> Dict[str, Any]:
     """
     Fee-market fields bracketing the base fee.
 
@@ -632,8 +662,12 @@ def _fee_market_fields(rng: random.Random, base: int) -> Dict[str, Any]:
     transaction is invalid and would be discarded before any comparison
     could see it.
     """
-    max_fee = rng.choice((base, base + 1, 2 * base, 10 * base))
-    priority = rng.choice(tuple({0, 1, max_fee - 1, max_fee}))
+    max_fee = d.pick(
+        "max_fee", (base, base + 1, 2 * base, 10 * base), domain=WEI
+    )
+    priority = d.pick(
+        "priority", tuple({0, 1, max_fee - 1, max_fee}), domain=WEI
+    )
     return {
         "max_fee_per_gas": HexNumber(max_fee),
         "max_priority_fee_per_gas": HexNumber(priority),
@@ -641,9 +675,8 @@ def _fee_market_fields(rng: random.Random, base: int) -> Dict[str, Any]:
 
 
 def _authorizations(
-    rng: random.Random,
+    d: Draws,
     domains: ValueDomains,
-    sender: Address,
     senders: List[Address],
     accounts: Dict[Address, FuzzerAccountInput],
     nonces: Dict[Address, int],
@@ -681,29 +714,35 @@ def _authorizations(
     the pool later calls it; precompiles and never-existing addresses
     are the boundaries.
     """
-    del sender
     out = []
-    for _ in range(rng.choice((1, 1, 2))):
-        authority = rng.choice(senders)
+    count = d.pick("authorizations", (1, 1, 2), kind=STRUCTURAL)
+    for k in range(count):
+        auth = d.unit(f"authorizations/auth:{k}")
+        authority = auth.member("authority", senders)
         key = accounts[authority].private_key
         assert key is not None, "every authority carries its key"
         nonce = nonces[authority]
-        wrong = rng.random() < domains.wrong_auth_nonce_share
+        wrong = auth.flag(
+            "wrong_nonce", domains.wrong_auth_nonce_share, kind=PARAM
+        )
+        # Drawn whether used or not, so the wrong-nonce flag and the
+        # authority's nonce decide only the value, never which labels exist.
+        above = auth.flag("above", 0.5, kind=PARAM)
         if wrong:
             # Both directions, deliberately. The spec skips on `!=`, so a
             # mutant weakening that to `<` is only distinguishable by a
             # declared nonce *below* the authority's -- a too-high one
             # alone leaves both comparisons agreeing, and the mutant
             # would survive while looking exercised.
-            declared = (
-                nonce + 1 if (nonce == 0 or rng.random() < 0.5) else nonce - 1
-            )
+            declared = nonce + 1 if (nonce == 0 or above) else nonce - 1
         else:
             declared = nonce
         out.append(
             FuzzerAuthorizationInput(
-                chain_id=HexNumber(rng.choice((1, 1, 1, 0))),
-                address=Address(rng.choice(pool.call_targets())),
+                chain_id=HexNumber(
+                    auth.pick("chain_id", (1, 1, 1, 0), domain=NONCE)
+                ),
+                address=Address(auth.member("address", pool.call_targets())),
                 nonce=HexNumber(declared),
                 signer_key=key,
             )
@@ -726,7 +765,7 @@ pre-state and from every other role in the case."""
 
 
 def _withdrawals(
-    rng: random.Random,
+    d: Draws,
     domains: ValueDomains,
     coinbase: Address,
     pools: Dict[str, List[Address]],
@@ -739,12 +778,16 @@ def _withdrawals(
     draw, so a recipient kind can never silently turn into no withdrawal at
     all.
     """
-    if rng.random() >= domains.withdrawal_rate:
+    if not d.flag("withdrawals", domains.withdrawal_rate):
         return []
     kinds, shares = zip(*domains.withdrawal_recipient_shares, strict=False)
     drawn = []
-    for index in range(rng.randint(1, domains.max_withdrawals)):
-        kind = rng.choices(kinds, weights=shares)[0]
+    count = d.integer(
+        "withdrawals/count", 1, domains.max_withdrawals, kind=STRUCTURAL
+    )
+    for index in range(count):
+        w = d.unit(f"withdrawals/w:{index}")
+        kind = w.pick("recipient", kinds, weights=shares, kind=STRUCTURAL)
         fresh = Address(WITHDRAWAL_RECIPIENT_BASE + index)
         if kind == "coinbase":
             recipient = coinbase
@@ -752,17 +795,25 @@ def _withdrawals(
             recipient = fresh
         elif kind in ("sender", "code", "precompile", "system_contract"):
             pool = pools[kind]
-            recipient = rng.choice(pool) if pool else fresh
+            recipient = (
+                w.member(f"recipient:{kind}/address", pool) if pool else fresh
+            )
         else:
             raise ValueError(f"unknown withdrawal recipient kind {kind!r}")
-        if rng.random() < domains.withdrawal_zero_amount_share:
+        # Drawn whether used or not: the zero flag decides the value only.
+        drawn_amount = w.integer("amount", 1, 10**9 - 1, domain=GAS)
+        if w.flag(
+            "zero_amount", domains.withdrawal_zero_amount_share, kind=PARAM
+        ):
             amount = 0
         else:
-            amount = rng.randrange(1, 10**9)
+            amount = drawn_amount
         drawn.append(
             FuzzerWithdrawalInput(
                 index=HexNumber(index),
-                validator_index=HexNumber(rng.randrange(0, 2**16)),
+                validator_index=HexNumber(
+                    w.integer("validator", 0, 2**16 - 1, domain=NONCE)
+                ),
                 address=recipient,
                 amount=HexNumber(amount),
             )
@@ -770,7 +821,9 @@ def _withdrawals(
     return drawn
 
 
-def _highest_base_fee(fork: Fork, domains: ValueDomains, block: int) -> int:
+def _highest_base_fee(
+    fork: Fork, domains: ValueDomains, block: int, block_gas_limit: int
+) -> int:
     """
     The highest base fee the ``block``-th block of a case can have.
 
@@ -788,16 +841,44 @@ def _highest_base_fee(fork: Fork, domains: ValueDomains, block: int) -> int:
     for _ in range(block):
         base_fee = calculate(
             parent_base_fee_per_gas=base_fee,
-            parent_gas_used=domains.block_gas_limit,
-            parent_gas_limit=domains.block_gas_limit,
+            parent_gas_used=block_gas_limit,
+            parent_gas_limit=block_gas_limit,
         )
     return base_fee
 
 
-def _block_count(rng: random.Random, domains: ValueDomains) -> int:
-    """How many blocks the case's transactions are spread across."""
-    counts, shares = zip(*domains.block_count_shares, strict=False)
-    return int(rng.choices(counts, weights=shares)[0])
+def _chain(entries: Sequence[Tuple[str, float, bool]]) -> List[float]:
+    """
+    Each entry's chance of being the first taken, then the chance none is.
+
+    An entry is taken when available and its own draw passes, which is
+    how the motifs were once drawn one flag after another; one draw over
+    these weights gives each the same chance.
+    """
+    weights = []
+    rest = 1.0
+    for _, rate, available in entries:
+        taken = rate if available else 0.0
+        weights.append(rest * taken)
+        rest *= 1 - taken
+    weights.append(rest)
+    return weights
+
+
+MOTIFS: Tuple[str, ...] = (
+    "failing",
+    "toucher",
+    "state_exhaust",
+    "exact_charge",
+    "graver",
+    "creation",
+    "max_initcode",
+    "delegated_call",
+    "deployer",
+    "max_nonce_deployer",
+    "none",
+)
+"""What a transaction runs, in the order the chances are taken."""
 
 
 def generate_fuzzer_output(
@@ -809,6 +890,7 @@ def generate_fuzzer_output(
     num_transactions: int = 5,
     max_ops_per_contract: int = 40,
     domains: Optional[ValueDomains] = None,
+    plan: Optional[Plan] = None,
 ) -> FuzzerOutput:
     """
     Generate one reproducible ``FuzzerOutput`` for the given fork and seed.
@@ -821,16 +903,47 @@ def generate_fuzzer_output(
     ``domains`` overrides the value distributions and walk-action weights
     (the experiment arms inject one here); ``None`` uses the fork default,
     so passing it is distribution-neutral -- the default reproduces the
-    generator byte-for-byte.
+    generator byte-for-byte. ``plan`` replays recorded draws, holding
+    some and varying others; see `record_case`.
     """
-    # Seed from a stable string; a raw tuple hash would be salted per process.
-    rng = random.Random(f"{GENERATOR_VERSION}:{fork.name()}:{seed}")
+    case, _ = record_case(
+        fork,
+        seed,
+        num_senders=num_senders,
+        num_contracts=num_contracts,
+        num_transactions=num_transactions,
+        max_ops_per_contract=max_ops_per_contract,
+        domains=domains,
+        plan=plan,
+    )
+    return case
+
+
+def record_case(
+    fork: Fork,
+    seed: int,
+    *,
+    num_senders: int = 3,
+    num_contracts: int = 3,
+    num_transactions: int = 5,
+    max_ops_per_contract: int = 40,
+    domains: Optional[ValueDomains] = None,
+    plan: Optional[Plan] = None,
+) -> Tuple[FuzzerOutput, DrawTree]:
+    """
+    Generate a case and the tree of every draw it was made from.
+
+    Each draw is labeled and seeded from ``(version, fork, seed, label)``
+    alone (see `draws.py`), so ``plan`` can hold any label to a value or
+    draw it again while every other label keeps its value.
+    """
+    d = Draws(f"{GENERATOR_VERSION}:{fork.name()}:{seed}", plan)
 
     accounts: Dict[Address, FuzzerAccountInput] = {}
 
     sender_addresses: List[Address] = []
-    for _ in range(num_senders):
-        key = _derive_key(rng)
+    for i in range(num_senders):
+        key = _derive_key(d, f"sender:{i}/key")
         address = Address(EOA(key=key))
         accounts[address] = FuzzerAccountInput(
             balance=HexNumber(10**20),
@@ -843,15 +956,15 @@ def generate_fuzzer_output(
     # for why that separation is load-bearing rather than tidiness.
     authority_addresses: List[Address] = []
     authority_start: Dict[Address, int] = {}
-    for _ in range(AUTHORITY_ACCOUNTS):
-        key = _derive_key(rng)
+    for i in range(AUTHORITY_ACCOUNTS):
+        key = _derive_key(d, f"authority:{i}/key")
         address = Address(EOA(key=key))
         # Some authorities start with history. A declared nonce *below*
         # the authority's is the only case distinguishing the spec's
         # `!=` from a `<`, and it is unreachable on a fresh account:
         # there is nothing below zero. Starting every authority at zero
         # held that case to 2 occurrences in 132 authorizations.
-        start = rng.choice((0, 0, 1, 3))
+        start = d.pick(f"authority:{i}/nonce", (0, 0, 1, 3), domain=NONCE)
         accounts[address] = FuzzerAccountInput(
             balance=HexNumber(10**20),
             nonce=HexNumber(start),
@@ -865,6 +978,9 @@ def generate_fuzzer_output(
     precompiles = fuzz_precompile_targets(fork)
     if domains is None:
         domains = fork_domains(fork)
+    block_gas_limit = d.constant(
+        "env/block_gas_limit", domains.block_gas_limit, GAS
+    )
 
     # One mixed pool: contracts call every sibling (nested frames and
     # recursion arise naturally) but also senders, the precompile-range
@@ -882,7 +998,7 @@ def generate_fuzzer_output(
     # where clients have actually diverged. Funding them in every case
     # silently deleted that precondition, so it is now a minority draw and
     # most cases keep the precompiles absent from the pre-state.
-    if rng.random() < PRECOMPILE_FUNDING_RATE:
+    if d.flag("precompiles_funded", PRECOMPILE_FUNDING_RATE, kind=PARAM):
         for one_wei in pool.one_wei_accounts():
             accounts[Address(one_wei)] = FuzzerAccountInput(
                 balance=HexNumber(1),
@@ -895,14 +1011,14 @@ def generate_fuzzer_output(
     accounts[Address(INTERLEAVER_ADDRESS)] = FuzzerAccountInput(
         balance=HexNumber(0),
         nonce=HexNumber(1),
-        code=Bytes(interleaving_spill_code(rng)),
+        code=Bytes(interleaving_spill_code(d.stream("interleaver/code"))),
     )
     accounts[Address(SPILLER_ADDRESS)] = FuzzerAccountInput(
         balance=HexNumber(0),
         nonce=HexNumber(1),
         code=Bytes(bytes(Op.PUSH1(1) + Op.GAS + Op.SSTORE + Op.INVALID)),
     )
-    failer, failer_storage = failer_code(rng, domains)
+    failer, failer_storage = failer_code(d.stream("failer/code"), domains)
     accounts[Address(FAILER_ADDRESS)] = FuzzerAccountInput(
         balance=HexNumber(0),
         nonce=HexNumber(1),
@@ -910,15 +1026,18 @@ def generate_fuzzer_output(
         storage=failer_storage,
     )
     contract_addresses: List[Address] = []
-    for target in contract_ints:
+    for i, target in enumerate(contract_ints):
+        contract = d.unit(f"contract:{i}")
         address = Address(target)
         accounts[address] = FuzzerAccountInput(
-            balance=HexNumber(rng.randrange(0, 10**18)),
+            balance=HexNumber(
+                contract.integer("balance", 0, 10**18 - 1, domain=WEI)
+            ),
             nonce=HexNumber(0),
             code=Bytes(
                 bytes(
                     fuzzed_bytecode(
-                        rng,
+                        contract.stream("code"),
                         max_ops=max_ops_per_contract,
                         precompiles=precompiles,
                         call_targets=pool.call_targets(),
@@ -931,7 +1050,9 @@ def generate_fuzzer_output(
             ),
             storage={
                 HexNumber(key): HexNumber(value)
-                for key, value in domains.storage_seed(rng).items()
+                for key, value in domains.storage_seed(
+                    contract.stream("storage")
+                ).items()
             },
         )
         contract_addresses.append(address)
@@ -961,7 +1082,9 @@ def generate_fuzzer_output(
     # share of cases: v27 put them in every case, so every fixture carried
     # a nonce of 2**64 - 1, and a client that cannot load one failed them
     # all.
-    near_max_creators = rng.random() < domains.max_nonce_creator_case_rate
+    near_max_creators = d.flag(
+        "max_nonce_creators", domains.max_nonce_creator_case_rate, kind=PARAM
+    )
     for deployer, opcode, nonce in DEPLOYERS.values():
         if nonce >= MAX_NONCE - 1 and not near_max_creators:
             continue
@@ -971,7 +1094,7 @@ def generate_fuzzer_output(
             code=Bytes(deployer_code(opcode)),
         )
     # A case with no contracts has nothing to delegate to.
-    delegate = rng.choice(contract_ints) if contract_ints else None
+    delegate = d.member("delegate", contract_ints) if contract_ints else None
     if delegate is not None:
         accounts[Address(DELEGATED_ACCOUNT_ADDRESS)] = FuzzerAccountInput(
             balance=HexNumber(10**18),
@@ -1006,21 +1129,25 @@ def generate_fuzzer_output(
 
     transactions: List[FuzzerTransactionInput] = []
     # Transactions must fit the block, or the block itself is invalid.
-    tx_gas_cap = fork.transaction_gas_limit_cap() or domains.block_gas_limit
+    tx_gas_cap = fork.transaction_gas_limit_cap() or block_gas_limit
     tx_gas_choices = tuple(
         tx_gas_cap // divisor for divisor in (128, 32, 8, 1)
     )
     types, shares = zip(*domains.tx_type_shares, strict=False)
-    block_count = _block_count(rng, domains)
+    counts, count_shares = zip(*domains.block_count_shares, strict=False)
+    block_count = int(
+        d.pick("blocks", counts, weights=count_shares, kind=STRUCTURAL)
+    )
     # One budget per block. A single budget spent in draw order let the
     # first block's transactions use it up, leaving later blocks nearly
     # empty: 388 of 409 executed BLOCKHASH reads landed in the first block.
-    budgets = [domains.block_gas_limit] * block_count
+    budgets = [block_gas_limit] * block_count
     for index in range(num_transactions):
+        t = d.unit(f"tx:{index}")
         block = index * block_count // num_transactions
-        base_fee = _highest_base_fee(fork, domains, block)
-        sender = rng.choice(sender_addresses)
-        to = Address(rng.choice(tx_targets))
+        base_fee = _highest_base_fee(fork, domains, block, block_gas_limit)
+        sender = t.member("sender", sender_addresses)
+        to = Address(t.member("target", tx_targets))
         drawn_to = to
         gas_need_fraction = None
         exhaust: Optional[Tuple[int, int]] = None
@@ -1031,19 +1158,67 @@ def generate_fuzzer_output(
         requested: Optional[Tuple[Address, int, bytes]] = None
         initcode_size: Optional[int] = None
         delegated_warm: Optional[bool] = None
-        if rng.random() < domains.failing_tx_rate:
+        room = min(tx_gas_cap, budgets[block])
+        chances = _chain(
+            [
+                ("failing", domains.failing_tx_rate, True),
+                ("toucher", domains.toucher_tx_rate, True),
+                (
+                    "state_exhaust",
+                    domains.state_exhaust_tx_rate,
+                    bool(domains.reservoir_tx_gas),
+                ),
+                (
+                    "exact_charge",
+                    domains.exact_charge_tx_rate,
+                    EXACT_CHARGE_TX_GAS <= room,
+                ),
+                ("graver", domains.graver_tx_rate, GRAVER_TX_GAS <= room),
+                (
+                    "creation",
+                    domains.creation_tx_rate,
+                    CREATION_TX_GAS <= room,
+                ),
+                (
+                    "max_initcode",
+                    domains.max_initcode_tx_rate,
+                    MAX_INITCODE_TX_GAS <= room,
+                ),
+                (
+                    "delegated_call",
+                    domains.delegated_call_tx_rate,
+                    delegate is not None,
+                ),
+                (
+                    "deployer",
+                    domains.deployer_tx_rate,
+                    DEPLOYER_TX_GAS <= room,
+                ),
+                (
+                    "max_nonce_deployer",
+                    domains.max_nonce_deployer_rate,
+                    near_max_creators and DEPLOYER_TX_GAS <= room,
+                ),
+            ]
+        )
+        motif = t.pick("motif", MOTIFS, weights=chances, kind=STRUCTURAL)
+        m = t.unit(f"motif:{motif}")
+        if motif == "failing":
             to = Address(FAILER_ADDRESS)
-        elif rng.random() < domains.toucher_tx_rate:
+        elif motif == "toucher":
             to = Address(TOUCHER_ADDRESS)
-            gas_need_fraction = rng.choice(domains.toucher_margins)
-        elif (
-            domains.reservoir_tx_gas
-            and rng.random() < domains.state_exhaust_tx_rate
-        ):
+            gas_need_fraction = m.pick(
+                "margin", domains.toucher_margins, domain=FRACTION
+            )
+        elif motif == "state_exhaust":
             # The limit is the cap plus the drawn reservoir: arithmetic on
             # the draw, not a prediction of what execution needs.
             reservoir = int(
-                rng.choice(domains.state_exhaust_reservoir_stores)
+                m.pick(
+                    "reservoir_stores",
+                    domains.state_exhaust_reservoir_stores,
+                    domain=FRACTION,
+                )
                 * fresh_store_state
             )
             if tx_gas_cap + reservoir <= budgets[block]:
@@ -1052,69 +1227,71 @@ def generate_fuzzer_output(
                     tx_gas_cap + reservoir,
                     -(-reservoir // fresh_store_state),
                 )
-        elif (
-            rng.random() < domains.exact_charge_tx_rate
-            and EXACT_CHARGE_TX_GAS <= min(tx_gas_cap, budgets[block])
-        ):
+        elif motif == "exact_charge":
             to = Address(EXACT_CHARGER_ADDRESS)
-            exact_gas = exact_need + rng.choice(domains.exact_charge_margins)
-        elif rng.random() < domains.graver_tx_rate and GRAVER_TX_GAS <= min(
-            tx_gas_cap, budgets[block]
-        ):
+            exact_gas = exact_need + m.pick(
+                "margin",
+                domains.exact_charge_margins,
+                domain=integers(-(10**6), 10**6),
+            )
+        elif motif == "graver":
             to = Address(GRAVER_ADDRESS)
-            kind = rng.choice(domains.graver_beneficiaries)
+            kind = m.pick(
+                "beneficiary", domains.graver_beneficiaries, kind=STRUCTURAL
+            )
             if kind == "nonexistent":
                 beneficiary = Address(DEAD_BENEFICIARY_BASE + index)
             elif kind == "empty":
                 beneficiary = Address(EMPTY_BENEFICIARY_ADDRESS)
             elif kind == "alive":
-                beneficiary = rng.choice(sender_addresses)
+                beneficiary = m.member("beneficiary:alive", sender_addresses)
             else:
                 raise ValueError(f"unknown beneficiary kind {kind!r}")
-            grave = (beneficiary, rng.choice(domains.graver_values))
-        elif (
-            rng.random() < domains.creation_tx_rate
-            and CREATION_TX_GAS <= min(tx_gas_cap, budgets[block])
-        ):
-            creation = rng.choice(domains.creation_targets)
-        elif (
-            rng.random() < domains.max_initcode_tx_rate
-            and MAX_INITCODE_TX_GAS <= min(tx_gas_cap, budgets[block])
-        ):
+            grave = (
+                beneficiary,
+                m.pick("value", domains.graver_values, domain=WEI),
+            )
+        elif motif == "creation":
+            creation = m.pick("target", domains.creation_targets)
+        elif motif == "max_initcode":
             to = Address(MAX_INITCODE_CREATOR_ADDRESS)
-            initcode_size = fork.max_initcode_size() + rng.choice((0, 1))
-        elif (
-            delegate is not None
-            and rng.random() < domains.delegated_call_tx_rate
-        ):
+            initcode_size = fork.max_initcode_size() + m.pick(
+                "over", (0, 1), domain=integers(0, 2**16)
+            )
+        elif motif == "delegated_call":
             to = Address(DELEGATED_ACCOUNT_ADDRESS)
-            delegated_warm = rng.random() < 0.5
-        elif (
-            rng.random() < domains.deployer_tx_rate
-            and DEPLOYER_TX_GAS <= min(tx_gas_cap, budgets[block])
-        ):
+            delegated_warm = m.flag("warm", 0.5, kind=PARAM)
+        elif motif == "deployer":
             to = Address(
-                DEPLOYER_ADDRESSES[rng.choice(domains.deployer_kinds)]
+                DEPLOYER_ADDRESSES[m.pick("kind", domains.deployer_kinds)]
             )
             initcode = deployer_initcode(
-                rng.choice(domains.deployer_initcode_words),
-                rng.choice(domains.deployer_code_sizes),
+                m.pick(
+                    "initcode_words",
+                    domains.deployer_initcode_words,
+                    domain=integers(0, 1536),
+                ),
+                m.pick(
+                    "code_size",
+                    domains.deployer_code_sizes,
+                    domain=integers(0, 24576),
+                ),
             )
-        elif (
-            near_max_creators
-            and rng.random() < domains.max_nonce_deployer_rate
-            and DEPLOYER_TX_GAS <= min(tx_gas_cap, budgets[block])
-        ):
+        elif motif == "max_nonce_deployer":
             to = Address(
-                DEPLOYER_ADDRESSES[rng.choice(("near_max_nonce", "max_nonce"))]
+                DEPLOYER_ADDRESSES[
+                    m.pick("kind", ("near_max_nonce", "max_nonce"))
+                ]
             )
             initcode = deployer_initcode(1, 1)
+        elif motif != "none":
+            raise ValueError(f"unknown motif {motif!r}")
         # Drawn only for a transaction no motif above has claimed.
         if (
             to == drawn_to
             and creation is None
             and fork.system_contract_request_types()
-            and rng.random() < domains.request_tx_rate
+            and t.flag("request", domains.request_tx_rate)
             and REQUEST_TX_GAS <= min(tx_gas_cap, budgets[block])
         ):
             request_types = [
@@ -1122,13 +1299,19 @@ def generate_fuzzer_output(
             ]
             requested = request_call(
                 fork,
-                rng.choice(request_types),
-                rng.randrange(0, 1 << 16),
-                rng.random() >= domains.request_invalid_share,
+                t.pick("request/type", request_types),
+                t.integer("request/index", 0, (1 << 16) - 1),
+                not t.flag(
+                    "request/invalid",
+                    domains.request_invalid_share,
+                    kind=PARAM,
+                ),
             )
             to = requested[0]
         choices = tx_gas_choices
-        if domains.reservoir_tx_gas and rng.random() < RESERVOIR_TX_RATE:
+        if domains.reservoir_tx_gas and t.flag(
+            "reservoir", RESERVOIR_TX_RATE, kind=PARAM
+        ):
             choices = domains.reservoir_tx_gas + tx_gas_choices
         affordable = [g for g in choices if g <= budgets[block]]
         for rejected in choices:
@@ -1140,9 +1323,9 @@ def generate_fuzzer_output(
             # This block is full; the next transaction may belong to a
             # later one with room, so the draw goes on.
             continue
-        gas = rng.choice(affordable)
-        tx_type = rng.choices(types, weights=shares)[0]
-        data = Bytes(fuzzed_calldata(rng, domains=domains))
+        gas = t.pick("gas", affordable, domain=GAS)
+        tx_type = t.pick("type", types, weights=shares, kind=STRUCTURAL)
+        data = Bytes(fuzzed_calldata(t.stream("calldata"), domains=domains))
         if exhaust is not None:
             # No authorizations: their intrinsic state would come out of
             # the reservoir the draw sized.
@@ -1155,7 +1338,7 @@ def generate_fuzzer_output(
             gas = EXACT_CHARGE_TX_GAS
             tx_type = 2
             data = Bytes(exact_gas.to_bytes(32, "big"))
-        value = rng.randrange(0, 10**16)
+        value = t.integer("value", 0, 10**16 - 1, domain=WEI)
         if grave is not None:
             gas = GRAVER_TX_GAS
             data = Bytes(bytes(grave[0]).rjust(32, b"\0"))
@@ -1204,16 +1387,15 @@ def generate_fuzzer_output(
         if tx_type == 0:
             fields["gas_price"] = HexNumber(2 * base_fee)
         else:
-            fields.update(_fee_market_fields(rng, base_fee))
+            fields.update(_fee_market_fields(t.unit("fees"), base_fee))
         if delegated_warm and delegate is not None:
             fields["access_list"] = [
                 AccessList(address=Address(delegate), storage_keys=[])
             ]
         if tx_type == 4:
             fields["authorization_list"] = _authorizations(
-                rng,
+                t.unit("type:4"),
                 domains,
-                sender,
                 authority_addresses,
                 accounts,
                 authority_nonces,
@@ -1235,9 +1417,8 @@ def generate_fuzzer_output(
         nonces[sender] = max(nonces[sender], tx_nonce) + 1
 
     max_nonce_block = False
-    if (
-        domains.reservoir_tx_gas
-        and rng.random() < domains.near_full_block_rate
+    if domains.reservoir_tx_gas and d.flag(
+        "near_full", domains.near_full_block_rate
     ):
         # A block of its own, last, filled one of two ways, then one
         # transaction asking what is left, or one more. State gas: a filler
@@ -1245,23 +1426,39 @@ def generate_fuzzer_output(
         # stores so its reservoir pays for them all and nothing spills.
         # Execution gas: burners that halt at once and so use exactly the
         # gas they are given, at most the cap each.
+        n = d.unit("near_full")
         block = block_count
         block_count += 1
-        base_fee = _highest_base_fee(fork, domains, block)
-        margin = rng.choice(domains.near_full_margins)
+        base_fee = _highest_base_fee(fork, domains, block, block_gas_limit)
+        margin = n.pick("margin", domains.near_full_margins, domain=GAS)
+        share = domains.near_full_execution_share
+        fill = n.pick(
+            "fill",
+            ("state", "execution"),
+            weights=(1 - share, share),
+            kind=STRUCTURAL,
+        )
         filled: List[Tuple[int, Address, Bytes, Optional[str]]] = []
-        if rng.random() < domains.near_full_execution_share:
-            left = rng.choice(domains.near_full_execution_left)
-            to_burn = domains.block_gas_limit - left
-            while to_burn:
+        if fill == "execution":
+            left = n.pick(
+                "fill:execution/left",
+                domains.near_full_execution_left,
+                domain=GAS,
+            )
+            to_burn = block_gas_limit - left
+            while to_burn > 0:
                 burn = min(tx_gas_cap, to_burn)
                 filled.append(
                     (burn, Address(BURNER_ADDRESS), Bytes(b""), None)
                 )
                 to_burn -= burn
-        else:
-            stores = rng.choice(domains.near_full_stores)
-            left = domains.block_gas_limit - stores * fresh_store_state
+        elif fill == "state":
+            stores = n.pick(
+                "fill:state/stores",
+                domains.near_full_stores,
+                domain=integers(0, 2**20),
+            )
+            left = block_gas_limit - stores * fresh_store_state
             filled.append(
                 (
                     tx_gas_cap + stores * fresh_store_state,
@@ -1270,16 +1467,19 @@ def generate_fuzzer_output(
                     None,
                 )
             )
+        else:
+            raise ValueError(f"unknown near-full fill {fill!r}")
         filled.append(
             (
                 left + margin,
-                rng.choice(sender_addresses),
+                n.member("to", sender_addresses),
                 Bytes(b""),
                 REJECTED_BY_STATE_GAS if margin > 0 else None,
             )
         )
-        for gas, to, data, error in filled:
-            sender = rng.choice(sender_addresses)
+        for i, (gas, to, data, error) in enumerate(filled):
+            f = n.unit(f"tx:{i}")
+            sender = f.member("sender", sender_addresses)
             transactions.append(
                 FuzzerTransactionInput(
                     **{"from": sender},
@@ -1290,26 +1490,28 @@ def generate_fuzzer_output(
                     value=HexNumber(0),
                     data=data,
                     error=error,
-                    **_fee_market_fields(rng, base_fee),
+                    **_fee_market_fields(f.unit("fees"), base_fee),
                 )
             )
             nonces[sender] += 1
 
-    elif rng.random() < domains.max_nonce_block_rate:
+    elif d.flag("max_nonce_block", domains.max_nonce_block_rate):
         max_nonce_block = True
     if max_nonce_block:
         # A block of its own, last: an account one below the highest nonce
         # sends a transaction, which is valid; when drawn, one at the
         # highest then sends one, which must be rejected. Never both this
         # and a near-full block: a case rejects at most one block, its last.
+        b = d.unit("max_nonce_block")
         block = block_count
         block_count += 1
-        base_fee = _highest_base_fee(fork, domains, block)
+        base_fee = _highest_base_fee(fork, domains, block, block_gas_limit)
         senders: List[Tuple[int, Optional[str]]] = [(MAX_NONCE - 1, None)]
-        if rng.random() < domains.max_nonce_rejected_share:
+        if b.flag("rejected", domains.max_nonce_rejected_share):
             senders.append((MAX_NONCE, "NONCE_IS_MAX"))
-        for nonce, error in senders:
-            key = _derive_key(rng)
+        for i, (nonce, error) in enumerate(senders):
+            s = b.unit("rejected" if error else f"sender:{i}")
+            key = _derive_key(s, "key")
             sender = Address(EOA(key=key))
             accounts[sender] = FuzzerAccountInput(
                 balance=HexNumber(10**20),
@@ -1320,12 +1522,12 @@ def generate_fuzzer_output(
                 FuzzerTransactionInput(
                     **{"from": sender},
                     block=block,
-                    to=rng.choice(sender_addresses),
+                    to=s.member("to", sender_addresses),
                     gas=HexNumber(tx_gas_choices[0]),
                     nonce=HexNumber(nonce),
                     value=HexNumber(1),
                     error=error,
-                    **_fee_market_fields(rng, base_fee),
+                    **_fee_market_fields(s.unit("fees"), base_fee),
                 )
             )
 
@@ -1343,7 +1545,9 @@ def generate_fuzzer_output(
             if address is not None
         }
     )
-    code, storage = toucher_code(rng, domains, pool.call_targets(), others)
+    code, storage = toucher_code(
+        d.stream("toucher/code"), domains, pool.call_targets(), others
+    )
     accounts[toucher] = FuzzerAccountInput(
         # Enough for every value call to carry one wei.
         balance=HexNumber(domains.toucher_max_touches),
@@ -1353,7 +1557,7 @@ def generate_fuzzer_output(
     )
 
     kinds, shares = zip(*domains.coinbase_shares, strict=False)
-    coinbase_kind = rng.choices(kinds, weights=shares)[0]
+    coinbase_kind = d.pick("coinbase", kinds, weights=shares, kind=STRUCTURAL)
     # The manifest's weighting carries over: a precompile the fork
     # introduced is drawn as the coinbase more often too.
     pools: Dict[str, List[Address]] = {
@@ -1362,10 +1566,14 @@ def generate_fuzzer_output(
         "precompile": [Address(p) for p in precompiles],
     }
     aliased = pools.get(coinbase_kind, [])
-    coinbase = rng.choice(aliased) if aliased else Address(FIXED_COINBASE)
+    coinbase = (
+        d.member(f"coinbase:{coinbase_kind}/address", aliased)
+        if aliased
+        else Address(FIXED_COINBASE)
+    )
 
     withdrawals = _withdrawals(
-        rng,
+        d,
         domains,
         coinbase,
         {**pools, "system_contract": list(fork.system_contracts())},
@@ -1373,7 +1581,7 @@ def generate_fuzzer_output(
 
     env = Environment(
         fee_recipient=coinbase,
-        gas_limit=domains.block_gas_limit,
+        gas_limit=block_gas_limit,
         number=1,
         timestamp=1000,
         prev_randao=Hash(seed),
@@ -1384,24 +1592,28 @@ def generate_fuzzer_output(
     # case already rejecting a block is left alone: only its last block is
     # modified, and a rejected block is never the parent of another.
     negative = None
-    if (
-        not any(tx.error for tx in transactions)
-        and rng.random() < domains.negative_case_rate
+    if not any(tx.error for tx in transactions) and d.flag(
+        "negative", domains.negative_case_rate
     ):
-        if rng.random() < domains.negative_bal_share:
-            negative = FuzzerNegativeInput(
-                family="bal",
-                kind=rng.choice(BAL_KINDS),
-                pick=rng.getrandbits(32),
-            )
-        else:
-            negative = FuzzerNegativeInput(
-                family="header",
-                kind=rng.choice(HEADER_KINDS),
-                pick=rng.getrandbits(32),
-            )
+        family = d.pick(
+            "negative/family",
+            ("bal", "header"),
+            weights=(
+                domains.negative_bal_share,
+                1 - domains.negative_bal_share,
+            ),
+            kind=STRUCTURAL,
+        )
+        g = d.unit(f"negative/family:{family}")
+        negative = FuzzerNegativeInput(
+            family=family,
+            kind=g.pick(
+                "kind", BAL_KINDS if family == "bal" else HEADER_KINDS
+            ),
+            pick=g.bits("pick", 32),
+        )
 
-    return FuzzerOutput(
+    case = FuzzerOutput(
         version="2.0",
         fork=fork,
         chain_id=HexNumber(1),
@@ -1412,3 +1624,7 @@ def generate_fuzzer_output(
         block_count=block_count,
         negative=negative,
     )
+    tree = DrawTree(
+        GENERATOR_VERSION, fork.name(), seed, list(d.tree.values())
+    )
+    return case, tree

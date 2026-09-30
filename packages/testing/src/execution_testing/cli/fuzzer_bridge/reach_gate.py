@@ -44,27 +44,24 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 34
+BASELINE_GENERATOR_VERSION = 35
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    13,
-    28,
-    29,
-    44,
-    56,
-    75,
-    143,
-    197,
-    426,
-    1528,
-    1560,
-    1789,
-    3204,
-    3631,
-    4243,
+    154,
+    450,
+    563,
+    1050,
+    1150,
+    1320,
+    1538,
+    3120,
+    4145,
+    4254,
+    4548,
+    4877,
 )
-"""Greedy cover over a 5000-seed baseline at v34: together these fire
+"""Greedy cover over a 5000-seed baseline at v35: together these fire
 every target below.
 
 Re-baseline over at least `GATE_BASELINE_SEEDS`, which is measured
@@ -474,7 +471,6 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "exceptional_halt",
         ),
         ("vm.instructions.system.create", "touched_account", "out_of_gas"),
-        ("vm.instructions.system.create", "touched_account", "revert"),
         ("vm.instructions.system.create", "touched_account", "success"),
         (
             "vm.instructions.system.delegatecall",
@@ -517,11 +513,6 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
             "success",
         ),
         ("vm.instructions.system.selfdestruct", "balance_change", "success"),
-        (
-            "vm.instructions.system.selfdestruct",
-            "touched_account",
-            "out_of_gas",
-        ),
         ("vm.instructions.system.selfdestruct", "touched_account", "success"),
         (
             "vm.instructions.system.staticcall",
@@ -578,17 +569,22 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
         ("vm.interpreter.process_create", "touched_account", "success"),
     }
 )
-"""BAL cells the baseline window samples reliably: 145 of the
-147 reached over 5000 seeds at v34, each seen at least
-`bal_gate_floor` = 6 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
+"""BAL cells the baseline window samples reliably: 143 of the
+146 reached over 5000 seeds at v35, each seen at least
+`bal_gate_floor` = 8 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
 
 BAL_CELLS_BELOW_WINDOW: Dict[Tuple[str, str, str], int] = {
-    ("fork.process_transaction", "code_change", "success"): 1,
     (
         "vm.instructions.environment.extcodecopy",
         "touched_account",
         "success",
-    ): 1,
+    ): 2,
+    ("vm.instructions.system.create", "touched_account", "revert"): 3,
+    (
+        "vm.instructions.system.selfdestruct",
+        "touched_account",
+        "out_of_gas",
+    ): 7,
 }
 """Reached in the 5000-seed baseline but fewer than `bal_gate_floor` times,
 with their occurrence counts. Listed so they stay visible rather than gated:
