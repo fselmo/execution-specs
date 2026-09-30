@@ -385,6 +385,18 @@ def drawn(
     return sampler(rng)
 
 
+def drawn_bytes(rng: random.Random, name: str, size: int) -> bytes:
+    """
+    ``size`` random bytes. Labeled, the label records their seed rather
+    than the bytes, so a varied size gets fresh bytes of the new length
+    instead of the old bytes overriding it.
+    """
+    if isinstance(rng, LabeledRandom):
+        seed = rng.draws.sample(name, lambda r: r.getrandbits(64), SEED)
+        return random.Random(seed).randbytes(size)
+    return rng.randbytes(size)
+
+
 def chain_weights(entries: Sequence[Tuple[str, float, bool]]) -> List[float]:
     """
     Each entry's chance of being the first taken, then the chance none is.

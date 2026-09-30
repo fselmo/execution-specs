@@ -24,13 +24,13 @@ from execution_testing.vm import Opcodes as Op
 
 from .domains import GENERIC_DOMAINS, ValueDomains
 from .draws import (
-    BYTES,
     FORWARD_ALL_OR_UINT256,
     STRUCTURAL,
     UINT256,
     LabeledRandom,
     chain_weights,
     drawn,
+    drawn_bytes,
     integers,
     one_of,
     scoped,
@@ -142,9 +142,7 @@ def _message_call(
     post-state witnesses.
     """
     size = drawn(rng, "size", domains.byte_size, integers(0, 256))
-    data = drawn(rng, "data", lambda r: r.randbytes(size), BYTES)
-    # A set `data` may differ in length from the drawn size.
-    size = len(data)
+    data = drawn_bytes(rng, "data", size)
 
     code = Bytecode()
     for offset in range(0, size, 32):
@@ -192,13 +190,21 @@ def _precompile_call(
     With small probability the target is one past the highest precompile,
     probing the address-range boundary.
     """
-    if rng.random() < 0.85:
-        address = rng.choice(precompiles)
-    else:
-        address = max(precompiles) + 1
-    return _message_call(
-        rng, domains, address, rng.choice(_PRECOMPILE_CALL_KINDS), slot
+    # By position among the precompiles, -1 for one past the highest.
+    position = drawn(
+        rng,
+        "target",
+        lambda r: r.randrange(len(precompiles)) if r.random() < 0.85 else -1,
+        integers(-1, len(precompiles) - 1),
     )
+    address = max(precompiles) + 1 if position < 0 else precompiles[position]
+    kind = drawn(
+        rng,
+        "kind",
+        lambda r: r.choice(_PRECOMPILE_CALL_KINDS),
+        one_of(_PRECOMPILE_CALL_KINDS),
+    )
+    return _message_call(rng, domains, address, kind, slot)
 
 
 def _create2_self_copy(
