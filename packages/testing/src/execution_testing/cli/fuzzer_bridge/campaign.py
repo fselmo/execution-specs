@@ -699,6 +699,7 @@ class CampaignState:
                 "events_necessary": sorted(events),
                 "first_segment": self.segment,
                 "segments": {self.segment: 1},
+                "segment_first_seed": {self.segment: seed},
                 "first_seen": time.time(),
                 "minimized": minimized,
             }
@@ -706,6 +707,11 @@ class CampaignState:
         entry["count"] += 1
         per_segment = entry.setdefault("segments", {})
         per_segment[self.segment] = per_segment.get(self.segment, 0) + 1
+        # The seed list is capped, so a finding's seeds in a later segment
+        # (a later generator) would otherwise go unrecorded.
+        entry.setdefault("segment_first_seed", {}).setdefault(
+            self.segment, seed
+        )
         seeds = entry.setdefault("seeds", [entry["first_seed"]])
         if len(seeds) < SEED_SAMPLE_CAP:
             seeds.append(seed)

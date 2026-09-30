@@ -15,11 +15,25 @@ import tempfile
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from execution_testing.forks import Fork
+from execution_testing.fuzzing.draws import (
+    DrawError,
+    DrawTree,
+    Plan,
+    focus_plan,
+)
 
-from execution_testing.fuzzing.draws import DrawError, DrawTree, Plan, focus_plan
 from .generator import GENERATOR_VERSION, record_case
 from .models import FuzzerOutput
 
@@ -192,6 +206,7 @@ class LabelOutcome:
 
     label: str
     kind: str
+    tried: int = 0
     kept: int = 0
     lost: int = 0
     other: int = 0
@@ -199,9 +214,11 @@ class LabelOutcome:
     unfillable: int = 0
     unchanged: int = 0
     """Runs whose draw came out the same case as the finding's."""
+    losing: List[Any] = field(default_factory=list)
+    """The values that lost the finding."""
 
 
-def triage_table(outcomes: Sequence[LabelOutcome], runs: int) -> str:
+def triage_table(outcomes: Sequence[LabelOutcome]) -> str:
     """The narrowing table: the labels the finding needs first."""
     ordered = sorted(
         outcomes,
@@ -209,19 +226,52 @@ def triage_table(outcomes: Sequence[LabelOutcome], runs: int) -> str:
     )
     width = max((len(o.label) for o in ordered), default=5)
     lines = [
-        f"{'label':<{width}}  {'kind':<10}  kept  lost  other  "
-        f"unfillable  same  (of {runs} runs each)"
+        f"{'label':<{width}}  {'kind':<10}  tried  kept  lost  other  "
+        "unfillable  same  lost at"
     ]
     for o in ordered:
+        shown = ", ".join(str(v) for v in o.losing[:3])
+        if len(o.losing) > 3:
+            shown += ", ..."
         lines.append(
-            f"{o.label:<{width}}  {o.kind:<10}  {o.kept:>4}  {o.lost:>4}  "
-            f"{o.other:>5}  {o.unfillable:>10}  {o.unchanged:>4}"
+            f"{o.label:<{width}}  {o.kind:<10}  {o.tried:>5}  {o.kept:>4}  "
+            f"{o.lost:>4}  {o.other:>5}  {o.unfillable:>10}  "
+            f"{o.unchanged:>4}  {shown}"
         )
     return "\n".join(lines)
 
 
 Judge = Callable[[Path, List[str]], Dict[str, Dict[str, Any]]]
 """Runs a batch file through the panel: client -> fixture -> verdict."""
+
+
+def _alternatives(tree: DrawTree, label: str, runs: int) -> List[Any]:
+    """
+    The plans to try for ``label``: every other value of a small domain,
+    once each; else ``runs`` resamples, and an integer domain's least
+    value, the boundary a resample rarely lands on.
+    """
+    draw = next(d for d in tree.draws if d.label == label)
+    if draw.alternatives:
+        return [("set", a) for a in draw.alternatives if a != draw.value]
+    tries: List[Any] = [("vary", salt) for salt in range(1, runs + 1)]
+    if draw.lower is not None and draw.lower != draw.value:
+        tries.append(("set", draw.lower))
+    return tries
+
+
+def _plan_for(tree: DrawTree, label: str, how: str, value: Any) -> Plan:
+    if how == "vary":
+        return focus_plan(tree, vary=[label], salt=value)
+    if how != "set":
+        raise ValueError(how)
+    if tree.kinds()[label] == "structural":
+        # What the new value decides is drawn again, not pinned.
+        plan = focus_plan(tree, vary=[label], salt=1)
+        plan.values[label] = value
+        plan.set_labels.add(label)
+        return plan
+    return focus_plan(tree, sets={label: value})
 
 
 def triage(
@@ -236,39 +286,50 @@ def triage(
     workdir: Optional[Path] = None,
 ) -> List[LabelOutcome]:
     """
-    Vary each label of the finding's case on its own, ``runs`` times,
-    and count the variants whose panel verdicts keep the ``target``
-    signature id, lose it, or fail the same client another way.
+    Vary each label of the finding's case on its own, and count the
+    variants whose panel verdicts keep the ``target`` signature id, lose
+    it, or fail the same client another way.
 
-    The finding's own case is judged first; a finding that does not
-    reproduce on it has nothing to narrow, and raises.
+    A label whose domain is small is tried at every other value once; a
+    large one is resampled ``runs`` times, plus its least value when it is
+    an integer. ``labels`` limits the labels to those starting with one of
+    its entries. The finding's own case is judged first; a finding that
+    does not reproduce on it has nothing to narrow, and raises.
     """
     from .campaign import per_client_signatures, signature_id
 
     base_case, tree = record_case(fork, seed)
     kinds = tree.kinds()
-    chosen = list(labels) if labels is not None else list(kinds)
+    chosen = [
+        label
+        for label in kinds
+        if labels is None
+        or any(label == p or label.startswith(p) for p in labels)
+    ]
     target_client = target.split("--", 1)[0]
     fixtures: Dict[str, Dict[str, Any]] = {}
     fixtures["base"] = fill(base_case, fork, fixture_format)
     outcomes: Dict[str, LabelOutcome] = {
         label: LabelOutcome(label, kinds[label]) for label in chosen
     }
-    names: Dict[str, str] = {}
+    names: Dict[str, Tuple[str, Any]] = {}
     base_json = base_case.model_dump_json()
     for label in chosen:
-        for salt in range(1, runs + 1):
-            plan = focus_plan(tree, vary=[label], salt=salt)
+        for how, value in _alternatives(tree, label, runs):
+            outcome = outcomes[label]
+            outcome.tried += 1
             try:
-                case, _ = record_case(fork, seed, plan=plan)
+                case, drawn = record_case(
+                    fork, seed, plan=_plan_for(tree, label, how, value)
+                )
                 if case.model_dump_json() == base_json:
-                    outcomes[label].unchanged += 1
+                    outcome.unchanged += 1
                     continue
                 name = f"v{len(names)}"
                 fixtures[name] = fill(case, fork, fixture_format)
-                names[name] = label
+                names[name] = (label, drawn.values().get(label))
             except Exception:  # noqa: BLE001 - counted, not raised
-                outcomes[label].unfillable += 1
+                outcome.unfillable += 1
     with tempfile.TemporaryDirectory(dir=workdir) as tmp:
         path = Path(tmp) / "triage.json"
         path.write_text(json.dumps(fixtures))
@@ -284,7 +345,7 @@ def triage(
             f"{target} does not reproduce on seed {seed}'s case: the panel "
             f"gives {signatures('base') or 'no failure'}"
         )
-    for name, label in names.items():
+    for name, (label, value) in names.items():
         found = signatures(name)
         if target in found:
             outcomes[label].kept += 1
@@ -292,4 +353,47 @@ def triage(
             outcomes[label].other += 1
         else:
             outcomes[label].lost += 1
+            outcomes[label].losing.append(value)
     return list(outcomes.values())
+
+
+def finding_seed(output: Path, entry: Mapping[str, Any]) -> int:
+    """
+    The finding's first seed in a segment of this generator version.
+
+    A seed from another version names a different case, so a finding with
+    none from this version is refused, naming the versions its seeds are
+    from, rather than reported as not reproducing.
+    """
+    state = json.loads((output / "state.json").read_text())
+
+    def version_of(segment: str) -> Optional[int]:
+        manifest = output / "segments" / f"{segment}.json"
+        if not manifest.is_file():
+            return None
+        return json.loads(manifest.read_text()).get("generator_version")
+
+    firsts = entry.get("segment_first_seed", {})
+    for segment, seed in firsts.items():
+        if version_of(segment) == GENERATOR_VERSION:
+            return int(seed)
+    seen: Dict[int, Optional[int]] = {}
+    for seed in entry.get("seeds", [entry["first_seed"]]):
+        for segment in state.get("segments", []):
+            last = segment.get("last_seed")
+            if segment["first_seed"] <= seed and (
+                last is None or seed <= last
+            ):
+                version = version_of(segment["id"])
+                if version == GENERATOR_VERSION:
+                    return int(seed)
+                seen[seed] = version
+    versions = sorted({v for v in seen.values() if v is not None})
+    raise ValueError(
+        f"no seed of this finding comes from generator v{GENERATOR_VERSION}"
+        f"; its recorded seeds are from "
+        + (", ".join(f"v{v}" for v in versions) or "unknown versions")
+        + ", whose seeds name other cases now. Wait for a hit in the "
+        "current segment, or triage with --seed on a seed that reproduces "
+        "it."
+    )

@@ -434,6 +434,7 @@ def case(
     while holding the rest: --vary alone pins everything else.
     """
     from execution_testing.fuzzing.draws import DrawError, focus_plan
+
     from .focus import base_tree, focus, label_table
 
     fork = _fork_named(fork_name)
@@ -471,7 +472,12 @@ def case(
 )
 @click.option("--seed", type=int, default=None, help="Default: first seed.")
 @click.option("--runs", type=int, default=3, show_default=True)
-@click.option("--label", "labels", multiple=True, help="Only these labels.")
+@click.option(
+    "--label",
+    "labels",
+    multiple=True,
+    help="Only labels starting with this; repeat.",
+)
 @click.option(
     "--config",
     "config_path",
@@ -492,7 +498,7 @@ def triage_command(
     report which variations keep the divergence.
     """
     from .campaign import campaign_format
-    from .focus import triage, triage_table
+    from .focus import finding_seed, triage, triage_table
     from .runners import FixtureRunner
 
     config = load_config_or_fail(config_path)
@@ -508,7 +514,11 @@ def triage_command(
         )
     (target,) = matches
     entry = state["signatures"][target]
-    seed = entry["first_seed"] if seed is None else seed
+    if seed is None:
+        try:
+            seed = finding_seed(output, entry)
+        except ValueError as exc:
+            raise click.UsageError(str(exc)) from exc
     fork = _fork_named(campaign_config.fork)
     engine = campaign_config.fixture_format == "blockchain_test_engine"
     resolved = resolve_campaign(config, campaign_config.clients)
@@ -526,7 +536,10 @@ def triage_command(
     def judge(path: Path, names: List[str]) -> Dict[str, Any]:
         return {n: r.run_file(path, names) for n, r in runners.items()}
 
-    click.echo(f"triage {target}, seed {seed}, {runs} runs per label")
+    click.echo(
+        f"triage {target}, seed {seed}: every value of a small domain, "
+        f"{runs} resamples of a large one"
+    )
     outcomes = triage(
         fork,
         seed,
@@ -536,7 +549,7 @@ def triage_command(
         labels=labels or None,
         fixture_format=campaign_format(campaign_config.fixture_format),
     )
-    click.echo(triage_table(outcomes, runs))
+    click.echo(triage_table(outcomes))
 
 
 @fuzz.command("status")

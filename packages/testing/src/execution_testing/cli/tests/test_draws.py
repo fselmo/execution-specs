@@ -172,10 +172,62 @@ def test_triage_narrows_a_finding_to_the_label_it_needs(
             workdir=tmp_path,
         )
     }
-    assert outcomes["near_full/margin"].lost >= 1
-    assert outcomes["near_full/margin"].kept == 0
-    assert outcomes["tx:0/value"].kept == 4
-    assert outcomes["tx:0/value"].lost == 0
+    margin, value = outcomes["near_full/margin"], outcomes["tx:0/value"]
+    assert margin.lost >= 1 and margin.kept == 0 and 0 in margin.losing
+    assert value.lost == 0
+    assert value.kept == value.tried - value.unchanged - value.unfillable
+    # Four resamples, and the least value, zero, which a resample of a wide
+    # range rarely lands on.
+    assert value.tried == 5
+
+
+def test_triage_tries_every_value_of_a_small_domain() -> None:
+    """
+    A flag is tried at its other value once, however many resamples a
+    large domain gets: precompile funding answers yes or no in one run.
+    """
+    from ..fuzzer_bridge.focus import _alternatives
+
+    _, tree = record_case(Amsterdam, 3)
+    funded = tree.values()["precompiles_funded"]
+    assert _alternatives(tree, "precompiles_funded", 5) == [
+        ("set", not funded)
+    ]
+    assert len(_alternatives(tree, "tx:0/value", 5)) == 6
+
+
+def test_triage_picks_a_seed_of_the_current_generator(tmp_path: Path) -> None:
+    """
+    A finding's seed from another generator names another case: triage
+    takes its first seed in a segment of this version, and refuses,
+    naming the versions, when it has none.
+    """
+    import json
+
+    from ..fuzzer_bridge.focus import finding_seed
+    from ..fuzzer_bridge.generator import GENERATOR_VERSION
+
+    (tmp_path / "segments").mkdir()
+    for segment, version in (
+        ("old", GENERATOR_VERSION - 1),
+        ("new", GENERATOR_VERSION),
+    ):
+        (tmp_path / "segments" / f"{segment}.json").write_text(
+            json.dumps({"generator_version": version})
+        )
+    state = {
+        "segments": [
+            {"id": "old", "first_seed": 0, "last_seed": 99},
+            {"id": "new", "first_seed": 100, "last_seed": None},
+        ]
+    }
+    (tmp_path / "state.json").write_text(json.dumps(state))
+    entry = {"first_seed": 7, "seeds": [7, 42, 130, 150]}
+    assert finding_seed(tmp_path, entry) == 130
+    with pytest.raises(ValueError, match=f"from v{GENERATOR_VERSION - 1}"):
+        finding_seed(tmp_path, {"first_seed": 7, "seeds": [7, 42]})
+    later = {"first_seed": 7, "seeds": [7], "segment_first_seed": {"new": 180}}
+    assert finding_seed(tmp_path, later) == 180
 
 
 def test_a_call_in_contract_code_has_its_own_labels() -> None:
