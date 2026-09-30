@@ -243,6 +243,30 @@ def test_fuzzer_generated(blockchain_test):
     blockchain_test(**test)
 ```
 
+### 4. Recorded draws, focused runs and triage
+
+Every generated case is also a tree of labeled draws (`draws.py`). Each draw is seeded by the case's seed and its label alone, so a case replays byte-identically from its seed or from its tree, and changing one label leaves every other label's value where it was. `structural` draws decide which units exist (a transaction's motif, whether a near-full block is added); `param` draws only fill in values. Values that depend on other draws or on execution, such as nonces, gas budgets and whether a transaction fits its block, are derived again on every replay, never recorded.
+
+```bash
+# Every label with its kind, value and policy
+uv run fuzz case --seed 61 --labels
+
+# Resample one label three times, everything else pinned, filling each run
+uv run fuzz case --seed 61 --vary near_full/margin --runs 3
+
+# Give a label a literal; it is checked against the label's valid values
+uv run fuzz case --seed 61 --set near_full/margin=1
+
+# Keep the tree to replay later
+uv run fuzz case --seed 61 --save-tree case.json
+uv run fuzz case --tree case.json --vary tx:2/gas
+
+# Narrow a campaign finding: vary one label at a time and judge each
+uv run fuzz triage <signature id or part of it> --campaign continuous-one
+```
+
+Varying a structural label draws again everything it decides, so pinning a label beneath it is refused. A run that cannot be generated or filled is reported with its error. `fuzz triage` prints, for each label, how many variations kept the finding's signature, lost it, or failed the same client another way; the labels whose variation loses it are the ones the bug needs.
+
 ## Key Insights
 
 ### Genesis Block Handling

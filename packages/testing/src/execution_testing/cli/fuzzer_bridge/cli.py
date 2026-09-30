@@ -1,7 +1,8 @@
 """The `fuzz` command group."""
 
+import json
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import click
 
@@ -356,6 +357,183 @@ def campaign(
         f"done: {state.unique_findings()} unique signature(s); "
         f"report at {options.output / 'report.md'}"
     )
+
+
+def _fork_named(name: str) -> Any:
+    for fork in get_forks():
+        if fork.name() == name:
+            return fork
+    raise click.UsageError(f"no fork named {name!r}")
+
+
+def _parse_sets(sets: Sequence[str]) -> Dict[str, Any]:
+    parsed: Dict[str, Any] = {}
+    for item in sets:
+        label, sep, raw = item.partition("=")
+        if not sep:
+            raise click.UsageError(f"--set {item!r}: expected LABEL=VALUE")
+        try:
+            parsed[label] = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed[label] = raw
+    return parsed
+
+
+@fuzz.command("case")
+@click.option("--seed", type=int, default=None, help="The case's seed.")
+@click.option(
+    "--tree",
+    "tree_file",
+    type=click.Path(path_type=Path, dir_okay=False, exists=True),
+    default=None,
+    help="A recorded tree (from --save-tree) to start from instead.",
+)
+@click.option("--fork", "fork_name", default="Amsterdam", show_default=True)
+@click.option(
+    "--labels",
+    "show_labels",
+    is_flag=True,
+    help="Print every label with its kind, value and policy, and stop.",
+)
+@click.option("--vary", multiple=True, help="Resample this label; repeat.")
+@click.option("--pin", multiple=True, help="Hold this label; repeat.")
+@click.option(
+    "--set",
+    "sets",
+    multiple=True,
+    help="LABEL=VALUE: give a literal (JSON), checked against the label's "
+    "valid values; repeat.",
+)
+@click.option("--runs", type=int, default=1, show_default=True)
+@click.option(
+    "--no-fill", is_flag=True, help="Generate only; do not fill through EELS."
+)
+@click.option(
+    "--save-tree",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Write the case's recorded tree here.",
+)
+def case(
+    seed: Optional[int],
+    tree_file: Optional[Path],
+    fork_name: str,
+    show_labels: bool,
+    vary: Sequence[str],
+    pin: Sequence[str],
+    sets: Sequence[str],
+    runs: int,
+    no_fill: bool,
+    save_tree: Optional[Path],
+) -> None:
+    """
+    Replay a case from its seed or recorded tree, varying chosen draws
+    while holding the rest: --vary alone pins everything else.
+    """
+    from .draws import DrawError, focus_plan
+    from .focus import base_tree, focus, label_table
+
+    fork = _fork_named(fork_name)
+    try:
+        tree = base_tree(fork, seed, tree_file)
+        if save_tree is not None:
+            save_tree.write_text(tree.to_json())
+        parsed = _parse_sets(sets)
+        if show_labels:
+            plan = focus_plan(tree, vary=vary, pin=pin, sets=parsed)
+            click.echo(label_table(tree, plan))
+            return
+        report = focus(
+            fork,
+            tree,
+            vary=vary,
+            pin=pin,
+            sets=parsed,
+            runs=runs,
+            fill_cases=not no_fill,
+        )
+    except (DrawError, ValueError) as exc:
+        raise click.UsageError(str(exc)) from exc
+    click.echo(report.render())
+
+
+@fuzz.command("triage")
+@click.argument("digest")
+@click.option("--campaign", "campaign_name", required=True)
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path, file_okay=False),
+    default=None,
+    help="Campaign directory [default: campaigns/NAME].",
+)
+@click.option("--seed", type=int, default=None, help="Default: first seed.")
+@click.option("--runs", type=int, default=3, show_default=True)
+@click.option("--label", "labels", multiple=True, help="Only these labels.")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+)
+def triage_command(
+    digest: str,
+    campaign_name: str,
+    output: Optional[Path],
+    seed: Optional[int],
+    runs: int,
+    labels: Sequence[str],
+    config_path: Optional[Path],
+) -> None:
+    """
+    Narrow a finding: replay its case, vary one label at a time, and
+    report which variations keep the divergence.
+    """
+    from .campaign import campaign_format
+    from .focus import triage, triage_table
+    from .runners import FixtureRunner
+
+    config = load_config_or_fail(config_path)
+    campaign_config = campaign_or_fail(config, campaign_name)
+    assert campaign_config is not None
+    output = output or Path("campaigns") / campaign_name
+    state = json.loads((output / "state.json").read_text())
+    matches = [k for k in state.get("signatures", {}) if digest in k]
+    if len(matches) != 1:
+        raise click.UsageError(
+            f"{digest!r} names {len(matches)} signatures in {output}: "
+            + ", ".join(matches[:5])
+        )
+    (target,) = matches
+    entry = state["signatures"][target]
+    seed = entry["first_seed"] if seed is None else seed
+    fork = _fork_named(campaign_config.fork)
+    engine = campaign_config.fixture_format == "blockchain_test_engine"
+    resolved = resolve_campaign(config, campaign_config.clients)
+    runners = {
+        name: FixtureRunner.detect(
+            name,
+            r.binary,
+            config.client(name).runner_flags,
+            env=r.env,
+            engine=engine,
+        )
+        for name, r in resolved.items()
+    }
+
+    def judge(path: Path, names: List[str]) -> Dict[str, Any]:
+        return {n: r.run_file(path, names) for n, r in runners.items()}
+
+    click.echo(f"triage {target}, seed {seed}, {runs} runs per label")
+    outcomes = triage(
+        fork,
+        seed,
+        target,
+        judge,
+        runs=runs,
+        labels=labels or None,
+        fixture_format=campaign_format(campaign_config.fixture_format),
+    )
+    click.echo(triage_table(outcomes, runs))
 
 
 @fuzz.command("status")
