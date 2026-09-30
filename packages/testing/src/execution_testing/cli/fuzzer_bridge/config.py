@@ -227,10 +227,11 @@ class HealthConfig(BaseModel):
     control_band: Tuple[float, float] = (0.0, 1.0)
     """Only the upper edge is held; a drop is judged against the segment's
     calibrated baseline. See `health.HealthPolicy.control_band`."""
-    control_baseline_cases: int = 2000
+    control_baseline_cases: int = 10_000
+    control_never_fired_cases: int = 2000
     control_drop_tolerance: float = 0.0
     control_window: int = 2500
-    control_drop_alpha: float = 1e-3
+    control_drop_alpha: float = 3e-4
     control_dead_expected: float = 5.0
     max_runner_error_rate: float = 0.001
     max_producer_disagreement_rate: float = 0.01

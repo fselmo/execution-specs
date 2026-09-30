@@ -39,9 +39,16 @@ class HealthPolicy:
     The lower edge is not a fixed floor any more: the control's rate moves
     with the generator (4.56% at v26, about 3.5% at v28 and v30), so a
     drop is judged against the segment's own calibrated baseline."""
-    control_baseline_cases: int = 2000
+    control_baseline_cases: int = 10_000
     """Sampled cases the control judges at a segment's opening before its
-    baseline rate is set; until then the relative check cannot pause."""
+    baseline rate is set. A 2,000-case baseline was noisy enough that the
+    drop test either paused on stationary noise or missed a halved rate;
+    until the baseline is set, the control can still pause as stopped or
+    never fired, against the calibration so far."""
+    control_never_fired_cases: int = 2000
+    """Calibration cases after which a control with no hit at all pauses
+    as never fired: at any rate above a quarter of a percent it would have
+    fired at least five times."""
     control_drop_tolerance: float = 0.0
     """Proportional drop the control's rate may take before the binomial
     test is asked; 0 leaves the test alone to decide."""
@@ -50,7 +57,7 @@ class HealthPolicy:
     the health window: at one batch in five the health window holds only
     400 of them, and a drop test that small either misses a halved rate
     or, loosened to catch it, pauses on noise."""
-    control_drop_alpha: float = 1e-3
+    control_drop_alpha: float = 3e-4
     """One-sided chance of the drop test pausing on noise alone, per
     judgement. It judges after every sampled batch, so it is small."""
     control_dead_expected: float = 5.0
@@ -365,13 +372,25 @@ def _control_drop_checks(
     name = policy.control_client or "control"
     baseline = segment.get("control_baseline")
     if baseline is None:
-        calibrated = segment.get("control_calibration", {}).get("cases", 0)
+        calibration = segment.get("control_calibration", {})
+        calibrated = calibration.get("cases", 0)
         rates["control_baseline"] = None
         rates["control_note"] = (
             f"calibrating ({calibrated}/{policy.control_baseline_cases} "
             "sampled cases): cannot pause on a drop yet"
         )
-        return problems
+        if not calibration.get("hits"):
+            if calibrated >= policy.control_never_fired_cases:
+                problems.append(
+                    f"control {name} never fired in the segment's first "
+                    f"{calibrated} calibration cases: it is no control"
+                )
+            return problems
+        # The calibration so far stands in for the baseline, so a control
+        # that stops mid-calibration pauses as stopped.
+        return problems + _stopped(
+            name, calibration["hits"], calibrated, hits, sampled, policy
+        )
     base_hits, base_cases = baseline
     rates["control_baseline"] = base_hits / base_cases if base_cases else 0
     if not base_hits:
@@ -380,13 +399,9 @@ def _control_drop_checks(
             "calibration cases: it is no control"
         )
         return problems
-    expected = base_hits / base_cases * sampled
-    if not hits and expected >= policy.control_dead_expected:
-        problems.append(
-            f"control {name} stopped firing: 0 in {sampled} sampled cases, "
-            f"where its baseline predicts {expected:.1f}"
-        )
-        return problems
+    stopped = _stopped(name, base_hits, base_cases, hits, sampled, policy)
+    if stopped:
+        return problems + stopped
     if sampled < policy.control_window:
         rates["control_note"] = (
             f"drop test waits for {policy.control_window} sampled cases "
@@ -404,6 +419,24 @@ def _control_drop_checks(
     if drops:
         problems.append(f"control rate fell: {drops[0]}")
     return problems
+
+
+def _stopped(
+    name: str,
+    base_hits: int,
+    base_cases: int,
+    hits: int,
+    sampled: int,
+    policy: HealthPolicy,
+) -> List[str]:
+    """A control at zero hits where its rate predicts several."""
+    expected = base_hits / base_cases * sampled if base_cases else 0.0
+    if not hits and expected >= policy.control_dead_expected:
+        return [
+            f"control {name} stopped firing: 0 in {sampled} sampled cases, "
+            f"where its baseline predicts {expected:.1f}"
+        ]
+    return []
 
 
 def _parallel_checks(

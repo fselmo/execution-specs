@@ -69,7 +69,40 @@ def test_a_control_cannot_pause_on_a_drop_while_it_calibrates() -> None:
         2,
         {"control_calibration": {"hits": 0, "cases": 800}},
     )
-    assert problems == [] and "calibrating (800/2000" in rates["control_note"]
+    assert problems == [] and "calibrating (800/10000" in rates["control_note"]
+
+
+def test_a_control_can_pause_while_it_calibrates() -> None:
+    """
+    Calibration takes 10,000 sampled cases, but a control that has not
+    fired once in the first 2,000 pauses as never fired, and one that
+    fired then went silent pauses as stopped, against the calibration so
+    far.
+    """
+    _, never = evaluate(
+        [_sample(2000)],
+        CONTROLLED,
+        [],
+        2,
+        {"control_calibration": {"hits": 0, "cases": 2000}},
+    )
+    _, stopped = evaluate(
+        [_sample(2000)],
+        CONTROLLED,
+        [],
+        2,
+        {"control_calibration": {"hits": 70, "cases": 4000}},
+    )
+    _, early = evaluate(
+        [_sample(1800)],
+        CONTROLLED,
+        [],
+        2,
+        {"control_calibration": {"hits": 0, "cases": 1800}},
+    )
+    assert "never fired in the segment's first 2000" in never[0]
+    assert "stopped firing: 0 in 2000" in stopped[0]
+    assert early == []
 
 
 def test_a_control_that_stops_or_never_fired_pauses() -> None:
@@ -283,7 +316,7 @@ def _simulate_control(
 ) -> Optional[int]:
     """
     A campaign's control, batch by batch: 200-case batches, the control
-    judging one in five, the baseline calibrated on the first 2,000
+    judging one in five, the baseline calibrated on the first 10,000
     sampled cases at ``before``, and ``after`` from then on. Return the
     sampled cases judged after calibration when the control check first
     pauses, None if it never does.

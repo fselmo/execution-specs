@@ -618,11 +618,13 @@ campaigns:
       control: {client: besu-gate, reason: "Chain header mismatch"}
       # No fixed floor: the control's rate moves with the generator (4.56%
       # at v26, about 3.5% at v28 and v30), so each segment calibrates its
-      # own baseline and a drop is judged against it by the binomial test
-      # over the last 2,500 sampled cases, at alpha 1e-3. Zero hits where
-      # the baseline predicts several pause at once, as a stopped control,
-      # and so do any control runner errors. Only the upper edge is held
-      # here.
+      # own baseline over its first 10,000 sampled cases, and a drop is
+      # judged against it by the binomial test over the last 2,500 sampled
+      # cases, at alpha 3e-4. Zero hits where the baseline (or, while
+      # calibrating, the calibration so far) predicts several pause at
+      # once as a stopped control; no hit in the first 2,000 calibration
+      # cases pauses as never fired; so do any control runner errors. Only
+      # the upper edge is held here.
       control_band: [0.0, 0.08]
       # Every client's primary is its parallel path on this panel.
       parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main]
