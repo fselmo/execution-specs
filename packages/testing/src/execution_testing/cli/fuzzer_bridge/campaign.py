@@ -359,6 +359,10 @@ class CampaignState:
     segments: List[Dict[str, Any]] = field(default_factory=list)
     """Every segment so far, oldest first, with the seeds it covered."""
     health_window: List[Dict[str, Any]] = field(default_factory=list)
+    control_window: List[Dict[str, Any]] = field(default_factory=list)
+    """The batches the control judged, newest last, holding at least
+    `HealthPolicy.control_window` sampled cases once there are that many;
+    the drop test is judged over these."""
     """Per-batch samples the health checks are measured over, newest
     last; see `health.batch_sample`."""
     health: Dict[str, Any] = field(default_factory=dict)
@@ -596,6 +600,7 @@ class CampaignState:
                 status_reason=data.get("status_reason", ""),
                 status_at=data.get("status_at", 0.0),
                 health_window=data.get("health_window", []),
+                control_window=data.get("control_window", []),
                 segment=data.get("segment", ""),
                 segments=data.get("segments", []),
                 health=data.get("health", {}),
@@ -632,6 +637,7 @@ class CampaignState:
                     "status_reason": self.status_reason,
                     "status_at": self.status_at,
                     "health_window": self.health_window,
+                    "control_window": self.control_window,
                     "segment": self.segment,
                     "segments": self.segments,
                     "health": self.health,
@@ -2065,6 +2071,8 @@ def run_campaign(
     previous = state.segment
     if state.enter_segment(segment):
         manifest.write(output / "segments" / f"{segment}.json")
+        # The drop test compares against this segment's baseline only.
+        state.control_window = []
         if previous:
             echo(
                 f"segment {previous} closed at seed {state.next_seed - 1}; "
@@ -2127,6 +2135,7 @@ def run_campaign(
     # pause would pause it again before it judged anything.
     state.set_status("running")
     state.health_window = []
+    state.control_window = []
     state.save()
     unjudged: List[range] = []
     pause_reason: Optional[str] = None
@@ -2703,12 +2712,18 @@ def run_campaign(
                 state.health_window = trim_window(
                     [*state.health_window, sample], options.health.window
                 )
+                if batch.control_sampled:
+                    state.control_window = trim_window(
+                        [*state.control_window, sample],
+                        options.health.control_window,
+                    )
                 state.health, problems = evaluate_health(
                     state.health_window,
                     options.health,
                     lanes=sorted(contrast_runners),
                     runners=len(runners),
                     segment=state.segments[-1] if state.segments else None,
+                    control_window=state.control_window,
                 )
             except Exception as exc:  # noqa: BLE001 - pause, never crash
                 problems = [f"health check raised {type(exc).__name__}: {exc}"]

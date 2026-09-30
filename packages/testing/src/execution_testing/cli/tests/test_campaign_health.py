@@ -3,7 +3,7 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..fuzzer_bridge.health import (
     ALERT_URL_ENV,
@@ -44,15 +44,19 @@ BASELINE = {"control_baseline": [100, 2000]}
 def test_a_control_is_held_to_its_segment_baseline() -> None:
     """
     The control's rate moves with the generator, so a drop is judged
-    against the segment's own baseline, by the binomial test: 3% against
-    a 5% baseline over 2000 cases pauses, 4.6% is noise; too loud still
-    pauses on the band's upper edge.
+    against the segment's own baseline, by the binomial test over a window
+    of 2,500 sampled cases: 2.8% against a 5% baseline pauses, 4.7% is
+    noise, and a window not yet full waits. Too loud still pauses on the
+    band's upper edge.
     """
-    fell = evaluate([_sample(2000, control=60)], CONTROLLED, [], 2, BASELINE)
-    noise = evaluate([_sample(2000, control=92)], CONTROLLED, [], 2, BASELINE)
-    loud = evaluate([_sample(2000, control=400)], CONTROLLED, [], 2, BASELINE)
+    fell = evaluate([_sample(2500, control=70)], CONTROLLED, [], 2, BASELINE)
+    noise = evaluate([_sample(2500, control=118)], CONTROLLED, [], 2, BASELINE)
+    short = evaluate([_sample(2000, control=40)], CONTROLLED, [], 2, BASELINE)
+    loud = evaluate([_sample(2500, control=400)], CONTROLLED, [], 2, BASELINE)
     assert "control rate fell" in fell[1][0]
     assert noise[1] == [] and noise[0]["control_baseline"] == 0.05
+    assert short[1] == []
+    assert "drop test waits for 2500" in short[0]["control_note"]
     assert "above" in loud[1][0]
 
 
@@ -272,3 +276,74 @@ def test_negative_control_needs_the_engine_format() -> None:
         fixture_format="blockchain_test_engine",
         health={"negative_control": True},
     )
+
+
+def _simulate_control(
+    seed: int, before: float, after: float, batches: int
+) -> Optional[int]:
+    """
+    A campaign's control, batch by batch: 200-case batches, the control
+    judging one in five, the baseline calibrated on the first 2,000
+    sampled cases at ``before``, and ``after`` from then on. Return the
+    sampled cases judged after calibration when the control check first
+    pauses, None if it never does.
+    """
+    import random
+
+    rng = random.Random(seed)
+    policy = HealthPolicy(
+        window=2000, control_client="besu-gate", control_band=(0.0, 0.08)
+    )
+    health: List[Dict[str, Any]] = []
+    control: List[Dict[str, Any]] = []
+    calibration = [0, 0]
+    segment: Dict[str, Any] = {}
+    judged = 0
+    for i in range(batches):
+        sampled = i % 5 == 0
+        rate = after if "control_baseline" in segment else before
+        hits = sum(rng.random() < rate for _ in range(200)) if sampled else 0
+        sample = _sample(200, control=hits) | {"control_sampled": sampled}
+        if sampled and "control_baseline" not in segment:
+            calibration[0] += hits
+            calibration[1] += 200
+            if calibration[1] >= policy.control_baseline_cases:
+                segment["control_baseline"] = list(calibration)
+            continue
+        if sampled:
+            judged += 200
+            control = trim([*control, sample], policy.control_window)
+        health = trim([*health, sample], policy.window)
+        _, problems = evaluate(
+            health, policy, [], 4, segment, control_window=control
+        )
+        if any(p.startswith("control") for p in problems):
+            return judged
+    return None
+
+
+CONTROL_RATE = 0.035
+"""The control's rate on the continuous panel at v28 to v30."""
+
+DAY_OF_BATCHES = 3312
+"""A day of continuous-one: 27,600 cases an hour in batches of 200."""
+
+
+def test_a_stationary_control_does_not_pause_in_a_day() -> None:
+    """
+    At an unchanged rate the drop test, judged after every sampled batch
+    of a day, never pauses on the noise.
+    """
+    assert (
+        _simulate_control(0, CONTROL_RATE, CONTROL_RATE, DAY_OF_BATCHES)
+        is None
+    )
+
+
+def test_a_halved_control_pauses_within_one_window() -> None:
+    """
+    Halved right after calibration, the control pauses by the time its
+    window first holds 2,500 sampled cases of the new rate.
+    """
+    paused = _simulate_control(1, CONTROL_RATE, CONTROL_RATE / 2, 400)
+    assert paused is not None and paused <= 2600

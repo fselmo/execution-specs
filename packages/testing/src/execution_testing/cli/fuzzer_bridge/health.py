@@ -45,6 +45,14 @@ class HealthPolicy:
     control_drop_tolerance: float = 0.0
     """Proportional drop the control's rate may take before the binomial
     test is asked; 0 leaves the test alone to decide."""
+    control_window: int = 2500
+    """Sampled cases the drop test judges the control over, kept apart from
+    the health window: at one batch in five the health window holds only
+    400 of them, and a drop test that small either misses a halved rate
+    or, loosened to catch it, pauses on noise."""
+    control_drop_alpha: float = 1e-3
+    """One-sided chance of the drop test pausing on noise alone, per
+    judgement. It judges after every sampled batch, so it is small."""
     control_dead_expected: float = 5.0
     """Hits the baseline must predict in the window for zero hits to read
     as a control that stopped firing, whatever the drop test says."""
@@ -209,6 +217,7 @@ def evaluate(
     lanes: List[str],
     runners: int,
     segment: Optional[Mapping[str, Any]] = None,
+    control_window: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[Dict[str, Any], List[str]]:
     """
     The window's rates and every band they fall outside.
@@ -237,14 +246,22 @@ def evaluate(
             f"control {policy.control_client} returned no verdict on "
             f"{control_errors} case(s)"
         )
+    if policy.control_client is not None:
+        # Judged over its own window of sampled cases and from the first
+        # batch: a stopped control does not wait for any window to fill.
+        if control_window is None:
+            control_window = [
+                s for s in window if s.get("control_sampled", True)
+            ]
+        problems += _control_drop_checks(
+            control_window, policy, rates, segment or {}
+        )
     if cases < policy.window:
         rates["checking"] = False
         return rates, problems
     rates["checking"] = True
     if policy.control_client is not None:
-        problems += _control_checks(
-            window, policy, cases, rates, segment or {}
-        )
+        problems += _control_checks(window, policy, cases, rates)
     errors = sum(s["runner_errors"] for s in window)
     verdicts = sum(
         s["cases"] * max(runners, 1)
@@ -298,14 +315,11 @@ def _control_checks(
     policy: HealthPolicy,
     cases: int,
     rates: Dict[str, Any],
-    segment: Mapping[str, Any],
 ) -> List[str]:
     """
-    The control's rate over the batches it judged, against the segment's
-    baseline and the band's upper edge.
+    The control's rate over the health window, against the band's
+    upper edge: above it, something else is failing the control.
     """
-    from .density import significant_drops
-
     problems: List[str] = []
     judged = [s for s in window if s.get("control_sampled", True)]
     sampled = sum(s["cases"] for s in judged)
@@ -317,12 +331,38 @@ def _control_checks(
     rates["control_rate"] = rate
     _, high = control_band_for(policy, sampled, cases)
     rates["control_band"] = [0.0, high]
-    name = policy.control_client or "control"
     if rate > high:
+        name = policy.control_client or "control"
         problems.append(
             f"control {name} at {rate:.2%} over {sampled} sampled cases, "
             f"above {high:.2%}: something else is failing it"
         )
+    return problems
+
+
+def _control_drop_checks(
+    control_window: List[Dict[str, Any]],
+    policy: HealthPolicy,
+    rates: Dict[str, Any],
+    segment: Mapping[str, Any],
+) -> List[str]:
+    """
+    The control's rate over its window of sampled cases, against the
+    segment's baseline.
+
+    A control that never fired while calibrating, or has fired zero times
+    where its baseline predicts several, pauses at once. A drop pauses
+    only once the window holds `control_window` sampled cases, and only
+    at `control_drop_alpha`, since it is judged after every sampled batch.
+    """
+    from .density import significant_drops
+
+    problems: List[str] = []
+    sampled = sum(s["cases"] for s in control_window)
+    hits = sum(s["control"] for s in control_window)
+    rates["control_window_cases"] = sampled
+    rates["control_window_hits"] = hits
+    name = policy.control_client or "control"
     baseline = segment.get("control_baseline")
     if baseline is None:
         calibrated = segment.get("control_calibration", {}).get("cases", 0)
@@ -347,12 +387,19 @@ def _control_checks(
             f"where its baseline predicts {expected:.1f}"
         )
         return problems
+    if sampled < policy.control_window:
+        rates["control_note"] = (
+            f"drop test waits for {policy.control_window} sampled cases "
+            f"({sampled} so far)"
+        )
+        return problems
     drops = significant_drops(
         {name: base_hits},
         {name: hits},
         base_cases,
         sampled,
         tolerance=policy.control_drop_tolerance,
+        alpha=policy.control_drop_alpha,
     )
     if drops:
         problems.append(f"control rate fell: {drops[0]}")
