@@ -433,7 +433,7 @@ def case(
     Replay a case from its seed or recorded tree, varying chosen draws
     while holding the rest: --vary alone pins everything else.
     """
-    from .draws import DrawError, focus_plan
+    from execution_testing.fuzzing.draws import DrawError, focus_plan
     from .focus import base_tree, focus, label_table
 
     fork = _fork_named(fork_name)

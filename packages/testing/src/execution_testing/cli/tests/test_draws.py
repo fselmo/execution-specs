@@ -9,9 +9,7 @@ from typing import Any, Dict, List
 import pytest
 
 from execution_testing.forks import Amsterdam
-
-from ..fuzzer_bridge.campaign import signature_id
-from ..fuzzer_bridge.draws import (
+from execution_testing.fuzzing.draws import (
     PARAM,
     STRUCTURAL,
     DrawError,
@@ -20,6 +18,8 @@ from ..fuzzer_bridge.draws import (
     compare,
     focus_plan,
 )
+
+from ..fuzzer_bridge.campaign import signature_id
 from ..fuzzer_bridge.focus import focus, triage
 from ..fuzzer_bridge.generator import record_case
 from ..fuzzer_bridge.runners import Verdict
@@ -176,3 +176,31 @@ def test_triage_narrows_a_finding_to_the_label_it_needs(
     assert outcomes["near_full/margin"].kept == 0
     assert outcomes["tx:0/value"].kept == 4
     assert outcomes["tx:0/value"].lost == 0
+
+
+def test_a_call_in_contract_code_has_its_own_labels() -> None:
+    """
+    A message call in a contract body records its kind, value, target and
+    gas; varying the kind leaves the value where it was, so triage can
+    tell them apart.
+    """
+    for seed in range(50):
+        _, tree = record_case(Amsterdam, seed)
+        kinds = [
+            d.label
+            for d in tree.draws
+            if d.label.startswith("contract:")
+            and d.label.endswith("/motif:message_call/kind")
+        ]
+        if kinds:
+            break
+    (kind, *_) = kinds
+    call = kind.rsplit("/", 1)[0]
+    values = tree.values()
+    for name in ("value", "target", "gas", "size", "data"):
+        assert f"{call}/{name}" in values
+    _, varied = record_case(
+        Amsterdam, seed, plan=focus_plan(tree, vary=[kind], salt=2)
+    )
+    changed = compare(tree, varied)[0]
+    assert set(changed) <= {kind}

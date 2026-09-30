@@ -19,7 +19,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from execution_testing.forks import Fork
 
-from .draws import DrawError, DrawTree, Plan, focus_plan
+from execution_testing.fuzzing.draws import DrawError, DrawTree, Plan, focus_plan
 from .generator import GENERATOR_VERSION, record_case
 from .models import FuzzerOutput
 

@@ -13,7 +13,7 @@ worth running.
 """
 
 import random
-from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from execution_testing.base_types import (
     AccessList,
@@ -33,20 +33,22 @@ from execution_testing.fuzzing import (
     interleaving_spill_code,
     mixed_address_pool,
 )
-from execution_testing.test_types import Environment, compute_create_address
-from execution_testing.test_types.account_types import EOA
-from execution_testing.vm import Bytecode
-from execution_testing.vm import Opcodes as Op
-
-from .draws import (
+from execution_testing.fuzzing.draws import (
     PARAM,
     STRUCTURAL,
     Domain,
     Draws,
     DrawTree,
+    LabeledRandom,
     Plan,
+    chain_weights,
     integers,
 )
+from execution_testing.test_types import Environment, compute_create_address
+from execution_testing.test_types.account_types import EOA
+from execution_testing.vm import Bytecode
+from execution_testing.vm import Opcodes as Op
+
 from .models import (
     FuzzerAccountInput,
     FuzzerAuthorizationInput,
@@ -61,7 +63,7 @@ from .negative import BAL_KINDS, HEADER_KINDS
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 35
+GENERATOR_VERSION = 36
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -847,24 +849,6 @@ def _highest_base_fee(
     return base_fee
 
 
-def _chain(entries: Sequence[Tuple[str, float, bool]]) -> List[float]:
-    """
-    Each entry's chance of being the first taken, then the chance none is.
-
-    An entry is taken when available and its own draw passes, which is
-    how the motifs were once drawn one flag after another; one draw over
-    these weights gives each the same chance.
-    """
-    weights = []
-    rest = 1.0
-    for _, rate, available in entries:
-        taken = rate if available else 0.0
-        weights.append(rest * taken)
-        rest *= 1 - taken
-    weights.append(rest)
-    return weights
-
-
 MOTIFS: Tuple[str, ...] = (
     "failing",
     "toucher",
@@ -1037,7 +1021,7 @@ def record_case(
             code=Bytes(
                 bytes(
                     fuzzed_bytecode(
-                        contract.stream("code"),
+                        LabeledRandom(contract.unit("code")),
                         max_ops=max_ops_per_contract,
                         precompiles=precompiles,
                         call_targets=pool.call_targets(),
@@ -1159,7 +1143,7 @@ def record_case(
         initcode_size: Optional[int] = None
         delegated_warm: Optional[bool] = None
         room = min(tx_gas_cap, budgets[block])
-        chances = _chain(
+        chances = chain_weights(
             [
                 ("failing", domains.failing_tx_rate, True),
                 ("toucher", domains.toucher_tx_rate, True),

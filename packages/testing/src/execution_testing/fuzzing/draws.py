@@ -55,6 +55,12 @@ class Domain:
     check: Callable[[Any], bool]
     encode: Callable[[Any], Any] = lambda value: value
     decode: Callable[[Any], Any] = lambda value: value
+    alternatives: Optional[Tuple[Any, ...]] = None
+    """Every value, encoded, when there are few enough to try each."""
+
+
+SMALL_DOMAIN = 16
+"""Most values a domain may have for triage to try each one."""
 
 
 def integers(lo: int, hi: int) -> Domain:
@@ -64,11 +70,27 @@ def integers(lo: int, hi: int) -> Domain:
         lambda v: isinstance(v, int)
         and not isinstance(v, bool)
         and lo <= v <= hi,
+        alternatives=(
+            tuple(range(lo, hi + 1)) if hi - lo < SMALL_DOMAIN else None
+        ),
     )
 
 
-FLAG = Domain("bool", lambda v: isinstance(v, bool))
+FLAG = Domain(
+    "bool", lambda v: isinstance(v, bool), alternatives=(False, True)
+)
 SEED = integers(0, 2**64 - 1)
+BYTES = Domain(
+    "bytes",
+    lambda v: isinstance(v, bytes),
+    encode=lambda v: "0x" + bytes(v).hex(),
+    decode=lambda v: bytes.fromhex(v[2:]) if isinstance(v, str) else v,
+)
+UINT256 = integers(0, 2**256 - 1)
+FORWARD_ALL_OR_UINT256 = Domain(
+    "null (forward all) or int[0, 2**256 - 1]",
+    lambda v: v is None or UINT256.check(v),
+)
 
 
 def one_of(options: Sequence[Any]) -> Domain:
@@ -79,6 +101,9 @@ def one_of(options: Sequence[Any]) -> Domain:
         lambda v: _encode(v) in encoded,
         encode=_encode,
         decode=lambda v: encoded[v] if v in encoded else v,
+        alternatives=(
+            tuple(encoded) if len(encoded) <= SMALL_DOMAIN else None
+        ),
     )
 
 
@@ -97,6 +122,10 @@ class Draw:
     value: Any
     """The value as JSON: what a tree file holds and a pin replays."""
     domain: str
+    alternatives: Optional[List[Any]] = None
+    """Every value the label can take, when few enough to try each."""
+    lower: Optional[int] = None
+    """An integer domain's least value, which triage also tries."""
 
 
 @dataclass
@@ -179,8 +208,29 @@ class Draws:
             if self.plan.resampled(label):
                 stream += f"|vary:{self.plan.salt}"
             value = sample(random.Random(stream))
-        self.tree[label] = Draw(label, kind, domain.encode(value), domain.name)
+        lower = None
+        if domain.name.startswith("int["):
+            lower = int(domain.name[4:].split(",")[0])
+        self.tree[label] = Draw(
+            label,
+            kind,
+            domain.encode(value),
+            domain.name,
+            list(domain.alternatives) if domain.alternatives else None,
+            lower,
+        )
         return value
+
+    def sample(
+        self,
+        name: str,
+        sampler: Callable[[random.Random], Any],
+        domain: Domain,
+        *,
+        kind: str = PARAM,
+    ) -> Any:
+        """A value from ``sampler``, run on the label's own stream."""
+        return self._draw(name, kind, domain, sampler)
 
     def flag(self, name: str, p: float, *, kind: str = STRUCTURAL) -> bool:
         """True with probability ``p``."""
@@ -205,7 +255,12 @@ class Draws:
         return self._draw(name, kind, domain or one_of(options), sample)
 
     def member(
-        self, name: str, members: Sequence[T], *, kind: str = PARAM
+        self,
+        name: str,
+        members: Sequence[T],
+        *,
+        kind: str = PARAM,
+        weights: Optional[Sequence[float]] = None,
     ) -> T:
         """
         One of ``members``, recorded by its position.
@@ -215,11 +270,16 @@ class Draws:
         and a pick recorded by address would then name nobody, where one
         recorded by position still names that sender.
         """
+        positions = range(len(members))
         index = self._draw(
             name,
             kind,
             integers(0, len(members) - 1),
-            lambda r: r.randrange(len(members)),
+            lambda r: (
+                r.randrange(len(members))
+                if weights is None
+                else r.choices(positions, weights=weights)[0]
+            ),
         )
         return members[index]
 
@@ -258,6 +318,89 @@ class Draws:
         return random.Random(
             self._draw(name, PARAM, SEED, lambda r: r.getrandbits(64))
         )
+
+
+class LabeledRandom(random.Random):
+    """
+    A `random.Random` that strategy code can also label draws through.
+
+    Code written against `random.Random` runs on it unchanged: its plain
+    draws come from one stream per unit, seeded by the recorded `rest`
+    label on first use. Code that knows it may be labeled calls `unit`
+    to scope a sub-unit and `labeled` to give a draw its own label; the
+    `scoped` and `drawn` helpers do either, and fall back to the plain
+    draw on an ordinary `random.Random`.
+    """
+
+    def __init__(self, draws: Draws) -> None:
+        super().__init__(0)
+        self.draws = draws
+        self._rest = False
+
+    def _ensure_rest(self) -> None:
+        if not self._rest:
+            self._rest = True
+            super().seed(
+                self.draws._draw(
+                    "rest", PARAM, SEED, lambda r: r.getrandbits(64)
+                )
+            )
+
+    def random(self) -> float:
+        """As `random.Random.random`, from the unit's stream."""
+        self._ensure_rest()
+        return super().random()
+
+    def getrandbits(self, k: int) -> int:
+        """As `random.Random.getrandbits`, from the unit's stream."""
+        self._ensure_rest()
+        return super().getrandbits(k)
+
+    def unit(self, name: str) -> "LabeledRandom":
+        """The labeled random of a unit nested under this one."""
+        return LabeledRandom(self.draws.unit(name))
+
+
+def scoped(rng: random.Random, name: str) -> random.Random:
+    """``rng``'s sub-unit ``name`` when it is labeled, else ``rng``."""
+    if isinstance(rng, LabeledRandom):
+        return rng.unit(name)
+    return rng
+
+
+def drawn(
+    rng: random.Random,
+    name: str,
+    sampler: Callable[[random.Random], T],
+    domain: Domain,
+    *,
+    kind: str = PARAM,
+) -> T:
+    """
+    ``sampler(rng)``, or, when ``rng`` is labeled, the same sampler run on
+    label ``name``'s own stream and recorded.
+    """
+    if isinstance(rng, LabeledRandom):
+        return rng.draws.sample(name, sampler, domain, kind=kind)
+    return sampler(rng)
+
+
+def chain_weights(entries: Sequence[Tuple[str, float, bool]]) -> List[float]:
+    """
+    Each entry's chance of being the first taken, then the chance none is.
+
+    An entry is taken when available and its own draw passes; one draw
+    over these weights gives each the same chance as the flags drawn one
+    after another.
+    """
+    weights = []
+    rest = 1.0
+    for _, rate, available in entries:
+        taken = rate if available else 0.0
+        weights.append(rest * taken)
+        rest *= 1 - taken
+    weights.append(rest)
+    return weights
 
 
 @dataclass

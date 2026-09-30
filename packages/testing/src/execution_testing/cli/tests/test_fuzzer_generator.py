@@ -47,17 +47,24 @@ def test_generated_shape() -> None:
         Osaka, 1, num_senders=2, num_contracts=2, num_transactions=4
     )
     assert out.version == "2.0"
-    # A draw that no longer fits its block's gas is dropped.
-    assert 1 <= len(out.transactions) <= 4
+    # A draw that no longer fits its block's gas is dropped, and a near-full
+    # or highest-nonce block adds transactions of its own.
+    assert len(out.transactions) >= 1
     # Authorities carry keys too but send nothing; the senders are the
     # key-holders a transaction is actually from.
     senders = [
         a
         for addr, a in out.accounts.items()
         if a.private_key is not None
+        and int(a.nonce or 0) < 2**64 - 2
         and any(tx.from_ == addr for tx in out.transactions)
     ]
-    keyed = [a for a in out.accounts.values() if a.private_key is not None]
+    # A highest-nonce block's senders carry keys of their own.
+    keyed = [
+        a
+        for a in out.accounts.values()
+        if a.private_key is not None and int(a.nonce or 0) < 2**64 - 2
+    ]
     assert len(keyed) == 2 + AUTHORITY_ACCOUNTS
     contracts = [
         a
@@ -283,7 +290,8 @@ def test_every_arithmetic_opcode_runs_in_generated_code() -> None:
     fork, eels = mod._FILL["fork"], mod._FILL["eels"]
     eels.compute_signature = True
     ran: set = set()
-    for seed in range(40):
+    # Stops as soon as all six have run; ADDMOD first ran at seed 44 at v36.
+    for seed in range(80):
         eels.last_signature = None
         with contextlib.redirect_stdout(io.StringIO()):
             with warnings.catch_warnings():

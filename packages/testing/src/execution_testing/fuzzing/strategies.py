@@ -23,6 +23,18 @@ from execution_testing.vm import Bytecode
 from execution_testing.vm import Opcodes as Op
 
 from .domains import GENERIC_DOMAINS, ValueDomains
+from .draws import (
+    BYTES,
+    FORWARD_ALL_OR_UINT256,
+    STRUCTURAL,
+    UINT256,
+    LabeledRandom,
+    chain_weights,
+    drawn,
+    integers,
+    one_of,
+    scoped,
+)
 
 _ARITHMETIC = [
     Op.ADD,
@@ -129,8 +141,10 @@ def _message_call(
     flag and returndata size are written to ``slot`` and ``slot + 1`` as
     post-state witnesses.
     """
-    size = domains.byte_size(rng)
-    data = rng.randbytes(size)
+    size = drawn(rng, "size", domains.byte_size, integers(0, 256))
+    data = drawn(rng, "data", lambda r: r.randbytes(size), BYTES)
+    # A set `data` may differ in length from the drawn size.
+    size = len(data)
 
     code = Bytecode()
     for offset in range(0, size, 32):
@@ -145,10 +159,14 @@ def _message_call(
     code += Op.PUSH1(0)
     code += Op.PUSH2(size)
     code += Op.PUSH1(0)
-    if kind in (Op.CALL, Op.CALLCODE):
-        code += Op.PUSH32(domains.call_value(rng))
+    # Labeled, the value is drawn for every kind, so varying the kind never
+    # decides whether a value label exists.
+    if kind in (Op.CALL, Op.CALLCODE) or isinstance(rng, LabeledRandom):
+        value = drawn(rng, "value", domains.call_value, UINT256)
+        if kind in (Op.CALL, Op.CALLCODE):
+            code += Op.PUSH32(value)
     code += Op.ADDRESS if target is None else Op.PUSH20(target)
-    gas = domains.call_gas(rng)
+    gas = drawn(rng, "gas", domains.call_gas, FORWARD_ALL_OR_UINT256)
     code += Op.GAS if gas is None else Op.PUSH32(gas)
     code += kind
 
@@ -581,6 +599,31 @@ def _epilogue() -> Bytecode:
     return code
 
 
+def _walk_action(
+    rng: random.Random,
+    step: int,
+    actions: Sequence[Tuple[str, float, bool]],
+) -> str:
+    """
+    The action a walk step takes: the first available one whose own draw
+    passes, else a palette opcode. Labeled, it is one draw over the same
+    chances, recorded as `op:<step>`.
+    """
+    if isinstance(rng, LabeledRandom):
+        names = [name for name, _, _ in actions] + ["palette"]
+        weights = chain_weights(actions)
+        return rng.draws.sample(
+            f"op:{step}",
+            lambda r: r.choices(names, weights=weights)[0],
+            one_of(names),
+            kind=STRUCTURAL,
+        )
+    for name, rate, available in actions:
+        if available and rng.random() < rate:
+            return name
+    return "palette"
+
+
 def fuzzed_bytecode(
     rng: random.Random,
     *,
@@ -626,95 +669,175 @@ def fuzzed_bytecode(
         domains = GENERIC_DOMAINS
     code: Bytecode = Bytecode() + Op.JUMPDEST  # harmless leading anchor
     stack_height = 0
-    num_ops = rng.randint(1, max_ops)
+    num_ops = drawn(
+        rng,
+        "steps",
+        lambda r: r.randint(1, max_ops),
+        integers(1, max_ops),
+        kind=STRUCTURAL,
+    )
     witness_slot = _PRECOMPILE_SLOT_BASE
     call_slot = _CALL_SLOT_BASE
     create_slot = _CREATE_GAS_SLOT
     emitted_precompile_call = False
     terminated = False
     walk = domains.walk
+    self_call = walk.self_call
+    actions = [
+        ("precompile_call", walk.precompile_call, bool(precompiles)),
+        ("message_call", walk.message_call, bool(call_targets)),
+        ("halting_child", walk.halting_child, spiller is not None),
+        ("create2_self_copy", walk.create2_self_copy, bool(call_targets)),
+        (
+            "destructor_call",
+            walk.destructor_call,
+            selfdestructor is not None,
+        ),
+        ("raw_byte", walk.raw_byte, True),
+        ("terminator", walk.terminator, True),
+        (
+            "returndata_overread",
+            walk.returndata_overread,
+            bool(call_targets),
+        ),
+        ("initcode_ef_prefix", walk.initcode_ef_prefix, bool(call_targets)),
+        ("stack_bomb", walk.stack_bomb, bool(call_targets)),
+        ("bad_jump", walk.bad_jump, bool(call_targets)),
+        ("blockhash_read", walk.blockhash_read, True),
+        ("spill_interleave", walk.spill_interleave, interleaver is not None),
+    ]
 
-    for _ in range(num_ops):
-        if precompiles and rng.random() < walk.precompile_call:
-            code += _precompile_call(rng, domains, precompiles, witness_slot)
+    # Labels are by walk position: `op:<step>` is the step's action and
+    # `op:<step>/motif:<action>/...` its parameters. Changing one step's
+    # action leaves every other step's labels where they were; changing
+    # the number of steps adds or drops steps at the end. The witness
+    # slots a step writes are derived, and move with the steps before it.
+    for step in range(num_ops):
+        action = _walk_action(rng, step, actions)
+        here = scoped(rng, f"op:{step}/motif:{action}")
+        if action == "precompile_call":
+            assert precompiles
+            code += _precompile_call(here, domains, precompiles, witness_slot)
             witness_slot += 2
             emitted_precompile_call = True
-            continue
-        if call_targets and rng.random() < walk.message_call:
-            target = (
-                None
-                if rng.random() < walk.self_call
-                else rng.choice(call_targets)
+        elif action == "message_call":
+            assert call_targets
+            # By position in the call targets, -1 for the contract itself: a
+            # target's address can be derived (a sender's), and a pick by
+            # address would name nobody once that sender is varied.
+            position = drawn(
+                here,
+                "target",
+                lambda r: (
+                    -1
+                    if r.random() < self_call
+                    else r.randrange(len(call_targets))
+                ),
+                integers(-1, len(call_targets) - 1),
+            )
+            kind = drawn(
+                here,
+                "kind",
+                lambda r: r.choice(_CALL_KINDS),
+                one_of(_CALL_KINDS),
             )
             code += _message_call(
-                rng, domains, target, rng.choice(_CALL_KINDS), call_slot
+                here,
+                domains,
+                None if position < 0 else call_targets[position],
+                kind,
+                call_slot,
             )
             call_slot += 2
-            continue
-        if spiller is not None and rng.random() < walk.halting_child:
+        elif action == "halting_child":
+            assert spiller is not None
             code += _halting_child_then_state_charge(
-                rng, domains, spiller, call_slot
+                here, domains, spiller, call_slot
             )
             call_slot += 2
-            continue
-        if call_targets and rng.random() < walk.create2_self_copy:
-            code += _create2_self_copy(rng, domains, call_slot)
+        elif action == "create2_self_copy":
+            code += _create2_self_copy(here, domains, call_slot)
             call_slot += 2
-            continue
-        if selfdestructor is not None and rng.random() < walk.destructor_call:
-            code += _call_into_destructor(rng, selfdestructor, call_slot)
+        elif action == "destructor_call":
+            assert selfdestructor is not None
+            code += _call_into_destructor(here, selfdestructor, call_slot)
             call_slot += 2
-            continue
-        if rng.random() < walk.raw_byte:
-            code += bytes([rng.choice(_RAW_WALK_BYTES)])
-            continue
-        if rng.random() < walk.terminator:
-            code += _early_terminator(rng, domains, call_targets)
+        elif action == "raw_byte":
+            code += bytes(
+                [
+                    drawn(
+                        here,
+                        "byte",
+                        lambda r: r.choice(_RAW_WALK_BYTES),
+                        one_of(_RAW_WALK_BYTES),
+                    )
+                ]
+            )
+        elif action == "terminator":
+            code += _early_terminator(here, domains, call_targets)
             terminated = True
             break
-        if call_targets and rng.random() < walk.returndata_overread:
+        elif action == "returndata_overread":
             code += _returndata_overread(call_slot)
             call_slot += 1
             terminated = True
             break
-        if call_targets and rng.random() < walk.initcode_ef_prefix:
+        elif action == "initcode_ef_prefix":
             code += _initcode_ef_prefix(call_slot)
             call_slot += 1
             code += _gas_after_create(create_slot)
             create_slot += 1
-            continue
-        if call_targets and rng.random() < walk.stack_bomb:
+        elif action == "stack_bomb":
             code += _stack_bomb(call_slot)
             call_slot += 1
             terminated = True
             break
-        if call_targets and rng.random() < walk.bad_jump:
+        elif action == "bad_jump":
             code += _bad_jump(call_slot)
             call_slot += 1
             terminated = True
             break
-        if rng.random() < walk.blockhash_read:
-            code += blockhash_read(rng.choice(BLOCKHASH_DEPTHS), call_slot)
+        elif action == "blockhash_read":
+            depth = drawn(
+                here,
+                "depth",
+                lambda r: r.choice(BLOCKHASH_DEPTHS),
+                one_of(BLOCKHASH_DEPTHS),
+            )
+            code += blockhash_read(depth, call_slot)
             call_slot += 1
-            continue
-        if interleaver is not None and rng.random() < walk.spill_interleave:
+        elif action == "spill_interleave":
+            assert interleaver is not None
             code += _alternating_spill_chain(
-                rng, domains, interleaver, call_slot
+                here, domains, interleaver, call_slot
             )
             call_slot += 2
-            continue
-        op = rng.choice(PALETTE)
-        while stack_height < op.min_stack_height:
-            code += Op.PUSH32(domains.operand(rng))
-            stack_height += 1
-        code += op
-        stack_height += op.pushed_stack_items - op.popped_stack_items
-        if op in _CREATION:
-            code += _gas_after_create(create_slot)
-            create_slot += 1
-        if stack_height > 900:
-            code += Op.POP
-            stack_height -= 1
+        elif action == "palette":
+            op = drawn(
+                here, "opcode", lambda r: r.choice(PALETTE), one_of(PALETTE)
+            )
+            operand = 0
+            while stack_height < op.min_stack_height:
+                code += Op.PUSH32(
+                    drawn(
+                        here,
+                        f"operand:{operand}",
+                        domains.operand,
+                        UINT256,
+                    )
+                )
+                operand += 1
+                stack_height += 1
+            code += op
+            stack_height += op.pushed_stack_items - op.popped_stack_items
+            if op in _CREATION:
+                code += _gas_after_create(create_slot)
+                create_slot += 1
+            if stack_height > 900:
+                code += Op.POP
+                stack_height -= 1
+        else:
+            raise ValueError(f"unknown walk action {action!r}")
 
     if terminated:
         return code
@@ -727,11 +850,19 @@ def fuzzed_bytecode(
         and walk.precompile_call > 0
         and not emitted_precompile_call
     ):
-        code += _precompile_call(rng, domains, precompiles, witness_slot)
+        code += _precompile_call(
+            scoped(rng, "fallback_precompile"),
+            domains,
+            precompiles,
+            witness_slot,
+        )
 
     code += _epilogue()
 
-    terminator = rng.choice([Op.STOP, Op.RETURN, Op.REVERT])
+    endings = (Op.STOP, Op.RETURN, Op.REVERT)
+    terminator = drawn(
+        rng, "ending", lambda r: r.choice(endings), one_of(endings)
+    )
     if terminator in (Op.RETURN, Op.REVERT):
         while stack_height < 2:
             code += Op.PUSH1(0)
