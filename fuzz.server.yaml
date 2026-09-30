@@ -605,6 +605,10 @@ campaigns:
     # Contrasts and the control judge one batch in five; primaries every batch.
     contrast_every: 5
     control_every: 5
+    # Each fixture of one batch in 25 is imported through EELS as the
+    # producer wrote it; a failure there is adjudicated like an escalated
+    # producer disagreement.
+    self_check_every: 25
     known:
       - {client: besu-par-main, reason: "System call halted"}
       - {client: besu-par-main, reason: "System call did not execute to completion"}
