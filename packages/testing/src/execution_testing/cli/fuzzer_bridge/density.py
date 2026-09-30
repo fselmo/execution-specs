@@ -354,23 +354,42 @@ def _tally_creation(case: Any, tally: Dict[str, Counter]) -> None:
 def _tally_near_full(
     case: Any, fork: "Fork", tally: Dict[str, Counter]
 ) -> None:
-    """Count near-full blocks, their filler sizes and the last margin."""
+    """
+    Count near-full blocks, what filled them, the state filler's size and
+    the last transaction's margin.
+
+    A block sending the burner a transaction at the cap is filled with
+    execution gas: no other draw sends the burner one.
+    """
     from execution_testing.base_types import Address
     from execution_testing.vm import Opcodes as Op
 
-    from .generator import STATE_FILLER_ADDRESS
+    from .generator import BURNER_ADDRESS, STATE_FILLER_ADDRESS
 
     filler = Address(STATE_FILLER_ADDRESS)
-    fills = [tx for tx in case.transactions if tx.to == filler]
-    tally["near_full_block"]["present" if fills else "absent"] += 1
+    burner = Address(BURNER_ADDRESS)
+    cap = fork.transaction_gas_limit_cap()
+    limit = int(case.env.gas_limit)
     store = Op.SSTORE(key_warm=False, original_value=0, new_value=1)
-    for tx in fills:
-        stores = int.from_bytes(bytes(tx.data)[:32], "big")
-        tally["near_full_stores"][str(stores)] += 1
-        (last,) = [
-            t for t in case.transactions if t.block == tx.block and t is not tx
-        ]
-        left = int(case.env.gas_limit) - stores * store.state_cost(fork)
+    blocks = {}
+    for tx in case.transactions:
+        if tx.to == filler:
+            stores = int.from_bytes(bytes(tx.data)[:32], "big")
+            tally["near_full_stores"][str(stores)] += 1
+            blocks[tx.block] = ("state", stores * store.state_cost(fork))
+        elif tx.to == burner and int(tx.gas) == cap:
+            blocks[tx.block] = ("execution", 0)
+    tally["near_full_block"]["present" if blocks else "absent"] += 1
+    for block, (kind, state_used) in blocks.items():
+        tally["near_full_kind"][kind] += 1
+        in_block = [t for t in case.transactions if t.block == block]
+        last = in_block[-1]
+        if kind == "state":
+            left = limit - state_used
+        elif kind == "execution":
+            left = limit - sum(int(t.gas) for t in in_block[:-1])
+        else:
+            raise ValueError(kind)
         margin = int(last.gas) - left
         tally["near_full_margin"]["exact" if margin == 0 else "over"] += 1
 
@@ -505,6 +524,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "near_full_block": Counter(),
         "near_full_stores": Counter(),
         "near_full_margin": Counter(),
+        "near_full_kind": Counter(),
         "deployer_tx": Counter(),
         "deployer_kind": Counter(),
         "max_nonce_block": Counter(),
@@ -770,6 +790,7 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "near_full_block": ("present", "absent"),
     "near_full_stores": ("150", "160"),
     "near_full_margin": ("exact", "over"),
+    "near_full_kind": ("state", "execution"),
     "deployer_tx": ("present", "absent"),
     "deployer_kind": ("CREATE", "CREATE2", "near_max_nonce", "max_nonce"),
     "max_nonce_block": ("present", "absent"),

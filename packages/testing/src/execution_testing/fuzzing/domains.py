@@ -288,6 +288,12 @@ class ValueDomains:
     """Fresh-slot stores the filler makes, its state gas in stores' worth:
     over half the block's gas, so the state-gas check binds before the
     execution-gas one."""
+    near_full_execution_share: float = 0.5
+    """Share of near-full blocks filled with execution gas instead: the
+    execution-gas capacity check, which a state-gas fill never binds."""
+    near_full_execution_left: Tuple[int, ...] = (21_000, 1_000_000)
+    """Execution gas the burners leave for the last transaction: exactly a
+    transfer's intrinsic gas, or a million."""
     near_full_margins: Tuple[int, ...] = (0, 1)
     """Gas the last transaction asks beyond the state gas left: zero fits
     exactly, one is rejected."""

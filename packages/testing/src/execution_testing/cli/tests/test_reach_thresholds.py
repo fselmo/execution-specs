@@ -21,6 +21,7 @@ from execution_testing.vm import Opcodes as Op
 from ..fuzzer_bridge import campaign as mod
 from ..fuzzer_bridge.density import axis_collapse_warnings, axis_coverage
 from ..fuzzer_bridge.generator import (
+    BURNER_ADDRESS,
     EXACT_CHARGE_CHILD_ADDRESS,
     EXACT_CHARGE_TX_GAS,
     EXACT_CHARGER_ADDRESS,
@@ -184,6 +185,85 @@ def test_asking_one_more_than_the_state_gas_left_is_rejected() -> None:
     )
 
 
+def _near_full_of_execution(margin: int, left: int) -> FuzzerOutput:
+    """
+    A block of burners using all but ``left`` of the block's execution gas,
+    at most the cap each, then a transfer asking ``left`` plus ``margin``.
+    """
+    case = generate_fuzzer_output(Amsterdam, 0)
+    cap = Amsterdam.transaction_gas_limit_cap()
+    assert cap is not None
+    limit = int(case.env.gas_limit)
+    (first, *_) = case.transactions
+    fields = {
+        "value": HexNumber(0),
+        "authorization_list": None,
+        "gas_need_fraction": None,
+        "block": 0,
+        "data": Bytes(b""),
+    }
+    burns = [cap, limit - cap - left]
+    assert 0 < burns[1] <= cap
+    burners = [
+        first.model_copy(
+            update={
+                **fields,
+                "to": Address(BURNER_ADDRESS),
+                "gas": HexNumber(gas),
+                "nonce": HexNumber(nonce),
+            }
+        )
+        for nonce, gas in enumerate(burns)
+    ]
+    last = first.model_copy(
+        update={
+            **fields,
+            "to": first.from_,
+            "gas": HexNumber(left + margin),
+            "nonce": HexNumber(len(burns)),
+            "error": REJECTED_BY_STATE_GAS if margin > 0 else None,
+        }
+    )
+    return case.model_copy(
+        update={
+            "transactions": [*burners, last],
+            "block_count": 1,
+            "withdrawals": [],
+        }
+    )
+
+
+@pytest.mark.parametrize("left", [21_000, 1_000_000])
+def test_asking_exactly_the_execution_gas_left_fits_the_block(
+    left: int,
+) -> None:
+    """
+    After burners that halt at once, each using exactly the gas it was
+    given, a transfer asking exactly the block's execution gas left is
+    included.
+    """
+    fixture = _fill(_near_full_of_execution(0, left))
+    (block,) = fixture["blocks"]
+    assert "expectException" not in block
+    *burns, last = block["receipts"]
+    assert [r["status"] for r in burns] == [False, False]
+    assert last["status"]
+    burned = int(burns[-1]["cumulativeGasUsed"], 16)
+    assert burned == int(block["blockHeader"]["gasLimit"], 16) - left
+
+
+@pytest.mark.parametrize("left", [21_000, 1_000_000])
+def test_asking_one_more_than_the_execution_gas_left_is_rejected(
+    left: int,
+) -> None:
+    """The near miss: one more gas and the block is invalid."""
+    fixture = _fill(_near_full_of_execution(1, left))
+    (block,) = fixture["blocks"]
+    assert block["expectException"] == (
+        f"TransactionException.{REJECTED_BY_STATE_GAS}"
+    )
+
+
 def test_every_exact_charge_axis_keeps_all_its_values() -> None:
     """Presence and every margin, the exact one above all, stay drawn."""
     coverage = axis_coverage(Amsterdam, range(0, 400))
@@ -196,7 +276,10 @@ def test_every_exact_charge_axis_keeps_all_its_values() -> None:
 
 
 def test_every_near_full_axis_keeps_all_its_values() -> None:
-    """Presence, both filler sizes and both margins stay drawn."""
+    """
+    Presence, both fill kinds, both filler sizes and both margins stay
+    drawn.
+    """
     coverage = axis_coverage(Amsterdam, range(0, 400))
     warnings_ = [
         w

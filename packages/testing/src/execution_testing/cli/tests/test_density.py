@@ -70,9 +70,16 @@ def test_every_input_axis_still_shows_both_values() -> None:
     become a constant. This is the check the v6 regression needed --
     it trips without knowing anything about any particular bug.
     """
-    # Wide enough for a four-valued axis drawn in 4% of transactions.
+    # Wide enough for a four-valued axis drawn in 4% of transactions. The
+    # negative-case axes split a tenth of cases twelve ways and are checked
+    # over 2000 seeds in `test_negative_cases.py`.
     coverage = axis_coverage(Amsterdam, range(400))
-    assert axis_collapse_warnings(coverage) == []
+    warnings_ = [
+        w
+        for w in axis_collapse_warnings(coverage)
+        if not w.startswith("negative")
+    ]
+    assert warnings_ == []
     assert set(coverage) >= set(EXPECTED_AXIS_VALUES)
 
 

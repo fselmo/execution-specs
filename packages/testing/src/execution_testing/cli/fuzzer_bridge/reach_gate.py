@@ -44,25 +44,27 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 33
+BASELINE_GENERATOR_VERSION = 34
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    116,
-    206,
-    288,
-    347,
-    584,
-    606,
-    762,
-    1106,
-    1313,
-    2060,
-    2095,
-    2213,
-    4500,
+    13,
+    28,
+    29,
+    44,
+    56,
+    75,
+    143,
+    197,
+    426,
+    1528,
+    1560,
+    1789,
+    3204,
+    3631,
+    4243,
 )
-"""Greedy cover over a 5000-seed baseline at v33: together these fire
+"""Greedy cover over a 5000-seed baseline at v34: together these fire
 every target below.
 
 Re-baseline over at least `GATE_BASELINE_SEEDS`, which is measured
@@ -577,15 +579,16 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
     }
 )
 """BAL cells the baseline window samples reliably: 145 of the
-146 reached over 5000 seeds at v33, each seen at least
-`bal_gate_floor` = 5 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
+147 reached over 5000 seeds at v34, each seen at least
+`bal_gate_floor` = 6 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
 
 BAL_CELLS_BELOW_WINDOW: Dict[Tuple[str, str, str], int] = {
+    ("fork.process_transaction", "code_change", "success"): 1,
     (
         "vm.instructions.environment.extcodecopy",
         "touched_account",
         "success",
-    ): 2,
+    ): 1,
 }
 """Reached in the 5000-seed baseline but fewer than `bal_gate_floor` times,
 with their occurrence counts. Listed so they stay visible rather than gated:

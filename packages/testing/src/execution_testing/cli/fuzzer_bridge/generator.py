@@ -52,7 +52,7 @@ from .negative import BAL_KINDS, HEADER_KINDS
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 33
+GENERATOR_VERSION = 34
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -422,7 +422,7 @@ so the state gas it uses is exactly n fresh-slot stores."""
 
 REJECTED_BY_STATE_GAS = "GAS_ALLOWANCE_EXCEEDED"
 """The exception a transaction gets for asking more gas than the block's
-state gas has left."""
+state gas has left; its execution gas left gets the same one."""
 
 
 def state_filler_code() -> bytes:
@@ -1239,30 +1239,46 @@ def generate_fuzzer_output(
         domains.reservoir_tx_gas
         and rng.random() < domains.near_full_block_rate
     ):
-        # A block of its own, last: a filler whose state gas is exactly its
-        # stores, then one transaction asking the state gas left, or one
-        # more. The filler's gas is the cap plus those stores, so its
-        # reservoir pays for them all and nothing spills.
+        # A block of its own, last, filled one of two ways, then one
+        # transaction asking what is left, or one more. State gas: a filler
+        # whose state gas is exactly its stores, its gas the cap plus those
+        # stores so its reservoir pays for them all and nothing spills.
+        # Execution gas: burners that halt at once and so use exactly the
+        # gas they are given, at most the cap each.
         block = block_count
         block_count += 1
         base_fee = _highest_base_fee(fork, domains, block)
-        stores = rng.choice(domains.near_full_stores)
-        state_used = stores * fresh_store_state
         margin = rng.choice(domains.near_full_margins)
-        for gas, to, data, error in (
+        filled: List[Tuple[int, Address, Bytes, Optional[str]]] = []
+        if rng.random() < domains.near_full_execution_share:
+            left = rng.choice(domains.near_full_execution_left)
+            to_burn = domains.block_gas_limit - left
+            while to_burn:
+                burn = min(tx_gas_cap, to_burn)
+                filled.append(
+                    (burn, Address(BURNER_ADDRESS), Bytes(b""), None)
+                )
+                to_burn -= burn
+        else:
+            stores = rng.choice(domains.near_full_stores)
+            left = domains.block_gas_limit - stores * fresh_store_state
+            filled.append(
+                (
+                    tx_gas_cap + stores * fresh_store_state,
+                    Address(STATE_FILLER_ADDRESS),
+                    Bytes(stores.to_bytes(32, "big")),
+                    None,
+                )
+            )
+        filled.append(
             (
-                tx_gas_cap + state_used,
-                Address(STATE_FILLER_ADDRESS),
-                Bytes(stores.to_bytes(32, "big")),
-                None,
-            ),
-            (
-                domains.block_gas_limit - state_used + margin,
+                left + margin,
                 rng.choice(sender_addresses),
                 Bytes(b""),
                 REJECTED_BY_STATE_GAS if margin > 0 else None,
-            ),
-        ):
+            )
+        )
+        for gas, to, data, error in filled:
             sender = rng.choice(sender_addresses)
             transactions.append(
                 FuzzerTransactionInput(
