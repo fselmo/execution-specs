@@ -164,7 +164,7 @@ def test_triage_narrows_a_finding_to_the_label_it_needs(
         o.label: o
         for o in triage(
             Amsterdam,
-            seed,
+            record_case(Amsterdam, seed)[1],
             target,
             judge,
             runs=4,
@@ -256,3 +256,47 @@ def test_a_call_in_contract_code_has_its_own_labels() -> None:
     )
     changed = compare(tree, varied)[0]
     assert set(changed) <= {kind}
+
+
+def test_a_tree_from_another_version_replays_what_still_exists() -> None:
+    """
+    Seeds do not carry across generator versions, so a finding keeps its
+    tree. On a newer generator the labels that still exist replay at their
+    recorded values; a gone label, a new one, and one whose recorded value
+    its domain no longer accepts are counted apart.
+    """
+    import dataclasses
+
+    from ..fuzzer_bridge.focus import migrate
+    from ..fuzzer_bridge.generator import GENERATOR_VERSION
+
+    _, tree = record_case(Amsterdam, 3)
+    dropped = "tx:0/value"
+    draws = [d for d in tree.draws if d.label != dropped]
+    draws.append(dataclasses.replace(draws[0], label="tx:0/retired"))
+    draws = [
+        dataclasses.replace(d, value=99) if d.label == "blocks" else d
+        for d in draws
+    ]
+    old = DrawTree(GENERATOR_VERSION - 1, tree.fork, tree.seed, draws)
+    replayed, migration = migrate(Amsterdam, old)
+    assert migration.gone == ["tx:0/retired"]
+    assert migration.new == [dropped]
+    assert migration.redrawn == ["blocks"]
+    assert migration.replayed == len(tree.draws) - 2
+    values = replayed.values()
+    for d in draws:
+        if d.label not in ("tx:0/retired", "blocks"):
+            assert values[d.label] == d.value, d.label
+    assert "warning: 1 labels no longer exist" in migration.render()
+
+
+def test_a_tree_from_this_version_replays_unchanged() -> None:
+    """With nothing to migrate, every label replays."""
+    from ..fuzzer_bridge.focus import migrate
+
+    _, tree = record_case(Amsterdam, 5)
+    replayed, migration = migrate(Amsterdam, tree)
+    assert replayed.values() == tree.values()
+    assert migration.replayed == len(tree.draws)
+    assert not (migration.redrawn or migration.gone or migration.new)

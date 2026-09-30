@@ -274,9 +274,58 @@ def _plan_for(tree: DrawTree, label: str, how: str, value: Any) -> Plan:
     return focus_plan(tree, sets={label: value})
 
 
+@dataclass
+class Migration:
+    """How a recorded tree replayed on the current generator."""
+
+    replayed: int
+    """Labels that still exist, at their recorded values."""
+    redrawn: List[str]
+    """Labels that still exist but no longer accept their recorded value."""
+    gone: List[str]
+    """Recorded labels the current generator no longer draws."""
+    new: List[str]
+    """Labels the recording does not have, drawn fresh."""
+
+    def render(self) -> str:
+        """One line per kind of label, with a warning when any moved."""
+        lines = [f"replayed {self.replayed} labels at their recorded values"]
+        for what, labels in (
+            ("no longer accept their value, redrawn", self.redrawn),
+            ("no longer exist", self.gone),
+            ("are new, drawn fresh", self.new),
+        ):
+            if labels:
+                shown = ", ".join(labels[:5])
+                more = f", ... ({len(labels)})" if len(labels) > 5 else ""
+                lines.append(
+                    f"warning: {len(labels)} labels {what}: {shown}{more}"
+                )
+        return "\n".join(lines)
+
+
+def migrate(fork: Fork, recorded: DrawTree) -> Tuple[DrawTree, Migration]:
+    """
+    Replay ``recorded`` on the current generator: labels that still exist
+    take their recorded values, and labels that are new, or no longer
+    accept their value, are drawn. The tree returned replays the result
+    exactly; a tree from this generator version replays unchanged.
+    """
+    plan = Plan(values=recorded.values(), lenient=True)
+    _, replayed = record_case(fork, recorded.seed, plan=plan)
+    old, now = recorded.values(), replayed.values()
+    redrawn = sorted(plan.redrawn)
+    return replayed, Migration(
+        replayed=len([k for k in now if k in old and k not in plan.redrawn]),
+        redrawn=redrawn,
+        gone=sorted(k for k in old if k not in now),
+        new=sorted(k for k in now if k not in old),
+    )
+
+
 def triage(
     fork: Fork,
-    seed: int,
+    tree: DrawTree,
     target: str,
     judge: Judge,
     *,
@@ -293,12 +342,15 @@ def triage(
     A label whose domain is small is tried at every other value once; a
     large one is resampled ``runs`` times, plus its least value when it is
     an integer. ``labels`` limits the labels to those starting with one of
-    its entries. The finding's own case is judged first; a finding that
-    does not reproduce on it has nothing to narrow, and raises.
+    its entries. ``tree`` is the finding's case as the current generator
+    draws it (see `migrate`). The finding's own case is judged first; a
+    finding that does not reproduce on it has nothing to narrow, and
+    raises.
     """
     from .campaign import per_client_signatures, signature_id
 
-    base_case, tree = record_case(fork, seed)
+    seed = tree.seed
+    base_case, tree = record_case(fork, seed, plan=Plan(values=tree.values()))
     kinds = tree.kinds()
     chosen = [
         label

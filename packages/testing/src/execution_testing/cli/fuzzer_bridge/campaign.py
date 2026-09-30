@@ -70,7 +70,7 @@ from .config import ContrastRun
 from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
 from .differential import _fork_by_name, is_tool_rejection
-from .generator import GENERATOR_VERSION, generate_fuzzer_output
+from .generator import GENERATOR_VERSION, generate_fuzzer_output, record_case
 from .health import HealthPolicy, batch_sample, send_alert
 from .health import evaluate as evaluate_health
 from .health import snapshot as health_snapshot
@@ -2976,8 +2976,11 @@ def _write_bundle(
         )
     )
     seed = _seed_of(fixture_name)
-    case = generate_fuzzer_output(options.fork, seed)
+    case, tree = record_case(options.fork, seed)
     save_case(case, bundle / "case.json")
+    # The tree, with its generator version, is what replays this case on
+    # a later generator: a seed alone names another case there.
+    (bundle / "draws.json").write_text(tree.to_json())
     mechanism: Dict[str, Any] = {"case": list(events), "minimized": None}
     (bundle / "events.json").write_text(json.dumps(mechanism, indent=1))
     (bundle / "fixture.json").write_text(

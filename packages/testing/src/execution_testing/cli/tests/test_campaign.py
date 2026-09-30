@@ -340,6 +340,11 @@ def test_campaign_records_divergences_and_resumes(
     assert entry["client"] == "erigon" and entry["count"] == 2
     bundle = Path(entry["bundle"])
     assert (bundle / "verdicts.json").is_file()
+    # The finding keeps its draw tree: a seed names another case on a later
+    # generator.
+    saved = json.loads((bundle / "draws.json").read_text())
+    assert saved["generator_version"] == GENERATOR_VERSION
+    assert saved["seed"] == entry["first_seed"]
     assert (tmp_path / "out" / "report.md").is_file()
     again = _campaign(tmp_path, monkeypatch, failing, count=9, batch=3)
     assert again.next_seed == 9 and again.counts["divergence"] == 3

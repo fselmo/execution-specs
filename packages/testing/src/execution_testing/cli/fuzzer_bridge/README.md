@@ -265,7 +265,7 @@ uv run fuzz case --tree case.json --vary tx:2/gas
 uv run fuzz triage <signature id or part of it> --campaign continuous-one
 ```
 
-Varying a structural label draws again everything it decides, so pinning a label beneath it is refused. A run that cannot be generated or filled is reported with its error. `fuzz triage` prints, for each label, how many variations kept the finding's signature, lost it, or failed the same client another way; the labels whose variation loses it are the ones the bug needs.
+Seeds do not carry across generator versions: every label is seeded with the version, so a seed names another case after a bump. Each finding's bundle therefore keeps its tree (`draws.json`), and `fuzz triage` replays it: on a newer generator the labels that still exist take their recorded values, and it reports, with a warning, the labels that are gone, new, or no longer accept their value. Without a saved tree it takes the finding's first seed from the current generator's segment. Varying a structural label draws again everything it decides, so pinning a label beneath it is refused. A run that cannot be generated or filled is reported with its error. `fuzz triage` prints, for each label, how many variations kept the finding's signature, lost it, or failed the same client another way; the labels whose variation loses it are the ones the bug needs.
 
 ## Key Insights
 

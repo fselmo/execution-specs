@@ -497,8 +497,11 @@ def triage_command(
     Narrow a finding: replay its case, vary one label at a time, and
     report which variations keep the divergence.
     """
+    from execution_testing.fuzzing.draws import DrawTree
+
     from .campaign import campaign_format
-    from .focus import finding_seed, triage, triage_table
+    from .focus import finding_seed, migrate, triage, triage_table
+    from .generator import GENERATOR_VERSION, record_case
     from .runners import FixtureRunner
 
     config = load_config_or_fail(config_path)
@@ -514,12 +517,31 @@ def triage_command(
         )
     (target,) = matches
     entry = state["signatures"][target]
-    if seed is None:
+    fork = _fork_named(campaign_config.fork)
+    bundle = Path(entry.get("bundle") or "")
+    if entry.get("bundle") and not bundle.is_dir():
+        # A campaign directory copied from another machine.
+        bundle = output / "corpus" / bundle.name
+    saved = bundle / "draws.json"
+    if seed is not None:
+        tree = record_case(fork, seed)[1]
+        click.echo(f"seed {seed}, as this generator draws it")
+    elif entry.get("bundle") and saved.is_file():
+        recorded = DrawTree.from_json(saved.read_text())
+        tree, migration = migrate(fork, recorded)
+        click.echo(
+            f"the finding's saved tree: generator v"
+            f"{recorded.generator_version}, seed {recorded.seed}, on "
+            f"v{GENERATOR_VERSION}"
+        )
+        click.echo(migration.render())
+    else:
         try:
             seed = finding_seed(output, entry)
         except ValueError as exc:
             raise click.UsageError(str(exc)) from exc
-    fork = _fork_named(campaign_config.fork)
+        tree = record_case(fork, seed)[1]
+        click.echo(f"no saved tree; seed {seed} of this generator's segment")
     engine = campaign_config.fixture_format == "blockchain_test_engine"
     resolved = resolve_campaign(config, campaign_config.clients)
     runners = {
@@ -537,12 +559,12 @@ def triage_command(
         return {n: r.run_file(path, names) for n, r in runners.items()}
 
     click.echo(
-        f"triage {target}, seed {seed}: every value of a small domain, "
+        f"triage {target}: every value of a small domain, "
         f"{runs} resamples of a large one"
     )
     outcomes = triage(
         fork,
-        seed,
+        tree,
         target,
         judge,
         runs=runs,

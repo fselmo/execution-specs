@@ -144,6 +144,11 @@ class Plan:
     salt: int = 0
     set_labels: Set[str] = field(default_factory=set)
     """Labels whose value is a literal, checked against the domain."""
+    lenient: bool = False
+    """Replay a tree from another generator version: a recorded value its
+    label no longer accepts is drawn again, and listed in `redrawn`,
+    instead of refused. A set value is always refused."""
+    redrawn: List[str] = field(default_factory=list)
 
     def resampled(self, label: str) -> bool:
         """Whether ``label`` is varied, or decided by a varied label."""
@@ -195,15 +200,24 @@ class Draws:
         label = self._label(name)
         if label in self.tree:
             raise DrawError(f"label {label!r} drawn twice")
-        if label in self.plan.values:
+        value = None
+        pinned = label in self.plan.values
+        if pinned:
             encoded = self.plan.values[label]
-            value = domain.decode(encoded)
-            if not domain.check(value):
-                raise DrawError(
-                    f"{label} = {encoded!r} is outside its domain, "
-                    f"{domain.name}"
-                )
-        else:
+            try:
+                value = domain.decode(encoded)
+                valid = domain.check(value)
+            except (KeyError, TypeError, ValueError):
+                valid = False
+            if not valid:
+                if not self.plan.lenient or label in self.plan.set_labels:
+                    raise DrawError(
+                        f"{label} = {encoded!r} is outside its domain, "
+                        f"{domain.name}"
+                    )
+                self.plan.redrawn.append(label)
+                pinned = False
+        if not pinned:
             stream = f"{self.root}|{label}"
             if self.plan.resampled(label):
                 stream += f"|vary:{self.plan.salt}"
