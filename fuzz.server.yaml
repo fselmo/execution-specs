@@ -601,7 +601,9 @@ campaigns:
     seed_start: 100000000
     # Measured on this box, same 2,500 seeds per cap (cases/s): 1: 4.02,
     # 2: 5.34, 3: 5.86, 4: 6.09, 6: 6.36. Still rising slowly at 6.
-    runner_concurrency: 8
+    # Shares the box with engine-main: 6 runners and 4 fill workers here,
+    # 4 and 3 there (the fill workers are fuzz-ui.sh FILL_WORKERS).
+    runner_concurrency: 6
     # Contrasts and the control judge one batch in five; primaries every batch.
     contrast_every: 5
     control_every: 5
@@ -642,7 +644,8 @@ campaigns:
     clients: [nethermind-par-main, nethermind-main, besu-eng-main, geth-eng-main]
     fixture_format: blockchain_test_engine
     seed_start: 80000000
-    runner_concurrency: 8
+    # Shares the box with continuous-one; 3 fill workers.
+    runner_concurrency: 4
     contrast_every: 5
     known: []
     health:
