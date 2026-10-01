@@ -21,9 +21,9 @@ from ..fuzzer_bridge import campaign as mod
 from ..fuzzer_bridge.density import axis_collapse_warnings, axis_coverage
 from ..fuzzer_bridge.generator import (
     REQUEST_TX_GAS,
-    generate_fuzzer_output,
     request_call,
 )
+from .template import template_case
 
 EMPTY_REQUESTS_HASH = (
     "0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -36,7 +36,7 @@ def _request(kind: int, valid: bool) -> Tuple[Dict[str, Any], Any]:
     Fill one transaction sending a request of ``kind``; return the block
     and the sender.
     """
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     to, value, data = request_call(Amsterdam, kind, 7, valid)
     (first, *_) = case.transactions
     tx = first.model_copy(

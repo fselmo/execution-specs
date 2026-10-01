@@ -21,9 +21,9 @@ from ..fuzzer_bridge import campaign as mod
 from ..fuzzer_bridge.density import axis_collapse_warnings, axis_coverage
 from ..fuzzer_bridge.generator import (
     DELEGATED_ACCOUNT_ADDRESS,
-    generate_fuzzer_output,
 )
 from ..fuzzer_bridge.models import FuzzerAccountInput
+from .template import template_case
 
 DELEGATED = Address(DELEGATED_ACCOUNT_ADDRESS)
 DELEGATE = Address(0xDE1E6A7E)
@@ -31,7 +31,7 @@ DELEGATE = Address(0xDE1E6A7E)
 
 def _gas_used(warm: bool) -> int:
     """Send a value-free call to the delegated account; its gas used."""
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     accounts = dict(case.accounts)
     accounts[DELEGATE] = FuzzerAccountInput(
         balance=HexNumber(0), nonce=HexNumber(1), code=bytes(Op.STOP)

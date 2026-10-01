@@ -18,6 +18,7 @@ from ..fuzzer_bridge import campaign as mod
 from ..fuzzer_bridge.eels_import import import_fixture
 from ..fuzzer_bridge.generator import generate_fuzzer_output
 from ..fuzzer_bridge.models import FuzzerOutput
+from .template import template_case, template_seed
 
 
 def _fill(case: FuzzerOutput) -> Dict[str, Any]:
@@ -55,7 +56,7 @@ def test_a_valid_block_refused_on_import_is_a_disagreement() -> None:
     The oracle's own teeth: a fixture whose valid block has a corrupted
     receipts root is refused, and the import reports it.
     """
-    fixture = _fill(generate_fuzzer_output(Amsterdam, 0))
+    fixture = _fill(template_case())
     import copy
 
     from ethereum.crypto.hash import keccak256
@@ -118,7 +119,7 @@ def test_a_payload_that_does_not_hash_to_its_block_hash_is_refused() -> None:
 
     mod._init_fill_worker("Amsterdam")
     fixture = mod.fill_case(
-        generate_fuzzer_output(Amsterdam, 0),
+        template_case(),
         Amsterdam,
         mod._FILL["eels"],
         fixture_format=BlockchainEngineFixture,
@@ -153,7 +154,7 @@ def test_a_self_checked_slice_reports_every_case_checked(
     clean = mod._fill_slice(([0, 1], str(tmp_path), True))
     assert clean["self_checked"] == 2 and clean["self_checks"] == {}
     assert len(fills) == 2
-    unsampled = mod._fill_slice(([0], str(tmp_path)))
+    unsampled = mod._fill_slice(([template_seed()], str(tmp_path)))
     assert unsampled["self_checked"] == 0
 
     monkeypatch.setattr(
@@ -161,9 +162,9 @@ def test_a_self_checked_slice_reports_every_case_checked(
         "import_fixture",
         lambda *_: ImportResult(False, "block 1 expected valid, refused"),
     )
-    refused = mod._fill_slice(([0], str(tmp_path), True))
+    refused = mod._fill_slice(([template_seed()], str(tmp_path), True))
     assert refused["self_checks"] == {
-        "seed_0": "block 1 expected valid, refused"
+        f"seed_{template_seed()}": "block 1 expected valid, refused"
     }
 
 
@@ -233,15 +234,17 @@ def test_a_producer_fixture_failing_its_import_is_adjudicated(
         "import_fixture",
         lambda *_: ImportResult(False, "block 1 expected valid, refused"),
     )
-    wrong = mod._fill_slice(([0], str(tmp_path), True))
-    assert wrong["self_check_producer"] == {"seed_0": ["stateRoot"]}
+    wrong = mod._fill_slice(([template_seed()], str(tmp_path), True))
+    assert wrong["self_check_producer"] == {
+        f"seed_{template_seed()}": ["stateRoot"]
+    }
     assert wrong["self_checks"] == {}
 
     monkeypatch.setattr(mod, "fill_case", fill_case)
-    right = mod._fill_slice(([0], str(tmp_path), True))
+    right = mod._fill_slice(([template_seed()], str(tmp_path), True))
     assert right["self_check_producer"] == {}
     assert right["self_checks"] == {
-        "seed_0": "block 1 expected valid, refused"
+        f"seed_{template_seed()}": "block 1 expected valid, refused"
     }
 
 

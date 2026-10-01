@@ -34,6 +34,7 @@ from ..fuzzer_bridge.models import (
     FuzzerOutput,
     FuzzerTransactionInput,
 )
+from .template import template_case
 
 PROBE = Address(AUTHORITY_PROBE_ADDRESS)
 
@@ -217,7 +218,7 @@ def test_an_authorization_commits_only_with_gas_for_its_charges(
     One gas short, preparation fails and rolls it back, so the authority
     holds no delegation and its nonce is unmoved.
     """
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     key = Hash(0x1234567)
     authority = Address(EOA(key=key))
     accounts = dict(case.accounts)

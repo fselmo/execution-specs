@@ -374,6 +374,10 @@ class ValueDomains:
     """Share of cases that are one block of transfers at the block access
     list's size cap, or one gas under it, which must be rejected. At v38
     no generated block came near the cap."""
+    tx_validity_case_rate: float = 0.06
+    """Share of cases that are one block ending in a transaction breaking
+    one validity rule, of every transaction type. At v39 no generated
+    transaction broke the total cap, the intrinsic cost, or the floor."""
     negative_case_rate: float = 0.1
     """Share of cases whose last block is modified to be rejected: its
     block access list, or one header field. Drawn only for a case with no

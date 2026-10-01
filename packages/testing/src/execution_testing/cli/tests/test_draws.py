@@ -23,6 +23,16 @@ from ..fuzzer_bridge.campaign import signature_id
 from ..fuzzer_bridge.focus import focus, triage
 from ..fuzzer_bridge.generator import record_case
 from ..fuzzer_bridge.runners import Verdict
+from .template import template_seed
+
+NEAR_FULL_MARGIN_ONE = {
+    "near_full": True,
+    "near_full/margin": 1,
+    # The one-block shapes replace the case's blocks, the near-full one
+    # among them.
+    "bal_cap": False,
+    "tx_validity": False,
+}
 
 
 def _seed_with(**wanted: Any) -> int:
@@ -66,9 +76,10 @@ def test_a_sender_varied_keeps_every_pick_of_it() -> None:
     A pick among senders is recorded by position, so varying a sender's
     key changes its address and every transaction still names it.
     """
-    case, tree = record_case(Amsterdam, 0)
+    seed = template_seed()
+    case, tree = record_case(Amsterdam, seed)
     plan = focus_plan(tree, vary=["sender:0/key"], salt=1)
-    varied_case, varied = record_case(Amsterdam, 0, plan=plan)
+    varied_case, varied = record_case(Amsterdam, seed, plan=plan)
     assert compare(tree, varied)[0] == ["sender:0/key"]
     before = [str(tx.from_) for tx in case.transactions]
     after = [str(tx.from_) for tx in varied_case.transactions]
@@ -129,7 +140,7 @@ def test_an_unfillable_run_is_reported_not_dropped() -> None:
     A block gas limit below the transactions' gas cannot fill: the run is
     reported with its error, next to what was set.
     """
-    _, tree = record_case(Amsterdam, 3)
+    _, tree = record_case(Amsterdam, template_seed())
     report = focus(Amsterdam, tree, sets={"env/block_gas_limit": 30_000})
     (run,) = report.variants
     assert run.error
@@ -144,7 +155,7 @@ def test_triage_narrows_a_finding_to_the_label_it_needs(
     near-full margin away from one loses the finding, and varying a
     transaction's value keeps it every time.
     """
-    seed = _seed_with(**{"near_full": True, "near_full/margin": 1})
+    seed = _seed_with(**NEAR_FULL_MARGIN_ONE)
     target = signature_id(("geth", "boom"))
 
     def judge(path: Path, names: List[str]) -> Dict[str, Any]:
@@ -339,7 +350,7 @@ def test_triage_keeps_the_whole_panel_and_other_clients_failures(
 
     from ..fuzzer_bridge.focus import queue_failures
 
-    seed = _seed_with(**{"near_full": True, "near_full/margin": 1})
+    seed = _seed_with(**NEAR_FULL_MARGIN_ONE)
     target = signature_id(("geth", "boom"))
 
     def judge(path: Path, names: List[str]) -> Dict[str, Any]:

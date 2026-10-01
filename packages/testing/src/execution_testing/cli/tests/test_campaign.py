@@ -21,6 +21,7 @@ from ..fuzzer_bridge.campaign import (
 )
 from ..fuzzer_bridge.generator import GENERATOR_VERSION
 from ..fuzzer_bridge.runners import RUNNER_ERROR_PREFIX
+from .template import template_case
 
 
 def test_normalize_error_strips_hashes_and_numbers() -> None:
@@ -724,7 +725,7 @@ def test_fill_case_swallows_the_spec_debug_dump(
         campaign_module, "resolve_measured_gas", lambda case, _f, _fill: case
     )
     with pytest.raises(RuntimeError, match="invalid block"):
-        campaign_module.fill_case(None, Osaka, None)  # type: ignore[arg-type]
+        campaign_module.fill_case(template_case(), Osaka, None)  # type: ignore[arg-type]
     assert capsys.readouterr().out == ""
 
 

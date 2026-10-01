@@ -27,9 +27,9 @@ from ..fuzzer_bridge.generator import (
     STATE_EXHAUSTER_ADDRESS,
     TOUCHER_ADDRESS,
     failer_code,
-    generate_fuzzer_output,
 )
 from ..fuzzer_bridge.models import FuzzerAccountInput, FuzzerOutput
+from .template import template_case
 
 FAILER = Address(FAILER_ADDRESS)
 SMALLEST_GAS = (
@@ -51,7 +51,7 @@ def _failer(outcome: str) -> Tuple[bytes, Dict[HexNumber, HexNumber]]:
 
 def _send_to_failer(code: bytes, storage: Dict) -> FuzzerOutput:
     """A generated case whose first transaction calls the given failer."""
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     accounts = dict(case.accounts)
     accounts[FAILER] = FuzzerAccountInput(
         balance=HexNumber(0),
@@ -250,7 +250,7 @@ def _shared_block(ending: bytes) -> FuzzerOutput:
     balance, calls it with one wei, reads and writes its own slot 0, and
     ends with `ending`.
     """
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     accounts = dict(case.accounts)
     accounts[SHARED] = FuzzerAccountInput(
         balance=HexNumber(0),
@@ -375,7 +375,7 @@ def _exhaust(reservoir: int, stores: int) -> FuzzerOutput:
     One transaction to the exhauster, funded `reservoir` above the cap,
     told to fill `stores` slots before it burns execution gas.
     """
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     cap = Amsterdam.transaction_gas_limit_cap()
     assert cap is not None
     (first, *_) = case.transactions

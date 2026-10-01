@@ -19,10 +19,10 @@ from ..fuzzer_bridge.converter import (
 from ..fuzzer_bridge.generator import (
     FAILER_ADDRESS,
     failer_code,
-    generate_fuzzer_output,
 )
 from ..fuzzer_bridge.measured_gas import _gas_used, resolve_measured_gas
 from ..fuzzer_bridge.models import FuzzerAccountInput, FuzzerOutput
+from .template import template_case
 
 
 def _owned_failer_case(fraction: float) -> FuzzerOutput:
@@ -31,7 +31,7 @@ def _owned_failer_case(fraction: float) -> FuzzerOutput:
         fork_domains(Amsterdam), failing_tx_outcome_shares=(("revert", 1.0),)
     )
     code, storage = failer_code(random.Random(0), domains)
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     accounts = dict(case.accounts)
     accounts[Address(FAILER_ADDRESS)] = FuzzerAccountInput(
         balance=HexNumber(0),

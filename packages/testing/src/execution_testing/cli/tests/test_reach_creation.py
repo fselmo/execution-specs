@@ -27,9 +27,9 @@ from ..fuzzer_bridge.generator import (
     CREATION_TX_GAS,
     creation_initcode,
     creation_target_account,
-    generate_fuzzer_output,
 )
 from ..fuzzer_bridge.models import FuzzerOutput
+from .template import template_case
 
 
 def _fill(case: FuzzerOutput) -> Dict[str, Any]:
@@ -43,7 +43,7 @@ def _fill(case: FuzzerOutput) -> Dict[str, Any]:
 
 def _create(kind: str) -> "tuple[FuzzerOutput, Address]":
     """One creation transaction onto an address holding ``kind``."""
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     (first, *_) = case.transactions
     tx = first.model_copy(
         update={
@@ -148,7 +148,7 @@ def _create_then_burn(initcode_size: int) -> FuzzerOutput:
         + _gas_after_create(0)
         + Op.POP(Op.CALL(Op.GAS, BURNER_ADDRESS, 0, 0, 0, 0, 0))
     )
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     accounts = dict(case.accounts)
     accounts[CREATOR] = FuzzerAccountInput(
         balance=HexNumber(0), nonce=HexNumber(1), code=Bytes(bytes(code))
@@ -210,7 +210,7 @@ def _run(to: Address, data: bytes, gas: int, code: bytes = b"") -> Any:
     """
     from ..fuzzer_bridge.models import FuzzerAccountInput
 
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     accounts = dict(case.accounts)
     if code:
         accounts[to] = FuzzerAccountInput(

@@ -408,6 +408,46 @@ def _tally_bal_cap(case: Any, tally: Dict[str, Counter]) -> None:
         tally["bal_cap_side"]["at_cap" if offset == 0 else "over_cap"] += 1
 
 
+def _tally_tx_validity(case: Any, tally: Dict[str, Counter]) -> None:
+    """Count cases ending in a transaction breaking a validity rule."""
+    from .generator import TX_VALIDITY_KINDS
+
+    rejected = [
+        tx
+        for tx in case.transactions
+        if tx.error
+        and tx.error.split("|")[0]
+        in (
+            "GAS_LIMIT_EXCEEDS_MAXIMUM",
+            "INTRINSIC_GAS_TOO_LOW",
+            "INTRINSIC_GAS_BELOW_FLOOR_GAS_COST",
+        )
+    ]
+    tally["tx_validity_case"]["present" if rejected else "absent"] += 1
+    for tx in rejected:
+        if tx.error == "GAS_LIMIT_EXCEEDS_MAXIMUM":
+            kind = "above_total_cap"
+        elif tx.error == "INTRINSIC_GAS_BELOW_FLOOR_GAS_COST":
+            kind = "floor_short"
+        elif len(bytes(tx.data)) > 1024:
+            kind = "floor_above_cap"
+        else:
+            kind = "intrinsic_short"
+        assert kind in TX_VALIDITY_KINDS
+        tally["tx_validity_kind"][kind] += 1
+        if tx.authorization_list:
+            tx_type = "4"
+        elif tx.blob_versioned_hashes:
+            tx_type = "3"
+        elif tx.gas_price is None:
+            tx_type = "2"
+        elif tx.access_list:
+            tx_type = "1"
+        else:
+            tx_type = "0"
+        tally["tx_validity_type"][tx_type] += 1
+
+
 def _tally_repay(case: Any, tally: Dict[str, Counter]) -> None:
     """Count the repayer's presence and whether its restorer reverts."""
     from execution_testing.base_types import Address
@@ -649,6 +689,9 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "auth_prepare_margin": Counter(),
         "bal_cap_case": Counter(),
         "bal_cap_side": Counter(),
+        "tx_validity_case": Counter(),
+        "tx_validity_kind": Counter(),
+        "tx_validity_type": Counter(),
         "graver_tx": Counter(),
         "graver_beneficiary": Counter(),
         "graver_value": Counter(),
@@ -762,6 +805,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         _tally_account_charge(case, fork, tally)
         _tally_auth_prepare(case, fork, tally)
         _tally_bal_cap(case, tally)
+        _tally_tx_validity(case, tally)
         _tally_graver(case, tally)
         _tally_creation(case, tally)
         _tally_near_full(case, fork, tally)
@@ -940,6 +984,14 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "auth_prepare_margin": ("exact", "short", "over"),
     "bal_cap_case": ("present", "absent"),
     "bal_cap_side": ("at_cap", "over_cap"),
+    "tx_validity_case": ("present", "absent"),
+    "tx_validity_kind": (
+        "above_total_cap",
+        "intrinsic_short",
+        "floor_short",
+        "floor_above_cap",
+    ),
+    "tx_validity_type": ("0", "1", "2", "3", "4"),
     "graver_tx": ("present", "absent"),
     "graver_beneficiary": ("nonexistent", "empty", "alive"),
     "graver_value": ("nonzero", "zero"),

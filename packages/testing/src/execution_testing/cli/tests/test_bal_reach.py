@@ -14,6 +14,7 @@ from ..fuzzer_bridge.bal_reach import (
     outcomes,
     recorders,
 )
+from .template import template_case
 
 
 def test_recorders_come_from_the_tracker_and_only_when_they_record() -> None:
@@ -457,13 +458,12 @@ def test_a_real_destroy_of_pending_writes_is_still_a_read() -> None:
 
     from ..fuzzer_bridge import campaign as mod
     from ..fuzzer_bridge.bal_reach import observer_spec
-    from ..fuzzer_bridge.generator import generate_fuzzer_output
 
     mod._init_fill_worker("Amsterdam")
     fork, eels = mod._FILL["fork"], mod._FILL["eels"]
     eels.bal_reach = observer_spec(fork)
     eels.last_bal_observation = None
-    case = generate_fuzzer_output(fork, 0)
+    case = template_case()
     transactions = list(case.transactions)
     creator = transactions[0]
     initcode = Op.SSTORE(0, 1) + Op.SELFDESTRUCT(Op.ORIGIN)

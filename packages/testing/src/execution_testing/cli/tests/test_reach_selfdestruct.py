@@ -25,9 +25,9 @@ from ..fuzzer_bridge.generator import (
     EMPTY_BENEFICIARY_ADDRESS,
     GRAVER_ADDRESS,
     GRAVER_TX_GAS,
-    generate_fuzzer_output,
 )
 from ..fuzzer_bridge.models import FuzzerOutput
+from .template import template_case
 
 GRAVER = Address(GRAVER_ADDRESS)
 NONEXISTENT = Address(DEAD_BENEFICIARY_BASE)
@@ -46,7 +46,7 @@ def _fill(case: FuzzerOutput) -> Dict[str, Any]:
 
 def _destruct(beneficiary: Address, value: int) -> FuzzerOutput:
     """One transaction to the graver, paying ``value`` to ``beneficiary``."""
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     accounts = dict(case.accounts)
     # A funded account with no code: alive, cold, and nobody's sender.
     alive = accounts[next(iter(accounts))].model_copy(

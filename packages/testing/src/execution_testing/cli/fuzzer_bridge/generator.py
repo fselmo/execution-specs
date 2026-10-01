@@ -64,7 +64,7 @@ from .negative import NEGATIVE_KINDS
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 39
+GENERATOR_VERSION = 40
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -619,6 +619,118 @@ def restorer_code(reverts: bool) -> bytes:
     if reverts:
         code += Op.REVERT(0, 0)
     return bytes(code)
+
+
+TX_VALIDITY_KINDS: Tuple[str, ...] = (
+    "above_total_cap",
+    "intrinsic_short",
+    "floor_short",
+    "floor_above_cap",
+)
+"""The transaction-validity rules a rejected transaction breaks: `tx.gas`
+one above the total cap, one below the intrinsic cost, one below the
+calldata floor, and a floor above the execution cap."""
+
+TX_VALIDITY_TYPES: Tuple[int, ...] = (0, 1, 2, 3, 4)
+"""Every transaction type the validity rules apply to."""
+
+FLOOR_SHORT_ZEROS = 256
+"""Zero bytes of calldata to start from: each costs one token but counts
+four toward the floor, so enough of them put the floor above the
+intrinsic cost, an access list's or authorization's cost included."""
+
+
+def tx_validity_transaction(
+    fork: Fork,
+    kind: str,
+    tx_type: int,
+    to: Address,
+    key: Hash,
+    to_self: bool,
+) -> Dict[str, Any]:
+    """
+    The fields of a transaction of ``tx_type`` to ``to`` breaking ``kind``,
+    with the exception a client must refuse it with. ``key`` signs a type
+    4 transaction's authorization; ``to_self`` says ``to`` is the sender,
+    whose transfer to itself skips the recipient's charge.
+    """
+    recipient = RecipientType.SELF if to_self else RecipientType.EOA
+    from execution_testing.base_types import AccessList
+
+    fields: Dict[str, Any] = {}
+    access_list = None
+    if tx_type == 1:
+        access_list = [AccessList(address=to, storage_keys=[Hash(0)])]
+        fields["access_list"] = access_list
+    elif tx_type == 3:
+        fields["blob_versioned_hashes"] = [Hash(b"\x01" + bytes(31))]
+        fields["max_fee_per_blob_gas"] = HexNumber(
+            fork.min_base_fee_per_blob_gas()
+        )
+    elif tx_type == 4:
+        fields["authorization_list"] = [
+            FuzzerAuthorizationInput(
+                chain_id=HexNumber(1),
+                address=to,
+                nonce=HexNumber(0),
+                signer_key=key,
+            )
+        ]
+    intrinsic_cost = fork.transaction_intrinsic_cost_calculator()
+    floor_cost_of = fork.transaction_data_floor_cost_calculator()
+
+    def costs(data: bytes) -> Tuple[int, int]:
+        return (
+            intrinsic_cost(
+                calldata=data,
+                access_list=access_list,
+                authorization_list_or_count=1 if tx_type == 4 else None,
+                recipient_type=recipient,
+                return_cost_deducted_prior_execution=True,
+            ),
+            floor_cost_of(
+                data=data, access_list=access_list, recipient_type=recipient
+            ),
+        )
+
+    data = b""
+    if kind == "floor_short":
+        data = bytes(FLOOR_SHORT_ZEROS)
+        while costs(data)[1] - 1 < costs(data)[0]:
+            data = bytes(2 * len(data))
+    elif kind == "floor_above_cap":
+        cap = fork.transaction_gas_limit_cap() or 0
+        data = b"\0"
+        while costs(data)[1] <= cap:
+            data = bytes(2 * len(data))
+    intrinsic, floor_cost = costs(data)
+    if kind == "above_total_cap":
+        gas = (fork.transaction_total_gas_limit_cap() or 0) + 1
+        error = "GAS_LIMIT_EXCEEDS_MAXIMUM"
+    elif kind == "intrinsic_short":
+        gas = intrinsic - 1
+        # Without an access list or authorization the floor is the
+        # intrinsic cost, so one gas short breaks both.
+        error = "INTRINSIC_GAS_TOO_LOW"
+        if gas < floor_cost:
+            error += "|INTRINSIC_GAS_BELOW_FLOOR_GAS_COST"
+    elif kind == "floor_short":
+        gas = floor_cost - 1
+        assert gas >= intrinsic, "the floor must be above the intrinsic cost"
+        error = "INTRINSIC_GAS_BELOW_FLOOR_GAS_COST"
+    elif kind == "floor_above_cap":
+        gas = floor_cost
+        error = "INTRINSIC_GAS_TOO_LOW"
+    else:
+        raise ValueError(f"unknown transaction validity rule {kind!r}")
+    return {
+        **fields,
+        "to": to,
+        "gas": HexNumber(gas),
+        "data": Bytes(data),
+        "value": HexNumber(0),
+        "error": error,
+    }
 
 
 CREATION_TX_GAS = 1_000_000
@@ -2122,6 +2234,66 @@ def record_case(
                 )
             )
             nonces[sender] += 1
+        block_count = 1
+    elif fork.transaction_total_gas_limit_cap() and d.flag(
+        "tx_validity", domains.tx_validity_case_rate
+    ):
+        # One block: a transfer, then a transaction breaking one validity
+        # rule, which must be rejected. Above the total cap the genesis
+        # gas limit is twice that cap, so the block's own capacity is never
+        # the reason (as EEST's test of the cap does).
+        v = d.unit("tx_validity")
+        kind = v.pick("kind", TX_VALIDITY_KINDS, kind=STRUCTURAL)
+        types = tuple(t for t in TX_VALIDITY_TYPES if t in fork.tx_types())
+        tx_type = v.pick("type", types, kind=STRUCTURAL)
+        if kind == "above_total_cap":
+            env = env.model_copy(
+                update={
+                    "gas_limit": 2
+                    * (fork.transaction_total_gas_limit_cap() or 0)
+                }
+            )
+        base_fee = _highest_base_fee(fork, domains, 0, int(env.gas_limit))
+        sender = v.member("sender", sender_addresses)
+        to = Address(v.member("to", sender_addresses))
+        transfer_gas = fork.transaction_intrinsic_cost_calculator()(
+            sends_value=True,
+            recipient_type=(
+                RecipientType.SELF if to == sender else RecipientType.EOA
+            ),
+        )
+        invalid = tx_validity_transaction(
+            fork,
+            kind,
+            tx_type,
+            to,
+            _derive_key(v, "authority/key"),
+            to_self=to == sender,
+        )
+        fees: Dict[str, Any] = (
+            {"gas_price": HexNumber(2 * base_fee)}
+            if tx_type in (0, 1)
+            else _fee_market_fields(v.unit("fees"), base_fee)
+        )
+        transactions = [
+            FuzzerTransactionInput(
+                **{"from": sender},
+                block=0,
+                to=to,
+                gas=HexNumber(transfer_gas),
+                nonce=HexNumber(0),
+                value=HexNumber(1),
+                data=Bytes(b""),
+                **_fee_market_fields(v.unit("transfer/fees"), base_fee),
+            ),
+            FuzzerTransactionInput(
+                **{"from": sender},
+                block=0,
+                nonce=HexNumber(1),
+                **invalid,
+                **fees,
+            ),
+        ]
         block_count = 1
 
     # Drawn last, so the rest of the case is what it would be without it. A

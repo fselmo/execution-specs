@@ -28,9 +28,9 @@ from ..fuzzer_bridge.generator import (
     REPAYER_ADDRESS,
     RESTORER_ADDRESS,
     REVERTING_RESTORER_ADDRESS,
-    generate_fuzzer_output,
 )
 from ..fuzzer_bridge.models import FuzzerOutput
+from .template import template_case
 
 REPAYER = Address(REPAYER_ADDRESS)
 WITNESS_SLOT = 2**129 + 1
@@ -39,7 +39,7 @@ WITNESS_SLOT = 2**129 + 1
 
 def _case(restorer: int) -> FuzzerOutput:
     """One transaction to the repayer, delegate-calling ``restorer``."""
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     (first, *_) = case.transactions
     tx = first.model_copy(
         update={

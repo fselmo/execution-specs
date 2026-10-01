@@ -23,9 +23,9 @@ from ..fuzzer_bridge.bal_reach import observer_spec
 from ..fuzzer_bridge.density import axis_collapse_warnings, axis_coverage
 from ..fuzzer_bridge.generator import (
     WITHDRAWAL_RECIPIENT_BASE,
-    generate_fuzzer_output,
 )
 from ..fuzzer_bridge.models import FuzzerWithdrawalInput
+from .template import template_case
 
 GWEI = 10**9
 
@@ -36,7 +36,7 @@ def _fill_with(recipient: Address, amount: int) -> Tuple[Dict, Any]:
     fork, eels = mod._FILL["fork"], mod._FILL["eels"]
     eels.bal_reach = observer_spec(fork)
     eels.last_bal_observation = None
-    case = generate_fuzzer_output(fork, 0)
+    case = template_case()
     # One block, whatever the seed draws: the withdrawal's index and entry
     # are read from the block the case ends on.
     case = case.model_copy(

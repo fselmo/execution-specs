@@ -143,12 +143,20 @@ def fuzzer_transaction_to_eest_transaction(
         blob_versioned_hashes=fuzzer_tx.blob_versioned_hashes,
         max_fee_per_blob_gas=fuzzer_tx.max_fee_per_blob_gas,
         authorization_list=auth_list,
-        error=(
-            TransactionException[fuzzer_tx.error]
-            if fuzzer_tx.error is not None
-            else None
-        ),
+        error=_transaction_exception(fuzzer_tx.error),
     )
+
+
+def _transaction_exception(
+    error: str | None,
+) -> TransactionException | List[TransactionException] | None:
+    """The exception a transaction's `error` names; `A|B` names either."""
+    if error is None:
+        return None
+    names = error.split("|")
+    if len(names) == 1:
+        return TransactionException[error]
+    return [TransactionException[name] for name in names]
 
 
 def create_sender_eoa_map(

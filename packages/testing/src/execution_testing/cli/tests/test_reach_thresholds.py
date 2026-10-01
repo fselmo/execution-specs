@@ -33,9 +33,9 @@ from ..fuzzer_bridge.generator import (
     _exact_charge_gas,
     account_charge_need,
     exact_charge_child_code,
-    generate_fuzzer_output,
 )
 from ..fuzzer_bridge.models import FuzzerOutput
+from .template import template_case
 
 CHARGER = Address(EXACT_CHARGER_ADDRESS)
 CHILD = Address(EXACT_CHARGE_CHILD_ADDRESS)
@@ -64,7 +64,7 @@ def _charge(source: str, margin: int) -> FuzzerOutput:
     One transaction to the charger, the first of its case, gas and the
     child's share sized by the generator for ``source`` and ``margin``.
     """
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     cap = Amsterdam.transaction_gas_limit_cap()
     assert cap is not None
     store_state = Op.SSTORE(
@@ -142,7 +142,7 @@ def _account_charge(kind: str, margin: int) -> FuzzerOutput:
     One transaction to the account charger, its ``kind`` child given
     its exact need plus ``margin``.
     """
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     gas = account_charge_need(kind, Amsterdam) + margin
     (first, *_) = case.transactions
     tx = first.model_copy(
@@ -217,7 +217,7 @@ def _near_full(margin: int, stores: int = 150) -> FuzzerOutput:
     A block of a filler making ``stores`` fresh stores from its reservoir,
     then a transfer asking the block's state gas left plus ``margin``.
     """
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     cap = Amsterdam.transaction_gas_limit_cap()
     assert cap is not None
     store = Op.SSTORE(key_warm=False, original_value=0, new_value=1)
@@ -288,7 +288,7 @@ def _near_full_of_execution(margin: int, left: int) -> FuzzerOutput:
     A block of burners using all but ``left`` of the block's execution gas,
     at most the cap each, then a transfer asking ``left`` plus ``margin``.
     """
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     cap = Amsterdam.transaction_gas_limit_cap()
     assert cap is not None
     limit = int(case.env.gas_limit)
@@ -397,7 +397,7 @@ def _max_nonce_case(nonces: "list[int]") -> FuzzerOutput:
     from ..fuzzer_bridge.generator import MAX_NONCE
     from ..fuzzer_bridge.models import FuzzerAccountInput
 
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     accounts = dict(case.accounts)
     (first, *_) = case.transactions
     transactions = []
@@ -488,7 +488,7 @@ def test_a_creator_at_the_highest_nonce_cannot_create(
     from ..fuzzer_bridge.models import FuzzerAccountInput
 
     creator = Address(DEPLOYER_ADDRESSES[kind])
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     # Only a drawn share of cases holds the creators; this one does.
     _, opcode, nonce = DEPLOYERS[kind]
     accounts = dict(case.accounts)
@@ -597,7 +597,7 @@ def test_initcode_of_the_largest_size_creates(
 
     creator = Address(MAX_INITCODE_CREATOR_ADDRESS)
     size = Amsterdam.max_initcode_size() + over
-    case = generate_fuzzer_output(Amsterdam, 0)
+    case = template_case()
     (first, *_) = case.transactions
     tx = first.model_copy(
         update={
