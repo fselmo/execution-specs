@@ -854,6 +854,11 @@ def render_report(
         f"| fill errors | {fill_errors} "
         f"({fill_error_rate:.1%} of {generated} candidates) |",
     ]
+    if state.counts.get("routed-to-eels"):
+        lines.append(
+            f"| filled by EELS, the producer cannot | "
+            f"{state.counts['routed-to-eels']} |"
+        )
     if state.counts.get("escalated"):
         lines += [
             f"| escalated to EELS | {state.counts['escalated']} "
@@ -1114,6 +1119,35 @@ def _reference_tool() -> Any:
     if _FILL.get("invariants"):
         eels.compute_bal_witness = True
     return eels
+
+
+PRODUCER_GAPS: Dict[str, str] = {
+    "GAS_LIMIT_EXCEEDS_MAXIMUM": (
+        "the producer does not implement TX_MAX_TOTAL_GAS_LIMIT"
+    ),
+}
+"""Rejections a case may expect that the producer cannot fill, by the
+transaction exception, with why. evmone's newest Amsterdam branch accepts
+a transaction above the total gas cap, so such a case fails to fill there
+and would be dropped. Remove an entry once the producer implements it."""
+
+
+def producer_gap(case: FuzzerOutput) -> Optional[str]:
+    """Why the producer cannot fill ``case``, or None when it can."""
+    for tx in case.transactions:
+        for name in (tx.error or "").split("|"):
+            if name in PRODUCER_GAPS:
+                return PRODUCER_GAPS[name]
+    return None
+
+
+def _gap_tool() -> ExecutionSpecsTransitionTool:
+    """EELS, traced as the reference is without a producer, for gaps."""
+    tool = _FILL.get("gap_eels")
+    if tool is None:
+        tool = _FILL["gap_eels"] = ExecutionSpecsTransitionTool()
+        tool.compute_signature = True
+    return tool
 
 
 def fill_case(
@@ -1741,38 +1775,52 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
     widest = 0
     case_ms: List[Tuple[int, float]] = []
     opcodes: Dict[int, int] = {}
+    routed: Dict[int, str] = {}
     for seed in seeds:
         case_started = time.perf_counter()
-        _FILL["eels"].reset_opcode_count()
-        _FILL["eels"].bal_witnesses = []
-        if hasattr(_FILL["eels"], "last_signature"):
-            _FILL["eels"].last_signature = None
-        seen: List[Any] = []
         case = generate_fuzzer_output(fork, seed)
+        gap = producer_gap(case) if _FILL.get("producer") else None
+        tool = _gap_tool() if gap else _FILL["eels"]
+        tool.reset_opcode_count()
+        tool.bal_witnesses = []
+        if hasattr(tool, "last_signature"):
+            tool.last_signature = None
+        seen: List[Any] = []
         try:
             with _case_deadline(FILL_TIMEOUT_SECONDS):
                 fixtures[f"seed_{seed}"] = fill_case(
                     case,
                     fork,
-                    _FILL["eels"],
+                    tool,
                     violations=seen,
                     fixture_format=_FILL["format"],
                 )
+                if gap:
+                    # Provenance: this case's fixture is EELS's, not the
+                    # producer's, and why.
+                    fixtures[f"seed_{seed}"]["_info"]["filled_by"] = {
+                        "tool": "eels",
+                        "reason": gap,
+                    }
+                    routed[seed] = gap
         except FillTimeoutError:
             timeouts[seed] = FILL_TIMEOUT_SECONDS
             # The interrupted fill may have left the tool mid-transition,
             # so the worker takes a fresh one rather than carrying that
             # into the next case.
-            _FILL["eels"] = _recover_tool()
+            if gap:
+                _FILL.pop("gap_eels", None)
+            else:
+                _FILL["eels"] = _recover_tool()
         except Exception as exc:  # noqa: BLE001 - a fill failure is data
             errors[seed] = f"{type(exc).__name__}: {exc}"[:200]
         else:
-            opcodes[seed] = _case_opcodes(_FILL["eels"])
+            opcodes[seed] = _case_opcodes(tool)
             case_types[f"seed_{seed}"] = sorted(_case_tx_types(case))
-            case_events[f"seed_{seed}"] = _case_events(_FILL["eels"])
+            case_events[f"seed_{seed}"] = _case_events(tool)
             if seen:
                 violating[seed] = [v.invariant for v in seen]
-            for witness in getattr(_FILL["eels"], "bal_witnesses", []):
+            for witness in getattr(tool, "bal_witnesses", []):
                 widest = max(widest, bracket_width(witness))
             info = fixtures[f"seed_{seed}"].get("_info", {})
             negative = "negative" in info
@@ -1814,6 +1862,7 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
                 "generator_version": GENERATOR_VERSION,
                 "filled": len(fixtures),
                 "fill_errors": {str(k): v for k, v in errors.items()},
+                "routed_to_eels": {str(k): v for k, v in routed.items()},
                 "worker_seconds": round(seconds, 3),
                 "ms_per_case": round(seconds / len(fixtures) * 1000, 2)
                 if fixtures
@@ -1845,6 +1894,7 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
         "case_events": case_events,
         "errors": errors,
         "timeouts": timeouts,
+        "routed_to_eels": routed,
         "violations": violating,
         "self_checked": self_checked,
         "self_checks": self_checks,
@@ -2360,6 +2410,11 @@ def run_campaign(
             state.counts["fill_error"] = state.counts.get(
                 "fill_error", 0
             ) + len(fill_errors)
+            # Filled by EELS because the producer cannot: not fill errors,
+            # and not the producer's fixtures.
+            state.counts["routed-to-eels"] = state.counts.get(
+                "routed-to-eels", 0
+            ) + len(slice_result.get("routed_to_eels", {}))
             shard_version = slice_result.get("generator_version")
             if shard_version != GENERATOR_VERSION:
                 raise MixedGeneratorError(
