@@ -2788,3 +2788,22 @@ def test_fork_branch_reports_parse_as_the_series_lines() -> None:
     assert all(t["unmatched"] == 0 for t in tallies.values())
     assert len(fallbacks) == 1
     assert expected_valid_lines(fallbacks, fixtures) == []
+
+
+def test_header_differences_reads_a_rejected_first_block() -> None:
+    """A first block expected rejected has its header in `rlp_decoded`."""
+    from ..fuzzer_bridge.campaign import header_differences
+
+    def rejected(gas_used: str) -> Dict[str, Any]:
+        header = {"number": "0x1", "gasUsed": gas_used}
+        return {
+            "blocks": [
+                {
+                    "expectException": "TransactionException.X",
+                    "rlp_decoded": {"blockHeader": header},
+                }
+            ]
+        }
+
+    assert header_differences(rejected("0x1"), rejected("0x1")) == []
+    assert header_differences(rejected("0x1"), rejected("0x2")) == ["gasUsed"]

@@ -1983,7 +1983,12 @@ def _seed_of(fixture_name: str) -> int:
 
 
 def _header(fixture: Mapping[str, Any]) -> Dict[str, Any]:
-    return dict(fixture["blocks"][0]["blockHeader"])
+    # A block expected rejected carries its header only in `rlp_decoded`,
+    # and from v40 the first block can be one.
+    block = fixture["blocks"][0]
+    return dict(
+        block.get("blockHeader") or block["rlp_decoded"]["blockHeader"]
+    )
 
 
 def header_differences(
