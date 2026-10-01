@@ -2472,3 +2472,80 @@ def test_a_queued_triage_failure_becomes_a_finding(
     assert bundled.model_dump_json() == case.model_dump_json()
     assert not queued.exists()
     assert (queued.parent / "done" / queued.name).is_file()
+
+
+INTERFACE_FIXTURES = {
+    "valid": {
+        "blocks": [
+            {
+                "blockHeader": {"number": "0xc", "hash": "0xAB"},
+                "blockAccessList": [],
+            },
+            {
+                "blockHeader": {"number": "0xd", "hash": "0xCD"},
+                "blockAccessList": [],
+            },
+        ]
+    },
+    "invalid": {
+        "blocks": [
+            {
+                "expectException": "BlockException.INVALID_BAL",
+                "rlp_decoded": {
+                    "blockHeader": {"number": "0xe", "hash": "0xEF"}
+                },
+                "blockAccessList": [],
+            }
+        ]
+    },
+}
+
+
+def test_interface_reports_read_as_the_series_lines() -> None:
+    """
+    The runner interface's §3 decision and §4 fallback objects feed the
+    same decision fractions and masked-failure filter as the series'
+    `FUZZ-PAR-DECISION` and `BAL-FALLBACK` lines, block for block.
+    """
+    from ..fuzzer_bridge.campaign import (
+        expected_valid_lines,
+        parallel_decisions,
+        tagged_stderr_lines,
+    )
+
+    series = (
+        "FUZZ-PAR-DECISION block=12 hash=0xab decision=parallel reason=\n"
+        "FUZZ-PAR-DECISION block=13 hash=0xcd decision=sequential "
+        "reason=disabled\n"
+        "BAL-FALLBACK block=12 hash=0xab\n"
+        "BAL-FALLBACK block=14 hash=0xef\n"
+    )
+    interface = (
+        '{"event":"balExecution","block":12,"hash":"0xab",'
+        '"path":"parallel","reason":"","scheduler":"bal"}\n'
+        '{"event":"balExecution","block":13,"hash":"0xcd",'
+        '"path":"sequential","reason":"disabled"}\n'
+        '{"event":"balFallback","block":12,"hash":"0xab",'
+        '"parallelError":"state root mismatch","sequentialResult":"valid",'
+        '"sequentialError":""}\n'
+        '{"event":"balFallback","block":14,"hash":"0xef",'
+        '"parallelError":"bad list","sequentialResult":"invalid",'
+        '"sequentialError":"invalid block access list"}\n'
+        "INFO an unrelated log line\n"
+        '{"event":"somethingElse","block":12}\n'
+        "{not json\n"
+    )
+    for text in (series, interface):
+        tagged = tagged_stderr_lines({"lane": text})
+        decisions = [t for t in tagged if t[1].startswith("FUZZ-PAR")]
+        others = [t for t in tagged if not t[1].startswith("FUZZ-PAR")]
+        assert parallel_decisions(decisions, INTERFACE_FIXTURES)["lane"] == {
+            "bal_blocks": 3,
+            "decisions": 2,
+            "parallel": 1,
+            "unmatched": 0,
+        }
+        kept = expected_valid_lines(others, INTERFACE_FIXTURES)
+        assert [line.split()[:3] for _, line in kept] == [
+            ["BAL-FALLBACK", "block=12", "hash=0xab"]
+        ]

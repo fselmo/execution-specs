@@ -2821,14 +2821,51 @@ all, which a verdict cannot."""
 STDERR_TAGS = (*MASKED_TAGS, PAR_DECISION_TAG)
 
 
+def interface_line(line: str) -> Optional[str]:
+    """
+    A runner-interface report (docs/fuzzing/runner-interface.md) as the
+    tagged line it stands for, else None.
+
+    The interface's §3 `balExecution` object is a `FUZZ-PAR-DECISION` line
+    and its §4 `balFallback` object a `BAL-FALLBACK` one, so a client on the
+    interface feeds the same decision fractions and masked-failure alerts as
+    one still on its series.
+    """
+    if not line.startswith("{"):
+        return None
+    try:
+        report = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(report, dict):
+        return None
+    block, block_hash = report.get("block"), report.get("hash")
+    if report.get("event") == "balExecution":
+        reason = report.get("reason") or ""
+        return (
+            f"{PAR_DECISION_TAG} block={block} hash={block_hash} "
+            f"decision={report.get('path')} reason={reason}"
+        )
+    if report.get("event") == "balFallback":
+        return (
+            f"BAL-FALLBACK block={block} hash={block_hash} "
+            f"sequentialResult={report.get('sequentialResult')} "
+            f"parallelError={json.dumps(report.get('parallelError') or '')}"
+        )
+    return None
+
+
 def tagged_stderr_lines(stderr: Mapping[str, str]) -> List[Tuple[str, str]]:
     """`(lane, line)` for every tagged line in each lane's runner stderr."""
-    return [
-        (lane, line.strip())
-        for lane, text in sorted(stderr.items())
-        for line in text.splitlines()
-        if line.strip().startswith(STDERR_TAGS)
-    ]
+    tagged = []
+    for lane, text in sorted(stderr.items()):
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line.startswith(STDERR_TAGS):
+                line = interface_line(line) or ""
+            if line:
+                tagged.append((lane, line))
+    return tagged
 
 
 @dataclass(frozen=True)
