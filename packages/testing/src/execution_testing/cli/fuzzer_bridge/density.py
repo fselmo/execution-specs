@@ -1123,6 +1123,39 @@ def significant_drops(
     return drops
 
 
+def significant_rises(
+    previous: Dict[str, int],
+    current: Dict[str, int],
+    previous_seeds: int,
+    current_seeds: int,
+    tolerance: float = REGRESSION_TOLERANCE,
+    alpha: float = REGRESSION_ALPHA,
+) -> List[str]:
+    """
+    Event counts that rose further than ``tolerance`` *and* further than
+    sampling explains: `significant_drops` turned around. Under an
+    unchanged rate a later count this high is an earlier one this low,
+    given the total of the two, at the earlier sample's share.
+    """
+    share = previous_seeds / (previous_seeds + current_seeds)
+    rises = []
+    for name, before in sorted(previous.items()):
+        after = current.get(name, 0)
+        if before <= 0:
+            continue
+        before_rate = before / previous_seeds
+        after_rate = after / current_seeds
+        if (after_rate - before_rate) / before_rate <= tolerance:
+            continue
+        chance = binomial_lower_tail(before, before + after, share)
+        if chance < alpha:
+            rises.append(
+                f"{name} {before}/{previous_seeds} -> "
+                f"{after}/{current_seeds} (p={chance:.1e})"
+            )
+    return rises
+
+
 def rank_sum_lower(before: List[int], after: List[int]) -> float:
     """
     One-sided p-value that ``after`` tends lower than ``before``.

@@ -46,8 +46,8 @@ def test_a_control_is_held_to_its_segment_baseline() -> None:
     The control's rate moves with the generator, so a drop is judged
     against the segment's own baseline, by the binomial test over a window
     of 2,500 sampled cases: 2.8% against a 5% baseline pauses, 4.7% is
-    noise, and a window not yet full waits. Too loud still pauses on the
-    band's upper edge.
+    noise, and a window not yet full waits. Too loud pauses on the rise
+    test and on the band's upper edge, the backstop.
     """
     fell = evaluate([_sample(2500, control=70)], CONTROLLED, [], 2, BASELINE)
     noise = evaluate([_sample(2500, control=118)], CONTROLLED, [], 2, BASELINE)
@@ -57,7 +57,21 @@ def test_a_control_is_held_to_its_segment_baseline() -> None:
     assert noise[1] == [] and noise[0]["control_baseline"] == 0.05
     assert short[1] == []
     assert "drop test waits for 2500" in short[0]["control_note"]
-    assert "above" in loud[1][0]
+    assert "control rate rose" in loud[1][0]
+    assert any("above" in problem for problem in loud[1])
+
+
+def test_a_control_rising_inside_the_band_pauses() -> None:
+    """
+    The upper edge is relative too: 7.8% against a 5% baseline is a rise
+    beyond sampling, though under the fixed band's 8%; 5.5% is noise.
+    """
+    rose = evaluate([_sample(2500, control=195)], CONTROLLED, [], 2, BASELINE)
+    noise = evaluate([_sample(2500, control=138)], CONTROLLED, [], 2, BASELINE)
+    assert rose[0]["control_band"][1] >= 0.08
+    assert len(rose[1]) == 1 and "control rate rose" in rose[1][0]
+    assert "something else is failing it" in rose[1][0]
+    assert noise[1] == []
 
 
 def test_a_control_cannot_pause_on_a_drop_while_it_calibrates() -> None:
@@ -371,6 +385,15 @@ def test_a_stationary_control_does_not_pause_in_a_day() -> None:
         _simulate_control(0, CONTROL_RATE, CONTROL_RATE, DAY_OF_BATCHES)
         is None
     )
+
+
+def test_a_doubled_control_pauses_within_one_window() -> None:
+    """
+    Doubled right after calibration, the control pauses on the rise by the
+    time its window first holds 2,500 sampled cases of the new rate.
+    """
+    paused = _simulate_control(1, CONTROL_RATE, CONTROL_RATE * 2, 400)
+    assert paused is not None and paused <= 2600
 
 
 def test_a_halved_control_pauses_within_one_window() -> None:

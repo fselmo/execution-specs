@@ -305,6 +305,8 @@ def campaign(
             control_drop_tolerance=health.control_drop_tolerance,
             control_window=health.control_window,
             control_drop_alpha=health.control_drop_alpha,
+            control_rise_tolerance=health.control_rise_tolerance,
+            control_rise_alpha=health.control_rise_alpha,
             control_dead_expected=health.control_dead_expected,
             max_runner_error_rate=health.max_runner_error_rate,
             max_producer_disagreement_rate=(

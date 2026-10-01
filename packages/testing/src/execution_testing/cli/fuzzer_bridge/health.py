@@ -34,11 +34,12 @@ class HealthPolicy:
     control_reason: Optional[str] = None
     """Substring of the control's signature reason, as `known:` matches."""
     control_band: Tuple[float, float] = (0.0, 1.0)
-    """Only the upper edge is held: above it something else is failing
-    the control (widened for a sampled control, see `control_band_for`).
-    The lower edge is not a fixed floor any more: the control's rate moves
-    with the generator (4.56% at v26, about 3.5% at v28 and v30), so a
-    drop is judged against the segment's own calibrated baseline."""
+    """A hard backstop only: above the upper edge something else is
+    failing the control (widened for a sampled control, see
+    `control_band_for`). Neither edge is the working check any more: the
+    control's rate moves with the generator (4.56% at v26, about 3.5% at
+    v28 and v30, near 15% expected from v39), so a drop and a rise are
+    both judged against the segment's own calibrated baseline."""
     control_baseline_cases: int = 10_000
     """Sampled cases the control judges at a segment's opening before its
     baseline rate is set. A 2,000-case baseline was noisy enough that the
@@ -60,6 +61,12 @@ class HealthPolicy:
     control_drop_alpha: float = 3e-4
     """One-sided chance of the drop test pausing on noise alone, per
     judgement. It judges after every sampled batch, so it is small."""
+    control_rise_tolerance: float = 0.0
+    """Proportional rise the control's rate may take before the binomial
+    test is asked; 0 leaves the test alone to decide."""
+    control_rise_alpha: float = 3e-4
+    """One-sided chance of the rise test pausing on noise alone, per
+    judgement, as for the drop test."""
     control_dead_expected: float = 5.0
     """Hits the baseline must predict in the window for zero hits to read
     as a control that stopped firing, whatever the drop test says."""
@@ -358,11 +365,12 @@ def _control_drop_checks(
     segment's baseline.
 
     A control that never fired while calibrating, or has fired zero times
-    where its baseline predicts several, pauses at once. A drop pauses
-    only once the window holds `control_window` sampled cases, and only
-    at `control_drop_alpha`, since it is judged after every sampled batch.
+    where its baseline predicts several, pauses at once. A drop or a rise
+    pauses only once the window holds `control_window` sampled cases, and
+    only at its alpha, since each is judged after every sampled batch: a
+    rise means something besides the known bug is failing the control.
     """
-    from .density import significant_drops
+    from .density import significant_drops, significant_rises
 
     problems: List[str] = []
     sampled = sum(s["cases"] for s in control_window)
@@ -418,6 +426,18 @@ def _control_drop_checks(
     )
     if drops:
         problems.append(f"control rate fell: {drops[0]}")
+    rises = significant_rises(
+        {name: base_hits},
+        {name: hits},
+        base_cases,
+        sampled,
+        tolerance=policy.control_rise_tolerance,
+        alpha=policy.control_rise_alpha,
+    )
+    if rises:
+        problems.append(
+            f"control rate rose: {rises[0]}: something else is failing it"
+        )
     return problems
 
 
