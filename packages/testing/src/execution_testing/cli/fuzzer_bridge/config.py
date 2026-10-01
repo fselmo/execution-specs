@@ -10,7 +10,7 @@ NAME` rather than a chain of flags.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -209,6 +209,15 @@ class ClientConfig(BaseModel):
     the path contrast; `IGNORE_BAL=true` withholds the delivered list while
     execution stays parallel, a hint contrast. Either may be set, or both;
     a client declaring neither has no contrast run."""
+    delivered_bal: Literal["attached", "ignored"] = "ignored"
+    """Whether this client's block-test runner attaches the access list a
+    fixture delivers with a block expected rejected (its
+    `rlp_decoded.blockAccessList`) and validates it. Only `attached` lanes
+    are judged on the import lane's delivered-list negatives; on the others
+    those cases are excluded from the comparison and counted, the way a
+    refusal is. A lane that ignores the list imports the block, which is
+    right for it, so `ignored` is the default until a runner is proven.
+    Contrast runs are never judged on those cases."""
     contrasts: Dict[str, ContrastRun] = Field(default_factory=dict)
     """Further contrast runs by name, for a client with more than one knob
     worth separating: erigon's `IGNORE_BAL` drops the BAL's scheduling

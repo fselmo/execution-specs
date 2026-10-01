@@ -290,6 +290,9 @@ def campaign(
             for n in campaign_config.clients
             if (env := config.client(n).contrast_env) is not None
         },
+        delivered_bal={
+            n: config.client(n).delivered_bal for n in campaign_config.clients
+        },
         client_env={n: dict(r.env) for n, r in resolved.items() if r.env},
         contrasts={
             n: runs

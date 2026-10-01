@@ -24,6 +24,8 @@ clients:
     path: ~/.cache/eels-fuzz/erigon/1880a8e319aef66cbd752515e4c55bd08fd83394/evm
   # Pre-fix besu, the campaign's positive control (2d29706a).
   - name: besu-gate
+    # delivered-list negatives: the control; it attaches nothing.
+    delivered_bal: ignored
     build:
       recipe: besu
       repo: besu-eth/besu
@@ -191,6 +193,8 @@ clients:
   # resolved 2026-09-24; no devnet past 11 has a branch of its own). Stock
   # builds sit beside the series builds for the liveness check.
   - name: geth-par-main
+    # delivered-list negatives: its attach patch reads only a block's top-level blockAccessList, not rlp_decoded's.
+    delivered_bal: ignored
     build:
       recipe: geth
       repo: ethereum/go-ethereum
@@ -227,6 +231,8 @@ clients:
   # --bal.sequential as the contrast, and the FUZZ-PAR-DECISION print.
   # ethrex has no sequential fallback, so there is no masking signal.
   - name: ethrex-par-main
+    # delivered-list negatives: ethrex's fixture types read rlp_decoded natively and the series runs on the delivered list (code reading; prove on the 13 delivered kinds before trusting a finding).
+    delivered_bal: attached
     build:
       recipe: ethrex
       repo: lambdaclass/ethrex
@@ -261,6 +267,8 @@ clients:
   # (campaigns/reports/reth-system-call-reservoir). libclang comes from the
   # PyPI wheel, with gcc's builtin headers for bindgen.
   - name: reth-main
+    # delivered-list negatives: interim import lane, until its fork branch lands.
+    delivered_bal: ignored
     build:
       recipe: reth
       repo: paradigmxyz/reth
@@ -272,6 +280,8 @@ clients:
   - name: geth-main
     build: {recipe: geth, repo: ethereum/go-ethereum, ref: 920c07774c65ebb3023536f85df642c44478b540}
   - name: erigon-par-main
+    # delivered-list negatives: not shown to attach a rejected block's list.
+    delivered_bal: ignored
     build:
       recipe: erigon
       repo: erigontech/erigon
@@ -284,6 +294,8 @@ clients:
       hints-off: {env: {IGNORE_BAL: "true"}}
       serial: {env: {EXEC3_WORKERS: "1"}}
   - name: besu-par-main
+    # delivered-list negatives: its series reads no rlp_decoded list; LCC2's besu PR adds that read.
+    delivered_bal: ignored
     build:
       recipe: besu
       repo: besu-eth/besu
@@ -353,6 +365,8 @@ clients:
     env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
           PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
   - name: nethermind-par-main
+    # delivered-list negatives: its attach patch reads only a block's top-level list, not rlp_decoded's.
+    delivered_bal: ignored
     build:
       recipe: nethermind
       repo: NethermindEth/nethermind

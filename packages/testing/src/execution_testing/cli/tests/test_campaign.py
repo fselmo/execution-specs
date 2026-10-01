@@ -164,6 +164,8 @@ class _FakePool:
     negative: Any = staticmethod(lambda _seed: False)
     rejected: Any = staticmethod(lambda _seed: False)
     """Seeds whose one block the fixture expects rejected."""
+    delivered: Any = staticmethod(lambda _seed: False)
+    """Seeds that are import-lane delivered-list negatives."""
     worker_results: Any = staticmethod(lambda _seeds: {})
     """Extra fields of a slice's summary, as a fill worker returns them."""
 
@@ -194,6 +196,18 @@ class _FakePool:
                 **(
                     {"_info": {"negative": {"family": "header"}}}
                     if type(self).negative(s)
+                    else {}
+                ),
+                **(
+                    {
+                        "_info": {
+                            "negative": {
+                                "family": "bal",
+                                "variant": "delivered",
+                            }
+                        }
+                    }
+                    if type(self).delivered(s)
                     else {}
                 ),
             }
@@ -632,6 +646,60 @@ def test_a_fallback_on_a_block_expected_rejected_keeps_no_batch(
     assert sent == []
     assert state.kept_batches == []
     assert list((tmp_path / "out" / "fixtures").glob("*.json")) == []
+
+
+def test_a_lane_ignoring_the_delivered_list_is_not_judged_on_it(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Nethermind's runner here ignores the delivered list, so it imports the
+    delivered-list negatives, which is right for it: those cases are left
+    out of its comparison and counted, and geth, which attaches the list
+    and refuses them, stands alone without a finding.
+    """
+    monkeypatch.setattr(
+        _FakePool, "delivered", staticmethod(lambda s: s % 3 == 0)
+    )
+    failing = {
+        "geth": lambda _s: False,
+        "nethermind": lambda s: s % 3 == 0,
+    }
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        count=9,
+        batch=9,
+        baseline=False,
+        delivered_bal={"geth": "attached", "nethermind": "ignored"},
+    )
+    assert state.counts["delivered-ignored:nethermind"] == 3
+    assert state.counts.get("divergence", 0) == 0
+    assert state.signatures == {}
+
+
+def test_an_attached_lane_accepting_a_delivered_list_is_a_finding(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Geth attaches the delivered list, so accepting a block whose list is
+    wrong is a finding, though it is the only lane judging the case and
+    so the verdict is an all-fail rather than a divergence.
+    """
+    monkeypatch.setattr(_FakePool, "delivered", staticmethod(lambda s: s == 4))
+    failing = {"geth": lambda s: s == 4, "nethermind": lambda s: s == 4}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        count=9,
+        batch=9,
+        baseline=False,
+        delivered_bal={"geth": "attached"},
+    )
+    assert state.counts["delivered-ignored:nethermind"] == 1
+    (entry,) = state.signatures.values()
+    assert entry["client"] == "geth" and entry["count"] == 1
 
 
 def test_kept_batches_over_the_cap_keep_the_newest_per_reason() -> None:
