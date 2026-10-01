@@ -29,10 +29,13 @@ A list delivered beside a header that keeps the true list's hash cannot
 be a negative on the engine path: a client derives the header's list hash
 from the list it is given, so the block hash no longer matches and the
 payload is refused on its hash before any list check runs (669 besu and
-nethermind failures at v32 were that, not client bugs). It belongs on the
-import lane, where the parallel-path series attach the fixture's own list
-beside an unchanged header; it is not built there, and EELS could not
-witness it, since its import never reads that list.
+nethermind failures at v32 were that, not client bugs). It is the import
+lane's negative instead (`delivered_list_fixture`): a block-test runner
+attaches the fixture's own list to the block it imports, so a client that
+executes from the delivered list, or checks it, must refuse it, and one
+that rebuilds its own and ignores it passes. EELS cannot witness it, since
+its import never reads that list; each kind is proven on a client that
+attaches the list and on a stock build that does not.
 
 A client that answers VALID to a negative case fails its fixture, as one
 that answers INVALID to a clean case does: both are findings, through the
@@ -595,6 +598,50 @@ def last_block_overrides(
         )
         return header_overrides(kind, last["blockHeader"], parent, pick, gas)
     raise ValueError(f"unknown negative family {family!r}")
+
+
+DELIVERED_FAMILIES = ("bal", "form")
+"""The families whose list a block-test runner can be handed: an encoding
+fault does not survive the fixture's JSON, which carries a decoded
+list."""
+
+
+def delivered_list_fixture(
+    clean: Mapping[str, Any], rehashed: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """
+    The import lane's negative: ``rehashed``, the case filled with its last
+    block's list changed and the header committing to it, with that block's
+    RLP and header put back to ``clean``'s. Only the delivered list,
+    `rlp_decoded.blockAccessList`, is still the changed one, so the header
+    commits to the true list and the block itself is valid.
+    """
+    fixture = dict(rehashed)
+    true_block = clean["blocks"][-1]
+    rejected = dict(rehashed["blocks"][-1])
+    decoded = dict(rejected["rlp_decoded"])
+    decoded["blockHeader"] = true_block["blockHeader"]
+    rejected["rlp"] = true_block["rlp"]
+    rejected["rlp_decoded"] = decoded
+    fixture["blocks"] = [*rehashed["blocks"][:-1], rejected]
+    return fixture
+
+
+def delivered_list_fault(fixture: Mapping[str, Any]) -> str:
+    """
+    Why ``fixture`` is not a delivered-list negative, or "" when it is:
+    its last block is expected rejected, and the list it delivers is not
+    the one the block's header commits to.
+    """
+    block = fixture["blocks"][-1]
+    if "expectException" not in block:
+        return "delivered-list negative: last block not expected rejected"
+    decoded = block["rlp_decoded"]
+    delivered = BlockAccessList.model_validate(decoded["blockAccessList"])
+    committed = decoded["blockHeader"]["blockAccessListHash"]
+    if Hash(delivered.rlp_hash) == Hash(committed):
+        return "delivered-list negative: the delivered list is the true one"
+    return ""
 
 
 def modify_last_block(test: Any, overrides: Mapping[str, Any]) -> None:

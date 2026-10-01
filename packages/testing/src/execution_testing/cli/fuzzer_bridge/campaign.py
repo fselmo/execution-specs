@@ -78,7 +78,12 @@ from .health import snapshot as health_snapshot
 from .health import trim as trim_window
 from .measured_gas import measuring_filler, resolve_measured_gas
 from .models import FuzzerOutput
-from .negative import last_block_overrides, modify_last_block
+from .negative import (
+    DELIVERED_FAMILIES,
+    delivered_list_fixture,
+    last_block_overrides,
+    modify_last_block,
+)
 from .reproducer import client_judge, write_reproducer
 from .run_manifest import RunManifest, _eels_commit, binary_digest
 from .runners import FixtureRunner, Verdict, is_runner_error
@@ -1118,6 +1123,7 @@ def fill_case(
 
     test = blockchain_test_from_fuzzer(case, fork)
     negative: Optional[Dict[str, Any]] = None
+    delivered: Optional[Dict[str, Any]] = None
     if fixture_format is BlockchainEngineFixture and case.negative is not None:
         # The modification is chosen from what the block really holds, so
         # the case is filled clean first.
@@ -1128,10 +1134,31 @@ def fill_case(
         test = blockchain_test_from_fuzzer(case, fork)
         if overrides is not None:
             modify_last_block(test, overrides)
+    elif (
+        fixture_format is BlockchainFixture
+        and case.negative is not None
+        and case.negative.family in DELIVERED_FAMILIES
+    ):
+        # The import lane's negative: the list is changed only where the
+        # runner is handed it, beside the true header.
+        negative = {**case.negative.model_dump(), "variant": "delivered"}
+        delivered = generate(test, BlockchainFixture).fixture.json_dict
+        overrides = last_block_overrides(negative, delivered)
+        negative["applied"] = overrides is not None
+        test = blockchain_test_from_fuzzer(case, fork)
+        if overrides is not None:
+            modify_last_block(test, overrides)
+        else:
+            delivered = None
     result = generate(test, fixture_format)
     if violations is not None:
         violations.extend(test.invariant_violations)
     fixture = result.fixture.json_dict_with_info()
+    if delivered is not None:
+        fixture = {
+            **delivered_list_fixture(delivered, fixture),
+            "_info": fixture["_info"],
+        }
     if negative is not None:
         fixture["_info"]["negative"] = negative
     return fixture
@@ -1617,7 +1644,22 @@ def _self_check_case(
     modified block with the exception the fixture names.
     """
     from .eels_import import ImportCrashError, import_fixture
+    from .negative import delivered_list_fault
 
+    negative = fixture.get("_info", {}).get("negative") or {}
+    if negative.get("variant") == "delivered":
+        # EELS never reads the delivered list, so it cannot refuse this
+        # block. What it can witness: the block is valid as delivered,
+        # and the delivered list is not the one its header commits to.
+        fault = delivered_list_fault(fixture)
+        if fault:
+            return fault, ""
+        last = {
+            k: v
+            for k, v in fixture["blocks"][-1].items()
+            if k != "expectException"
+        }
+        fixture = {**fixture, "blocks": [*fixture["blocks"][:-1], last]}
     try:
         result = import_fixture(fixture, fork.name().lower())
     except ImportCrashError as exc:
