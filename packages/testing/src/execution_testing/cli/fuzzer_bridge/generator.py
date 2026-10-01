@@ -717,7 +717,9 @@ def tx_validity_transaction(
     elif kind == "floor_short":
         gas = floor_cost - 1
         assert gas >= intrinsic, "the floor must be above the intrinsic cost"
-        error = "INTRINSIC_GAS_BELOW_FLOOR_GAS_COST"
+        # Clients name a floor shortfall either way: evmone reports it as
+        # intrinsic gas too low, as EEST's own evmone mapping accepts.
+        error = "INTRINSIC_GAS_BELOW_FLOOR_GAS_COST|INTRINSIC_GAS_TOO_LOW"
     elif kind == "floor_above_cap":
         gas = floor_cost
         error = "INTRINSIC_GAS_TOO_LOW"

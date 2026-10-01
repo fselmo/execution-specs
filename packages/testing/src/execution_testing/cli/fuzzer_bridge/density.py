@@ -427,7 +427,7 @@ def _tally_tx_validity(case: Any, tally: Dict[str, Counter]) -> None:
     for tx in rejected:
         if tx.error == "GAS_LIMIT_EXCEEDS_MAXIMUM":
             kind = "above_total_cap"
-        elif tx.error == "INTRINSIC_GAS_BELOW_FLOOR_GAS_COST":
+        elif tx.error.startswith("INTRINSIC_GAS_BELOW_FLOOR_GAS_COST"):
             kind = "floor_short"
         elif len(bytes(tx.data)) > 1024:
             kind = "floor_above_cap"

@@ -33,6 +33,7 @@ from ..fuzzer_bridge.generator import (
     _exact_charge_gas,
     account_charge_need,
     exact_charge_child_code,
+    generate_fuzzer_output,
 )
 from ..fuzzer_bridge.models import FuzzerOutput
 from .template import template_case
@@ -540,6 +541,19 @@ def test_every_max_nonce_axis_keeps_all_its_values() -> None:
     assert warnings_ == []
 
 
+def _drawn(shape: Any) -> FuzzerOutput:
+    """The first generated case that ``shape`` accepts."""
+    for seed in range(3000):
+        case = generate_fuzzer_output(Amsterdam, seed)
+        if shape(case):
+            return case
+    raise AssertionError("no generated case holds the shape")
+
+
+def _validity_case(error: str) -> FuzzerOutput:
+    return _drawn(lambda c: any(tx.error == error for tx in c.transactions))
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -547,6 +561,19 @@ def test_every_max_nonce_axis_keeps_all_its_values() -> None:
         pytest.param(
             lambda: _max_nonce_case([2**64 - 2, 2**64 - 1]),
             id="nonce_at_the_highest",
+        ),
+        pytest.param(
+            lambda: _drawn(lambda c: c.bal_cap_offset is not None).model_copy(
+                update={"bal_cap_offset": -1}
+            ),
+            id="bal_one_item_over_the_cap",
+        ),
+        *(
+            pytest.param(lambda error=error: _validity_case(error), id=error)
+            for error in (
+                "INTRINSIC_GAS_TOO_LOW",
+                "INTRINSIC_GAS_BELOW_FLOOR_GAS_COST|INTRINSIC_GAS_TOO_LOW",
+            )
         ),
     ],
 )

@@ -405,6 +405,9 @@ class EvmoneExceptionMapper(ExceptionMapper):
         BlockException.SYSTEM_CONTRACT_CALL_FAILED: (
             "system contract empty or failed"
         ),
+        BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
+            "block access list exceeds gas limit"
+        ),
     }
     mapping_regex: ClassVar[Dict[ExceptionBase, str]] = {
         # Newer evmone t8n builds (the Amsterdam t8n, a4664725) report an
