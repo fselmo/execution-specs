@@ -17,6 +17,7 @@ from ..fuzzer_bridge.campaign import (
     normalize_error,
     per_client_signatures,
     render_report,
+    retain_batches,
     shard_path,
 )
 from ..fuzzer_bridge.generator import GENERATOR_VERSION
@@ -161,6 +162,8 @@ class _FakePool:
     """
 
     negative: Any = staticmethod(lambda _seed: False)
+    rejected: Any = staticmethod(lambda _seed: False)
+    """Seeds whose one block the fixture expects rejected."""
     worker_results: Any = staticmethod(lambda _seeds: {})
     """Extra fields of a slice's summary, as a fill worker returns them."""
 
@@ -174,14 +177,19 @@ class _FakePool:
         from concurrent.futures import Future
 
         seeds, fixtures_dir = args[0], args[1]
+
+        def block(s: int) -> Dict[str, Any]:
+            header = {"number": "0x1", "hash": _hash(s)}
+            if type(self).rejected(s):
+                return {
+                    "expectException": "BlockException.INVALID_GAS_USED",
+                    "rlp_decoded": {"blockHeader": header},
+                }
+            return {"blockHeader": header, "blockAccessList": []}
+
         fixtures = {
             f"seed_{s}": {
-                "blocks": [
-                    {
-                        "blockHeader": {"number": "0x1", "hash": _hash(s)},
-                        "blockAccessList": [],
-                    }
-                ],
+                "blocks": [block(s)],
                 "seed": s,
                 **(
                     {"_info": {"negative": {"family": "header"}}}
@@ -569,6 +577,82 @@ def test_a_tagged_stderr_line_is_logged_counted_and_keeps_its_batch(
     report = (tmp_path / "out" / "report.md").read_text()
     row = "| parallel retries/fallbacks (BAL-RETRY, BAL-FALLBACK) | 1, 0 |"
     assert row in report
+
+
+class _InvalidFallbackRunner(_FakeRunner):
+    """
+    Passes everything, and prints a fallback on every block expected
+    rejected: the correct behavior on a block meant to be invalid.
+    """
+
+    def run_file(self, path: Path, fixture_names: Any) -> Dict[str, Verdict]:
+        names = list(fixture_names)
+        fixtures = json.loads(path.read_text())
+        lines = []
+        for name in names:
+            for block in fixtures[name]["blocks"]:
+                if "expectException" in block:
+                    header = block["rlp_decoded"]["blockHeader"]
+                    lines.append(
+                        f"BAL-FALLBACK block={int(header['number'], 16)} "
+                        f"hash={header['hash']}"
+                    )
+        self.last_stderr = "\n".join(lines) + "\n"
+        return super().run_file(path, names)
+
+
+def test_a_fallback_on_a_block_expected_rejected_keeps_no_batch(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A fallback on a block the fixture expects rejected is the client doing
+    its job: the line is counted and logged, but it neither alerts nor
+    keeps its batch, so every batch is deleted once judged.
+    """
+    from ..fuzzer_bridge import campaign as campaign_module
+
+    sent: List[str] = []
+    monkeypatch.setattr(campaign_module, "send_alert", sent.append)
+    monkeypatch.setattr(_FakePool, "rejected", staticmethod(lambda s: s == 7))
+    failing = {"geth": lambda _s: False, "nethermind": lambda _s: False}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        runner=lambda name, flags: (
+            _InvalidFallbackRunner(name, failing[name], None, flags)
+            if name == "nethermind"
+            else _FakeRunner(name, failing[name], None, flags)
+        ),
+        count=60,
+        batch=20,
+        baseline=False,
+    )
+    assert state.counts["BAL-FALLBACK"] == 1
+    assert sent == []
+    assert state.kept_batches == []
+    assert list((tmp_path / "out" / "fixtures").glob("*.json")) == []
+
+
+def test_kept_batches_over_the_cap_keep_the_newest_per_reason() -> None:
+    """
+    Past the cap the oldest kept batches go, but the newest kept for each
+    reason stays; when those alone are over, the overflow is reported.
+    """
+    kept = [
+        {"file": "a", "bytes": 100, "reasons": ["masked"]},
+        {"file": "b", "bytes": 100, "reasons": ["finding:x"]},
+        {"file": "c", "bytes": 100, "reasons": ["masked"]},
+        {"file": "d", "bytes": 100, "reasons": ["finding:x", "fill_error"]},
+    ]
+    retained, removed, overflow = retain_batches(kept, 250)
+    assert [e["file"] for e in removed] == ["a", "b"]
+    assert [e["file"] for e in retained] == ["c", "d"]
+    assert overflow == 0
+    retained, removed, overflow = retain_batches(kept, 150)
+    assert [e["file"] for e in retained] == ["c", "d"]
+    assert overflow == 50
+    assert retain_batches(kept, 400) == (kept, [], 0)
 
 
 def test_a_contrast_run_that_never_reports_fails_the_campaign(

@@ -376,6 +376,9 @@ class CampaignState:
     parallel: Dict[str, Dict[str, int]] = field(default_factory=dict)
     """Per lane, BAL-carrying blocks judged and how many it decided to run
     in parallel, from the series' `FUZZ-PAR-DECISION` lines."""
+    kept_batches: List[Dict[str, Any]] = field(default_factory=list)
+    """The batch files kept after judging, oldest first: each one's name,
+    size and the reasons it was kept (see `KEEP_REASONS`)."""
     negatives: Dict[str, List[int]] = field(default_factory=dict)
     """Per client, [answered INVALID, judged] over the negative cases it
     returned a verdict on. A pass on a negative fixture is the client
@@ -613,6 +616,7 @@ class CampaignState:
                 timing=data.get("timing", {}),
                 parallel=data.get("parallel", {}),
                 negatives=data.get("negatives", {}),
+                kept_batches=data.get("kept_batches", []),
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
             return state
@@ -651,6 +655,7 @@ class CampaignState:
                     "running_seconds": self.active_seconds(),
                     "parallel": self.parallel,
                     "negatives": self.negatives,
+                    "kept_batches": self.kept_batches,
                     # Written for readers of the file, the status page
                     # among them, so none has to derive it.
                     "summary": {
@@ -1879,6 +1884,9 @@ class CampaignOptions:
     fresh: bool = False
     baseline: bool = True
     keep_fixtures: bool = False
+    max_kept_bytes: Optional[int] = None
+    """A backstop on the batch files kept after judging: past it the
+    oldest go, but the newest kept for each reason stays."""
     invariant_checks: bool = False
     known: Tuple[KnownSignature, ...] = ()
     runner_flags: Mapping[str, Sequence[str]] = field(default_factory=dict)
@@ -2392,7 +2400,10 @@ def run_campaign(
                 int(slice_result["rss_mb"]),
             )
 
-            keep_file = False
+            # Why the batch file outlives its judging; empty, it is deleted.
+            kept_for: Set[str] = set()
+            if fill_errors or slice_result.get("timeouts"):
+                kept_for.add("fill_error")
             batch_negatives: Dict[str, List[int]] = {}
             runner_seconds: Dict[str, float] = {}
             if names:
@@ -2441,9 +2452,6 @@ def run_campaign(
                     decided, options.health.parallel_baseline_blocks
                 )
                 if tagged:
-                    # The batch is kept so each line can be traced to its
-                    # fixture; the tag names the block, not the test.
-                    keep_file = True
                     with (output / "stderr_tags.log").open("a") as log:
                         for lane, line in tagged:
                             log.write(f"{batch_file.name}\t{lane}\t{line}\n")
@@ -2461,6 +2469,9 @@ def run_campaign(
                     # retry is correct, and it only counts.
                     masked = expected_valid_lines(tagged, batch_fixtures)
                     if masked:
+                        # Kept so each line can be traced to its fixture;
+                        # the tag names the block, not the test.
+                        kept_for.add("masked")
                         failure = send_alert(
                             masked_failure_alert(output.name, seeds, masked)
                         )
@@ -2491,11 +2502,11 @@ def run_campaign(
                     ) + len(found.disagreements)
                     case_events.update(found.events)
                     for fixture_name, differing in found.disagreements.items():
-                        keep_file = True
                         signature = (
                             f"producer:{options.producer_name}",
                             "header: " + ", ".join(differing),
                         )
+                        kept_for.add(f"finding:{signature_id(signature)}")
                         bundle = corpus_dir / signature_id(signature)
                         new = state.record_signature(
                             signature[0],
@@ -2544,6 +2555,8 @@ def run_campaign(
                         name: results[name][fixture_name] for name in judges
                     }
                     verdicts, errored = partition_runner_errors(verdicts)
+                    if errored:
+                        kept_for.add("runner_error")
                     if fixture_name in negative_names:
                         # The fixture expects INVALID, so a pass is the
                         # client refusing the modified block.
@@ -2620,6 +2633,8 @@ def run_campaign(
                         )
                         signature = (lane, reason)
                         known = is_known(signature, options.known)
+                        if not known:
+                            kept_for.add(f"finding:{signature_id(signature)}")
                         bundle = corpus_dir / signature_id(signature)
                         new = state.record_signature(
                             signature[0],
@@ -2630,7 +2645,6 @@ def run_campaign(
                             events=events,
                         )
                         if new and not known:
-                            keep_file = True
                             if shard_fixtures is None:
                                 shard_fixtures = json.loads(
                                     batch_file.read_text()
@@ -2653,6 +2667,8 @@ def run_campaign(
                             )
                     kind = classify(verdicts)
                     state.counts[kind] = state.counts.get(kind, 0) + 1
+                    if kind == "all-fail":
+                        kept_for.add("all-fail")
                     for name, verdict in verdicts.items():
                         if not verdict.passed:
                             state.client_failures[name] = (
@@ -2663,6 +2679,8 @@ def run_campaign(
                         continue
                     for signature in per_client_signatures(verdicts):
                         known = is_known(signature, options.known)
+                        if not known:
+                            kept_for.add(f"finding:{signature_id(signature)}")
                         bundle = corpus_dir / signature_id(signature)
                         client, reason = signature
                         new = state.record_signature(
@@ -2675,7 +2693,6 @@ def run_campaign(
                             minimized=options.minimize and not known,
                         )
                         if new and not known:
-                            keep_file = True
                             if shard_fixtures is None:
                                 shard_fixtures = json.loads(
                                     batch_file.read_text()
@@ -2726,7 +2743,37 @@ def run_campaign(
                     write_report()
                     raise SilentContrastError(silent)
 
-                if not keep_file and not options.keep_fixtures:
+                if kept_for:
+                    state.kept_batches.append(
+                        {
+                            "file": batch_file.name,
+                            "bytes": batch_file.stat().st_size,
+                            "reasons": sorted(kept_for),
+                        }
+                    )
+                    if options.max_kept_bytes is not None:
+                        retained, removed, overflow = retain_batches(
+                            state.kept_batches, options.max_kept_bytes
+                        )
+                        state.kept_batches = retained
+                        for entry in removed:
+                            old = batch_file.with_name(entry["file"])
+                            old.unlink(missing_ok=True)
+                            old.with_suffix(".meta.json").unlink(
+                                missing_ok=True
+                            )
+                        state.counts["kept_batches_dropped"] = (
+                            state.counts.get("kept_batches_dropped", 0)
+                            + len(removed)
+                        )
+                        if overflow:
+                            state.counts["kept_bytes_overflow"] = overflow
+                            echo(
+                                f"  kept batches are {overflow} bytes over "
+                                f"the cap with only the newest per reason "
+                                "left"
+                            )
+                elif not options.keep_fixtures:
                     batch_file.unlink(missing_ok=True)
                     batch_file.with_suffix(".meta.json").unlink(
                         missing_ok=True
@@ -2847,6 +2894,51 @@ def run_campaign(
     state.save()
     write_report()
     return state
+
+
+KEEP_REASONS = (
+    "finding:<signature id>",
+    "masked",
+    "runner_error",
+    "fill_error",
+    "all-fail",
+)
+"""Why a batch file is kept after judging: a finding not marked known (a
+divergence, contrast mismatch or producer disagreement, by signature),
+an all-fail, a retry or fallback on a block expected valid, a runner that
+lost a verdict, or a seed that failed or timed out filling. A fallback on
+a block expected invalid is correct behavior and keeps nothing; every
+other batch is deleted once judged."""
+
+
+def retain_batches(
+    kept: List[Dict[str, Any]], max_bytes: int
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
+    """
+    The kept batches to retain under ``max_bytes``, those to delete, and
+    how far over the cap the retained still are.
+
+    The oldest go first, but never the newest batch kept for a reason:
+    when those alone exceed the cap, the overflow is reported, not cut.
+    """
+    total = sum(entry["bytes"] for entry in kept)
+    if total <= max_bytes:
+        return kept, [], 0
+    newest = {
+        reason: index
+        for index, entry in enumerate(kept)
+        for reason in entry["reasons"]
+    }
+    protected = set(newest.values())
+    removed = []
+    for index, entry in enumerate(kept):
+        if total <= max_bytes:
+            break
+        if index not in protected:
+            removed.append(entry)
+            total -= entry["bytes"]
+    retained = [entry for entry in kept if entry not in removed]
+    return retained, removed, max(0, total - max_bytes)
 
 
 MASKED_TAGS = ("BAL-RETRY", "BAL-FALLBACK")

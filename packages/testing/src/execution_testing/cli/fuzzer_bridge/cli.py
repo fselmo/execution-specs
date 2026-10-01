@@ -270,6 +270,11 @@ def campaign(
         fresh=fresh,
         baseline=not no_baseline,
         keep_fixtures=keep_fixtures,
+        max_kept_bytes=(
+            int(campaign_config.max_kept_gb * 2**30)
+            if campaign_config.max_kept_gb is not None
+            else None
+        ),
         invariant_checks=invariant_checks,
         known=tuple((k.client, k.reason) for k in campaign_config.known),
         runner_flags={

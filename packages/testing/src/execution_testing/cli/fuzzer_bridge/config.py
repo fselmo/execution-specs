@@ -332,6 +332,10 @@ class CampaignConfig(BaseModel):
     reproduce_runs: int = 5
     """Times a new finding's case is judged again alone, and again under
     load; 0 skips it."""
+    max_kept_gb: Optional[float] = Field(default=None, gt=0)
+    """A backstop on the batch files kept after judging, in GiB: past it
+    the oldest go, but the newest kept for each reason stays, and any
+    overflow is reported. None keeps every one the keep rule keeps."""
     contrast_every: int = Field(default=1, ge=1)
     """Run the contrast lanes on one batch in this many; see
     `CampaignOptions.contrast_every`."""
