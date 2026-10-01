@@ -254,6 +254,30 @@ def test_a_delivered_list_equal_to_the_true_one_fails_the_self_check(
     assert "the delivered list is the true one" in failed
 
 
+def test_a_delivered_negative_that_did_not_apply_passes_the_self_check(
+    clean: Dict[str, Any],
+) -> None:
+    """
+    A drawn kind with nothing to change in its block (`move_index` on a
+    list with one index) leaves the case clean, recorded as not applied:
+    the self-check imports it as the valid case it is rather than demand
+    a rejected last block (19 such cases in the v40 hour).
+    """
+    unapplied = {
+        **clean,
+        "_info": {
+            "negative": {
+                "family": "bal",
+                "kind": "move_index",
+                "pick": 0,
+                "variant": "delivered",
+                "applied": False,
+            }
+        },
+    }
+    assert mod._self_check_case(unapplied, Amsterdam) == ("", "")
+
+
 def test_a_clean_case_is_not_modified_in_the_blockchain_format() -> None:
     """Only an engine-format fill applies the draw."""
     negative = FuzzerNegativeInput(family="header", kind="number", pick=0)

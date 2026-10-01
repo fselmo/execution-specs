@@ -1704,7 +1704,7 @@ def _self_check_case(
     from .negative import delivered_list_fault
 
     negative = fixture.get("_info", {}).get("negative") or {}
-    if negative.get("variant") == "delivered":
+    if negative.get("variant") == "delivered" and negative.get("applied"):
         # EELS never reads the delivered list, so it cannot refuse this
         # block. What it can witness: the block is valid as delivered,
         # and the delivered list is not the one its header commits to.
@@ -2626,12 +2626,15 @@ def run_campaign(
                             fixture_name
                         ]
                 batch_failures = dict.fromkeys(judges, 0)
+                # A drawn negative the block had nothing to change for is
+                # filled clean: a valid case, judged as one.
                 negative_names = {
                     name
                     for name in names
                     if batch_fixtures.get(name, {})
                     .get("_info", {})
-                    .get("negative")
+                    .get("negative", {})
+                    .get("applied")
                 }
                 delivered_names = {
                     name

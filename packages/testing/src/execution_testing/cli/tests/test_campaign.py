@@ -194,7 +194,11 @@ class _FakePool:
                 "blocks": [block(s)],
                 "seed": s,
                 **(
-                    {"_info": {"negative": {"family": "header"}}}
+                    {
+                        "_info": {
+                            "negative": {"family": "header", "applied": True}
+                        }
+                    }
                     if type(self).negative(s)
                     else {}
                 ),
@@ -204,6 +208,7 @@ class _FakePool:
                             "negative": {
                                 "family": "bal",
                                 "variant": "delivered",
+                                "applied": True,
                             }
                         }
                     }
@@ -676,6 +681,44 @@ def test_a_lane_ignoring_the_delivered_list_is_not_judged_on_it(
     assert state.counts["delivered-ignored:nethermind"] == 3
     assert state.counts.get("divergence", 0) == 0
     assert state.signatures == {}
+
+
+def test_a_delivered_negative_that_did_not_apply_is_judged_as_valid(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A delivered-list negative the block had nothing to change for is a
+    clean case: every lane judges it, and none is excluded or counted.
+    """
+    monkeypatch.setattr(
+        _FakePool, "delivered", staticmethod(lambda s: s % 3 == 0)
+    )
+    real_submit = _FakePool.submit
+
+    def unapplied(self: Any, fn: Any, args: Any) -> Any:
+        future = real_submit(self, fn, args)
+        path = Path(future.result()["path"])
+        fixtures = json.loads(path.read_text())
+        for fixture in fixtures.values():
+            negative = fixture.get("_info", {}).get("negative")
+            if negative:
+                negative["applied"] = False
+        path.write_text(json.dumps(fixtures))
+        return future
+
+    monkeypatch.setattr(_FakePool, "submit", unapplied)
+    failing = {"geth": lambda _s: False, "nethermind": lambda _s: False}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        count=9,
+        batch=9,
+        baseline=False,
+        delivered_bal={"geth": "attached"},
+    )
+    assert "delivered-ignored:nethermind" not in state.counts
+    assert state.counts["agreed"] == 9
 
 
 def test_an_attached_lane_accepting_a_delivered_list_is_a_finding(
