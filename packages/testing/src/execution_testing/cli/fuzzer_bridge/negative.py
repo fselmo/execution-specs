@@ -30,12 +30,15 @@ be a negative on the engine path: a client derives the header's list hash
 from the list it is given, so the block hash no longer matches and the
 payload is refused on its hash before any list check runs (669 besu and
 nethermind failures at v32 were that, not client bugs). It is the import
-lane's negative instead (`delivered_list_fixture`): a block-test runner
-attaches the fixture's own list to the block it imports, so a client that
-executes from the delivered list, or checks it, must refuse it, and one
-that rebuilds its own and ignores it passes. EELS cannot witness it, since
-its import never reads that list; each kind is proven on a client that
-attaches the list and on a stock build that does not.
+lane's instead (`delivered_list_fixture`): a block-test runner attaches
+the fixture's own list to the block it imports, so a client that executes
+from the delivered list, or checks it, refuses it, and one that rebuilds
+its own and ignores it imports it. The block itself is valid, its header
+committing to the true list, so which answer is right depends on the
+runner, and the fixture format cannot yet say "valid block, bad delivered
+list": the campaign records each lane's answer and judges none. EELS cannot
+witness it, since its import never reads that list; each kind was proven
+on a client that attaches the list and on a stock build that does not.
 
 A client that answers VALID to a negative case fails its fixture, as one
 that answers INVALID to a clean case does: both are findings, through the

@@ -172,24 +172,6 @@ def partition_rejections(
     return ran, rejected
 
 
-def partition_delivered_bal(
-    verdicts: Mapping[str, Verdict], delivered_bal: Mapping[str, str]
-) -> "Tuple[Dict[str, Verdict], Dict[str, Verdict]]":
-    """
-    Split a delivered-list negative's verdicts into the lanes that attach
-    the list and those that ignore it. A lane that ignores it imports the
-    block, which is right for it, so it is excluded from both sides of the
-    comparison as a refusal is.
-    """
-    judged, ignoring = {}, {}
-    for name, verdict in verdicts.items():
-        if delivered_bal.get(name) == "attached":
-            judged[name] = verdict
-        else:
-            ignoring[name] = verdict
-    return judged, ignoring
-
-
 def partition_runner_errors(
     verdicts: Mapping[str, Verdict],
 ) -> "Tuple[Dict[str, Verdict], Dict[str, Verdict]]":
@@ -394,6 +376,9 @@ class CampaignState:
     parallel: Dict[str, Dict[str, int]] = field(default_factory=dict)
     """Per lane, BAL-carrying blocks judged and how many it decided to run
     in parallel, from the series' `FUZZ-PAR-DECISION` lines."""
+    delivered: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    """Per lane, how often it refused and imported an import-lane
+    delivered-list negative. Informational only: see `delivered_bal`."""
     kept_batches: List[Dict[str, Any]] = field(default_factory=list)
     """The batch files kept after judging, oldest first: each one's name,
     size and the reasons it was kept (see `KEEP_REASONS`)."""
@@ -635,6 +620,7 @@ class CampaignState:
                 parallel=data.get("parallel", {}),
                 negatives=data.get("negatives", {}),
                 kept_batches=data.get("kept_batches", []),
+                delivered=data.get("delivered", {}),
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
             return state
@@ -674,6 +660,7 @@ class CampaignState:
                     "parallel": self.parallel,
                     "negatives": self.negatives,
                     "kept_batches": self.kept_batches,
+                    "delivered": self.delivered,
                     # Written for readers of the file, the status page
                     # among them, so none has to derive it.
                     "summary": {
@@ -854,6 +841,16 @@ def render_report(
         f"| fill errors | {fill_errors} "
         f"({fill_error_rate:.1%} of {generated} candidates) |",
     ]
+    if state.delivered:
+        lines.append(
+            "| delivered-list negatives, refused/imported "
+            "(informational) | "
+            + ", ".join(
+                f"{lane} {o['refused']}/{o['imported']}"
+                for lane, o in sorted(state.delivered.items())
+            )
+            + " |"
+        )
     if state.counts.get("routed-to-eels"):
         lines.append(
             f"| filled by EELS, the producer cannot | "
@@ -1954,9 +1951,9 @@ class CampaignOptions:
     keep_fixtures: bool = False
     delivered_bal: Mapping[str, str] = field(default_factory=dict)
     """Per client, `attached` when its block-test runner attaches and
-    validates the list a delivered-list negative carries; any other
-    client is not judged on those cases. See
-    `ClientConfig.delivered_bal`."""
+    validates the list a delivered-list negative carries. Shown beside
+    each lane's delivered-list outcomes in the report; it judges nothing.
+    See `ClientConfig.delivered_bal`."""
     max_kept_bytes: Optional[int] = None
     """A backstop on the batch files kept after judging: past it the
     oldest go, but the newest kept for each reason stays."""
@@ -2649,21 +2646,25 @@ def run_campaign(
                     verdicts, errored = partition_runner_errors(verdicts)
                     if errored:
                         kept_for.add("runner_error")
-                    delivered = fixture_name in delivered_names
-                    if delivered:
-                        verdicts, ignoring = partition_delivered_bal(
-                            verdicts, options.delivered_bal
-                        )
-                        for name in ignoring:
-                            key = f"delivered-ignored:{name}"
-                            state.counts[key] = state.counts.get(key, 0) + 1
-                        if not verdicts:
-                            # No lane here attaches the list: nothing
-                            # judges the case.
-                            state.counts["delivered-unjudged"] = (
-                                state.counts.get("delivered-unjudged", 0) + 1
+                    if fixture_name in delivered_names:
+                        # Informational only: the block is valid, its header
+                        # committing to the true list, and only the
+                        # delivered list is wrong, which the fixture format
+                        # cannot yet express. Each lane's outcome is
+                        # recorded; none is a finding or fails a lane.
+                        for name, verdict in verdicts.items():
+                            outcome = state.delivered.setdefault(
+                                name, {"refused": 0, "imported": 0}
                             )
-                            continue
+                            # The fixture expects a rejection, so a pass is
+                            # the lane refusing the delivered list.
+                            outcome[
+                                "refused" if verdict.passed else "imported"
+                            ] += 1
+                        state.counts["delivered-informational"] = (
+                            state.counts.get("delivered-informational", 0) + 1
+                        )
+                        continue
                     if fixture_name in negative_names:
                         # The fixture expects INVALID, so a pass is the
                         # client refusing the modified block.
@@ -2704,12 +2705,6 @@ def run_campaign(
                     events = case_events.get(fixture_name, [])
                     for lane, other in contrast_results.items():
                         name = contrast_runners[lane][0]
-                        if fixture_name in delivered_names:
-                            # A contrast weighs two paths of one client; a
-                            # delivered list's validity is the primary's to
-                            # judge, and a sequential path that never reads
-                            # it would mismatch on every such case.
-                            continue
                         primary = results[name][fixture_name]
                         tally = state.contrast.setdefault(
                             lane, {"compared": 0, "mismatches": 0}
@@ -2788,12 +2783,7 @@ def run_campaign(
                                 state.client_failures.get(name, 0) + 1
                             )
                             batch_failures[name] += 1
-                    # Every judged lane accepting a delivered list is a
-                    # finding, not a suspect fixture: EELS cannot refuse
-                    # it, and a lane attaching the list must.
-                    if kind != "divergence" and not (
-                        delivered and kind == "all-fail"
-                    ):
+                    if kind != "divergence":
                         continue
                     for signature in per_client_signatures(verdicts):
                         known = is_known(signature, options.known)

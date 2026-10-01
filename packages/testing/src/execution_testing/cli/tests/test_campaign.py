@@ -653,14 +653,14 @@ def test_a_fallback_on_a_block_expected_rejected_keeps_no_batch(
     assert list((tmp_path / "out" / "fixtures").glob("*.json")) == []
 
 
-def test_a_lane_ignoring_the_delivered_list_is_not_judged_on_it(
+def test_delivered_list_negatives_are_recorded_never_judged(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     """
-    Nethermind's runner here ignores the delivered list, so it imports the
-    delivered-list negatives, which is right for it: those cases are left
-    out of its comparison and counted, and geth, which attaches the list
-    and refuses them, stands alone without a finding.
+    An import-lane delivered-list negative is a valid block with a wrong
+    delivered list, which the fixture cannot yet express: each lane's
+    answer is recorded, refused or imported, and none is a finding,
+    counts as a failure, or keeps its batch, whichever way lanes split.
     """
     monkeypatch.setattr(
         _FakePool, "delivered", staticmethod(lambda s: s % 3 == 0)
@@ -676,11 +676,18 @@ def test_a_lane_ignoring_the_delivered_list_is_not_judged_on_it(
         count=9,
         batch=9,
         baseline=False,
-        delivered_bal={"geth": "attached", "nethermind": "ignored"},
+        delivered_bal={"geth": "attached"},
     )
-    assert state.counts["delivered-ignored:nethermind"] == 3
-    assert state.counts.get("divergence", 0) == 0
-    assert state.signatures == {}
+    assert state.delivered == {
+        "geth": {"refused": 3, "imported": 0},
+        "nethermind": {"refused": 0, "imported": 3},
+    }
+    assert state.counts["delivered-informational"] == 3
+    assert state.counts["agreed"] == 6
+    assert state.signatures == {} and state.client_failures == {}
+    assert state.kept_batches == []
+    report = (tmp_path / "out" / "report.md").read_text()
+    assert "geth 3/0, nethermind 0/3" in report
 
 
 def test_a_delivered_negative_that_did_not_apply_is_judged_as_valid(
@@ -717,32 +724,8 @@ def test_a_delivered_negative_that_did_not_apply_is_judged_as_valid(
         baseline=False,
         delivered_bal={"geth": "attached"},
     )
-    assert "delivered-ignored:nethermind" not in state.counts
+    assert state.delivered == {}
     assert state.counts["agreed"] == 9
-
-
-def test_an_attached_lane_accepting_a_delivered_list_is_a_finding(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
-    """
-    Geth attaches the delivered list, so accepting a block whose list is
-    wrong is a finding, though it is the only lane judging the case and
-    so the verdict is an all-fail rather than a divergence.
-    """
-    monkeypatch.setattr(_FakePool, "delivered", staticmethod(lambda s: s == 4))
-    failing = {"geth": lambda s: s == 4, "nethermind": lambda s: s == 4}
-    state = _campaign(
-        tmp_path,
-        monkeypatch,
-        failing,
-        count=9,
-        batch=9,
-        baseline=False,
-        delivered_bal={"geth": "attached"},
-    )
-    assert state.counts["delivered-ignored:nethermind"] == 1
-    (entry,) = state.signatures.values()
-    assert entry["client"] == "geth" and entry["count"] == 1
 
 
 class _ProducerThatCannotFill:

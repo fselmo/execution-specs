@@ -212,12 +212,11 @@ class ClientConfig(BaseModel):
     delivered_bal: Literal["attached", "ignored"] = "ignored"
     """Whether this client's block-test runner attaches the access list a
     fixture delivers with a block expected rejected (its
-    `rlp_decoded.blockAccessList`) and validates it. Only `attached` lanes
-    are judged on the import lane's delivered-list negatives; on the others
-    those cases are excluded from the comparison and counted, the way a
-    refusal is. A lane that ignores the list imports the block, which is
-    right for it, so `ignored` is the default until a runner is proven.
-    Contrast runs are never judged on those cases."""
+    `rlp_decoded.blockAccessList`) and validates it. The import lane's
+    delivered-list negatives are informational: each lane's answer is
+    recorded and none is judged, since the block is valid and only the
+    delivered list is wrong. This says which answer to expect of a lane,
+    for reading those records; `ignored` until a runner is proven."""
     contrasts: Dict[str, ContrastRun] = Field(default_factory=dict)
     """Further contrast runs by name, for a client with more than one knob
     worth separating: erigon's `IGNORE_BAL` drops the BAL's scheduling
