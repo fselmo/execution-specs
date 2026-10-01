@@ -74,6 +74,8 @@ Where a client re-runs a block sequentially after its parallel executor failed (
 
 `sequentialResult` is `valid` or `invalid`, and `sequentialError` is empty when valid. The block's verdict in the runner's results stays the sequential one, as today.
 
+A block that falls back prints exactly two lines: its `balExecution` line with `path` `parallel`, then the `balFallback` line. The sequential re-run does not print a second `balExecution` line.
+
 ## Output and wiring
 
 - stdout carries only the runner's JSON results, whose format does not change. Both events go to stderr.
