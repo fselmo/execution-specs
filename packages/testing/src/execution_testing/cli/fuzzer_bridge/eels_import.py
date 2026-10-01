@@ -248,6 +248,53 @@ def _payload_blocks(
         yield build, new_payload.get("validationError")
 
 
+@dataclass(frozen=True)
+class BlockGas:
+    """A block's gas as the spec totals it, before taking the header's max."""
+
+    execution: int
+    state: int
+    receipts: int
+    """The last receipt's cumulative gas: what the senders paid."""
+
+
+def last_block_gas(
+    fixture: Mapping[str, Any], fork_short_name: str
+) -> Optional[BlockGas]:
+    """
+    The gas totals of ``fixture``'s last block, from importing every block
+    with the fork's `apply_body` watched; None if any block is refused.
+
+    A filled header carries only their max, and the transition tool
+    reports nothing finer, so the import is the one place both dimensions
+    are seen apart.
+    """
+    fork_module: Any = importlib.import_module(
+        f"ethereum.forks.{fork_short_name}.fork"
+    )
+    apply_body = fork_module.apply_body
+    outputs: List[Any] = []
+
+    def watched(*args: Any, **kwargs: Any) -> Any:
+        outputs.append(apply_body(*args, **kwargs))
+        return outputs[-1]
+
+    fork_module.apply_body = watched
+    try:
+        if not import_fixture(fixture, fork_short_name).agreed:
+            return None
+    finally:
+        fork_module.apply_body = apply_body
+    last = outputs[-1]
+    return BlockGas(
+        execution=int(last.block_gas_used),
+        state=int(getattr(last, "block_state_gas_used", 0)),
+        receipts=int(
+            getattr(last, "cumulative_gas_used", last.block_gas_used)
+        ),
+    )
+
+
 def import_fixture(
     fixture: Mapping[str, Any], fork_short_name: str
 ) -> ImportResult:

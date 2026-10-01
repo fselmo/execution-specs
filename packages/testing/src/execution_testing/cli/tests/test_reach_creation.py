@@ -355,7 +355,9 @@ def test_every_creation_axis_keeps_all_its_values() -> None:
 
 def test_every_deployer_axis_keeps_all_its_values() -> None:
     """Presence, both opcodes, and empty and non-empty initcode stay drawn."""
-    coverage = axis_coverage(Amsterdam, range(0, 400))
+    # The max-nonce deployer is about 11% of some 80 deployers in 400
+    # seeds; seeds 0-399 drew 3 of them at v37.
+    coverage = axis_coverage(Amsterdam, range(0, 800))
     warnings_ = [
         w for w in axis_collapse_warnings(coverage) if w.startswith("deployer")
     ]

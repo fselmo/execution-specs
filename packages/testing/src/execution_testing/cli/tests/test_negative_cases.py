@@ -3,15 +3,16 @@ Negative cases: a filled block modified so every client must refuse it.
 
 Each kind is witnessed on EELS: its engine fixture, imported as
 `newPayload` receives it, must hash to its block hash and then be refused
-with the exception it names. Each kind is also filled in the blockchain
-format, where the same case unmodified imports and the two headers differ
-only where the kind says.
+with the exception it names. Each kind but the encodings, which a block's
+RLP cannot carry, is also filled in the blockchain format, where the same
+case unmodified imports and the two headers differ only where the kind
+says.
 """
 
 import contextlib
 import io
 import warnings
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Iterable, List, Optional, Type
 
 import pytest
 
@@ -30,14 +31,16 @@ from ..fuzzer_bridge.generator import generate_fuzzer_output
 from ..fuzzer_bridge.measured_gas import measuring_filler, resolve_measured_gas
 from ..fuzzer_bridge.models import FuzzerNegativeInput, FuzzerOutput
 from ..fuzzer_bridge.negative import (
-    BAL_KINDS,
-    HEADER_KINDS,
+    LIST_FAMILIES,
+    NEGATIVE_KINDS,
     last_block_overrides,
     modify_last_block,
 )
 
-SEED = 1
-"""A one-block case whose list every BAL modification can change."""
+SEED = 10
+"""A one-block case every kind can modify: its list has a list of two
+entries to reverse, and its execution gas, state gas and receipts total
+three different numbers."""
 
 HEADER_FIELD = {
     "number": "number",
@@ -45,6 +48,8 @@ HEADER_FIELD = {
     "gas_used": "gasUsed",
     "receipts_root": "receiptTrie",
     "requests": "requestsHash",
+    "gas_used_sum": "gasUsed",
+    "gas_used_receipts": "gasUsed",
 }
 """The fixture header field each header kind changes."""
 
@@ -87,18 +92,19 @@ def _header_diff(clean: Dict[str, Any], modified: Dict[str, Any]) -> set:
     return {f for f in before if f != "hash" and before[f] != after.get(f)}
 
 
+def _draws(families: Iterable[str]) -> List[Any]:
+    return [
+        pytest.param({"family": family, "kind": kind}, id=f"{family}-{kind}")
+        for family in families
+        for kind in NEGATIVE_KINDS[family]
+    ]
+
+
+ALL_DRAWS = _draws(NEGATIVE_KINDS)
+
+
 @pytest.mark.parametrize(
-    "draw",
-    [
-        *(
-            pytest.param({"family": "header", "kind": kind}, id=kind)
-            for kind in HEADER_KINDS
-        ),
-        *(
-            pytest.param({"family": "bal", "kind": kind}, id=f"bal-{kind}")
-            for kind in BAL_KINDS
-        ),
-    ],
+    "draw", _draws(f for f in NEGATIVE_KINDS if f != "encoding")
 )
 def test_a_modified_block_is_refused_by_eels(
     clean: Dict[str, Any], draw: Dict[str, Any]
@@ -117,23 +123,11 @@ def test_a_modified_block_is_refused_by_eels(
     assert result.agreed, result.reason
     if draw["family"] == "header":
         expected = {HEADER_FIELD[draw["kind"]]}
-    elif draw["family"] == "bal":
+    elif draw["family"] in LIST_FAMILIES:
         expected = {"blockAccessListHash"}
     else:
         raise ValueError(draw["family"])
     assert _header_diff(clean, modified) == expected
-
-
-ALL_DRAWS = [
-    *(
-        pytest.param({"family": "header", "kind": kind}, id=kind)
-        for kind in HEADER_KINDS
-    ),
-    *(
-        pytest.param({"family": "bal", "kind": kind}, id=f"bal-{kind}")
-        for kind in BAL_KINDS
-    ),
-]
 
 
 def _engine_negative(draw: Dict[str, Any]) -> Dict[str, Any]:
@@ -180,8 +174,8 @@ def test_a_refusal_for_another_reason_is_a_disagreement() -> None:
 
 def test_negatives_are_drawn_only_where_no_block_is_rejected() -> None:
     """
-    A case that already rejects a block is never drawn negative, and both
-    families are drawn among the rest.
+    A case that already rejects a block is never drawn negative, and every
+    family is drawn among the rest.
     """
     families = set()
     for seed in range(300):
@@ -189,13 +183,13 @@ def test_negatives_are_drawn_only_where_no_block_is_rejected() -> None:
         if case.negative is not None:
             assert not any(tx.error for tx in case.transactions)
             families.add(case.negative.family)
-    assert families == {"bal", "header"}
+    assert families == set(NEGATIVE_KINDS)
 
 
 def test_every_negative_axis_keeps_all_its_values() -> None:
     """
-    Presence, both families and every kind stay drawn.
-    A tenth of cases split fourteen ways needs more seeds than the other
+    Presence, every family and every kind stay drawn.
+    A tenth of cases split twenty-four ways needs more seeds than the other
     axes to see each kind.
     """
     coverage = axis_coverage(Amsterdam, range(0, 2000))

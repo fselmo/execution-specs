@@ -35,7 +35,7 @@ from collections import Counter
 from math import erfc, exp, lgamma, log, sqrt
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
-from .negative import BAL_KINDS, HEADER_KINDS
+from .negative import NEGATIVE_KINDS
 
 if TYPE_CHECKING:
     from execution_testing.forks import Fork
@@ -539,8 +539,7 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "delegated_target": Counter(),
         "negative_case": Counter(),
         "negative_family": Counter(),
-        "negative_bal_kind": Counter(),
-        "negative_header_kind": Counter(),
+        **{f"negative_{family}_kind": Counter() for family in NEGATIVE_KINDS},
         "deployer_initcode": Counter(),
     }
     reads = _blockhash_signatures()
@@ -811,9 +810,11 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "delegated_target": ("warm", "cold"),
     "deployer_initcode": ("empty", "nonempty"),
     "negative_case": ("present", "absent"),
-    "negative_family": ("bal", "header"),
-    "negative_bal_kind": BAL_KINDS,
-    "negative_header_kind": HEADER_KINDS,
+    "negative_family": tuple(NEGATIVE_KINDS),
+    **{
+        f"negative_{family}_kind": kinds
+        for family, kinds in NEGATIVE_KINDS.items()
+    },
 }
 """Every axis whose values must all keep appearing. Adding a dimension to
 the generator means adding it here, or its collapse goes unnoticed."""

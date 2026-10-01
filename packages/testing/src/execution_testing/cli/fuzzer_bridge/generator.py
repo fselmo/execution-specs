@@ -57,13 +57,13 @@ from .models import (
     FuzzerTransactionInput,
     FuzzerWithdrawalInput,
 )
-from .negative import BAL_KINDS, HEADER_KINDS
+from .negative import NEGATIVE_KINDS
 
 # Contract bodies and calldata come from the shared strategy library
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 36
+GENERATOR_VERSION = 37
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -1579,21 +1579,14 @@ def record_case(
     if not any(tx.error for tx in transactions) and d.flag(
         "negative", domains.negative_case_rate
     ):
+        families, shares = zip(*domains.negative_family_shares, strict=True)
         family = d.pick(
-            "negative/family",
-            ("bal", "header"),
-            weights=(
-                domains.negative_bal_share,
-                1 - domains.negative_bal_share,
-            ),
-            kind=STRUCTURAL,
+            "negative/family", families, weights=shares, kind=STRUCTURAL
         )
         g = d.unit(f"negative/family:{family}")
         negative = FuzzerNegativeInput(
             family=family,
-            kind=g.pick(
-                "kind", BAL_KINDS if family == "bal" else HEADER_KINDS
-            ),
+            kind=g.pick("kind", NEGATIVE_KINDS[family]),
             pick=g.bits("pick", 32),
         )
 

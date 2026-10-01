@@ -349,9 +349,15 @@ class ValueDomains:
     """Share of cases whose last block is modified to be rejected: its
     block access list, or one header field. Drawn only for a case with no
     block already expected rejected."""
-    negative_bal_share: float = 0.6
-    """Share of negative cases modifying the block access list; the rest
-    corrupt a header field."""
+    negative_family_shares: Tuple[Tuple[str, float], ...] = (
+        ("bal", 0.25),
+        ("form", 0.35),
+        ("encoding", 0.15),
+        ("header", 0.25),
+    )
+    """Share of negative cases in each family of `negative.NEGATIVE_KINDS`:
+    the list's content, its canonical form, its encoding, or a header
+    field. The form family is widest, eight kinds, and gets the most."""
     walk: WalkWeights = WALK_WEIGHTS
     gas_weights: MixtureWeights = GAS_WEIGHTS
     value_weights: MixtureWeights = VALUE_WEIGHTS
