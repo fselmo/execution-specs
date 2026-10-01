@@ -32,7 +32,9 @@ Timings: the 500-fixture engine batch at one worker, median of three runs on an 
 
 ## 1. Block-test delivers the access list
 
-Block-test attaches the fixture block's access list to the block before import: `blockAccessList`, or `rlp_decoded.blockAccessList` for an expected-invalid block. The client then validates it as it would a delivered list.
+Block-test attaches the fixture block's access list to the block before import: `blockAccessList`, or `rlp_decoded.blockAccessList` for an expected-invalid block.
+
+On this path the list is delivered beside the block, not as part of it. A delivered list that does not match the header's `blockAccessListHash` is a bad list, not an invalid block: the client must not use it, and should fall back to computing the list itself. The block's validity comes from the header alone, so a block whose only fault is its delivered list is a valid block on the import path.
 
 ## 2. Execution switch
 
@@ -40,7 +42,9 @@ One setting with two values on both runners: `parallel` (the default) and `seque
 
 - `parallel`: the client's BAL-driven parallel executor runs every block that has an access list.
 - `sequential`: the client's sequential executor runs every block.
-- Both modes validate the delivered access list against execution and the header hash. The switch chooses the executor, never whether the list is checked.
+- On the engine path the access list is part of the payload, and the header commits to it: a list that does not match the block's execution makes the payload INVALID, in either mode.
+- On the import path (§1), a delivered list that does not match the header's commitment is not used, in either mode, and the block is judged on its header.
+- The switch chooses the executor, never how the list is judged.
 
 Each client spells it in its own CLI style, reusing a flag the client already has:
 
@@ -91,4 +95,4 @@ The two events stay separate stderr lines for now. Later they may fold into the 
 
 ## Verification, per client
 
-Before a branch is pushed: a corrupted delivered access list is rejected; decision lines read `parallel` by default and `sequential`/`disabled` under the switch; where the client falls back, a forced parallel failure prints a `balFallback` line; the client's own tests for each touched package pass.
+Before a branch is pushed: on the engine path, a payload with a corrupted access list is INVALID in both modes; on the import path, a delivered list that does not match the header is not used and the block's verdict follows its header, in both modes; decision lines read `parallel` by default and `sequential`/`disabled` under the switch; where the client falls back, a forced parallel failure prints a `balFallback` line; the client's own tests for each touched package pass.
