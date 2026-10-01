@@ -8,18 +8,24 @@ The end goal is full standardization of these runners across clients: the same c
 
 Every client exposes its runners as `blocktest`, `enginetest` and `statetest`, as a subcommand or the client's nearest equivalent. Where a client uses another name today, the standard name is added as an alias and the old one keeps working. `statetest` is naming only in this round; nothing else about it changes.
 
-## 0. Engine-test drives the real Engine API handler
+## 0. Engine-test drives the real Engine API handler, and nothing else
 
-Engine-test runs the client's own Engine API handler in-process. Each payload goes through the code that serves `engine_newPayloadV<n>`, and each forkchoice update through the code that serves `engine_forkchoiceUpdatedV<n>`, at the versions the fixture names (`newPayloadVersion`, `forkchoiceUpdatedVersion`). The runner may not copy or re-implement the handler, its version checks or the validator, and may not swap a mock provider or executor for the node's own. The payload's access list reaches the validator exactly as it would from the wire. A runner that bypasses any of this can pass while the node fails.
+Engine-test calls the client's own Engine API handler: the code that serves `engine_newPayloadV<n>` and `engine_forkchoiceUpdatedV<n>`, at the versions the fixture names (`newPayloadVersion`, `forkchoiceUpdatedVersion`). The fixture's params are decoded with the client's own decoder, so the access list reaches the validator as it would from the wire.
 
-| Client | Payload at fixture version | Forkchoice at fixture version | Real handler and validator |
-|---|---|---|---|
-| reth | to do: new runner | to do | to do |
-| geth | `engine_newPayloadV<n>` over in-process RPC (`tests/engine_test_util.go:186`) | `engine_forkchoiceUpdatedV<n>` (`:259`); geth checks the version only against payload attributes, which fixtures never send | yes: `eth.New` backend plus `ConsensusAPI` (`cmd/evm/enginerunner.go:247-290`) |
-| besu | `EngineNewPayloadV1..V5` at the fixture version (`EngineTestSubCommand.java:665`) | `EngineForkchoiceUpdatedV1..V4` at the fixture version (`:633`, `:777`); anything but VALID fails | yes, after replacing `EvmToolMergeCoordinator` with the node's `MergeCoordinator` (`:487-517`) |
-| nethermind | `engine_newPayloadV<n>` at the fixture version, raw params through `IJsonRpcService` to `EngineRpcModule` (`BlockchainTestBase.cs:462`, `:479-480`) | `engine_forkchoiceUpdatedV<n>` at the fixture version (`:464`, `:805`); anything but VALID fails; head = safe = finalized | yes: production `MergePlugin` modules and block tree; only MemDb, timestamper and tx pool are test doubles |
-| ethrex | `engine_newPayloadV<n>` at the fixture version through `map_engine_requests` (`tooling/ef_tests/engine/src/harness.rs:147`, `crates/networking/rpc/rpc.rs:1558-1562`) | `engine_forkchoiceUpdatedV<n>` at the fixture version (`harness.rs:141`, `fork_choice.rs:120-276`); version checks only look at payload attributes | yes: the node's `RpcApiContext` and `Blockchain` |
-| erigon | engine_x tester's in-process node | to check | yes (full node) |
+- **Required:** the client's real handler, version checks, payload validator and engine tree (or execution module) run. Nothing is copied or re-implemented, and nothing is replaced with a mock provider or a direct executor call.
+- **Not allowed:** starting a node per fixture, and any RPC server, HTTP, JWT or networking. Payloads and forkchoice updates go straight to the handler as function calls.
+- **Lifetime:** one handler instance per runner process (per worker), reused across fixtures, with fresh in-memory or temporary state for each fixture.
+
+A runner that bypasses the real handler can pass while the node fails; a runner that starts a node per fixture is too slow and heavy to run campaigns through.
+
+| Client | Reaches the handler by | Started per fixture | ms per fixture (500-fixture engine batch, 1 worker) | Payload and forkchoice at fixture version | Real validator and engine tree |
+|---|---|---|---|---|---|
+| reth | node (`lcc2/ef-tests-engine-runner`); v2 to do | a full `EthereumNode`, auth RPC server, temp MDBX datadir | 580 (42 with the datadir on a RAM disk) | yes (`engine_api.rs:270`, `:348-452`); forkchoice version only checks payload attributes | yes |
+| geth | in-process RPC to `ConsensusAPI`; to re-check | an in-memory node with an `eth.New` backend (`cmd/evm/enginerunner.go:247-290`) | 34 | yes (`tests/engine_test_util.go:186`, `:259`); forkchoice version only checks payload attributes | yes |
+| besu | `EngineNewPayloadV1..V5` / `EngineForkchoiceUpdatedV1..V4` method objects; to re-check | to check | to measure | yes (`EngineTestSubCommand.java:665`, `:633`, `:777`); anything but VALID fails | yes, the node's `MergeCoordinator` (`:487-517`) |
+| nethermind | in-process RPC through `IJsonRpcService` to `EngineRpcModule`; to re-check | to check | 150 | yes (`BlockchainTestBase.cs:462`, `:464`, `:805`); head = safe = finalized | yes; MemDb, timestamper and tx pool are test doubles |
+| ethrex | in-process RPC dispatch through `map_engine_requests`; to re-check | to check (`RpcApiContext`, `Blockchain`) | to measure | yes (`harness.rs:147`, `:141`); forkchoice version only checks payload attributes | yes |
+| erigon | to do | to do (the engine_x tester starts a full node with an engine API port, so it is not the base) | to measure | to do | to do |
 
 ## 1. Block-test delivers the access list
 
