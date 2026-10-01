@@ -9,6 +9,7 @@ already there and a run can always say which commit it compared against.
 
 import hashlib
 import os
+import re
 import subprocess
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -247,6 +248,40 @@ def resolve_client(
     return ResolvedClient(client.name, binary, source, dict(client.env))
 
 
+ETHREX_VERSION = re.compile(r"^ethrex-(block|engine)test\b")
+"""ethrex's two runners, from its series: `ethrex-blocktest` judges
+`blockchain_test` fixtures and `ethrex-enginetest` judges
+`blockchain_test_engine` ones. EEST has no consumer class for either, so
+they are told apart by their `--version` line."""
+
+
+def native_version(
+    binary: Path, env: Optional[Mapping[str, str]] = None
+) -> Optional[str]:
+    """
+    The `--version` line of a runner EEST cannot detect, else None.
+
+    Only binaries named like ethrex's runners are asked, so no other
+    client's binary is run with a flag it may not take.
+    """
+    if not Path(binary).name.startswith("ethrex-"):
+        return None
+    try:
+        proc = subprocess.run(
+            [str(binary), "--version"],
+            capture_output=True,
+            text=True,
+            env={**os.environ, **(env or {})},
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    lines = (proc.stdout or "").strip().splitlines()
+    if lines and ETHREX_VERSION.match(lines[0]):
+        return lines[0]
+    return None
+
+
 def binary_version(
     binary: Path, env: Optional[Mapping[str, str]] = None
 ) -> str:
@@ -254,6 +289,9 @@ def binary_version(
     First version line of ``binary``, detected as a fixture runner or a
     t8n -- a client may be either, and `fuzz campaign` only needs the former.
     """
+    native = native_version(binary, env)
+    if native is not None:
+        return native
     failure: Exception = RuntimeError("no detection attempted")
     for tool_class in (FixtureConsumerTool, TransitionTool):
         try:

@@ -21,7 +21,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from execution_testing.client_clis import FixtureConsumerTool
 
-from .clients import client_environment
+from .clients import client_environment, native_version
 
 
 @dataclass(frozen=True)
@@ -164,15 +164,39 @@ ENGINE_RUNNERS = (
     "NethtestFixtureConsumer",
     "GethFixtureConsumer",
     "BesuFixtureConsumer",
+    "EthrexFixtureConsumer",
 )
 """Runners with an Engine API path wired: `nethtest --engineTest`, geth's
 `evm enginetest` (go-ethereum#34650, carried as a patch) and besu's
-`evmtool engine-test --json-array`. Each prints the same `name`, `pass`,
-`error` list its block runner does. Erigon has no engine runner."""
+`evmtool engine-test --json-array`, and ethrex's `ethrex-enginetest`
+(carried as a patch). Each prints the same `name`, `pass`, `error` list its
+block runner does. Erigon has no engine runner."""
 
 
 class EngineRunnerUnsupportedError(ValueError):
     """An engine-format campaign named a client with no engine runner."""
+
+
+def _native_kind(
+    name: str, binary: Path, env: Mapping[str, str], engine: bool
+) -> Optional[str]:
+    """
+    The kind of a runner EEST cannot detect, from its `--version` line.
+
+    None for every other binary, which EEST's detection then identifies. A
+    binary built for the other fixture format is refused here, since it
+    would judge every case as unreadable.
+    """
+    line = native_version(binary, env)
+    if line is None:
+        return None
+    if line.startswith("ethrex-enginetest") != engine:
+        wanted = "ethrex-enginetest" if engine else "ethrex-blocktest"
+        raise ValueError(
+            f"{name}: {line.split()[0]} judges the other fixture format; "
+            f"this campaign needs {wanted}"
+        )
+    return "EthrexFixtureConsumer"
 
 
 @dataclass
@@ -213,9 +237,13 @@ class FixtureRunner:
         environment; the runner then carries that environment into every
         run, and a contrast layers its overrides on top.
         """
-        with client_environment(env or {}):
-            consumer = FixtureConsumerTool.from_binary_path(binary_path=binary)
-        kind = type(consumer).__name__
+        kind = _native_kind(name, binary, env or {}, engine)
+        if kind is None:
+            with client_environment(env or {}):
+                consumer = FixtureConsumerTool.from_binary_path(
+                    binary_path=binary
+                )
+            kind = type(consumer).__name__
         if engine and kind not in ENGINE_RUNNERS:
             raise EngineRunnerUnsupportedError(
                 f"{name}: {kind} has no engine runner wired; an engine-format "
@@ -290,6 +318,8 @@ class FixtureRunner:
         self._last_error = ""
         if self.kind in ("GethFixtureConsumer", "ErigonFixtureConsumer"):
             verdicts = self._run_json_array(path)
+        elif self.kind == "EthrexFixtureConsumer":
+            verdicts = self._run_ethrex(path)
         elif self.kind == "EvmOneBlockchainFixtureConsumer":
             verdicts = self._run_gtest(path)
         elif self.kind == "BesuFixtureConsumer":
@@ -367,6 +397,16 @@ class FixtureRunner:
         if self.kind == "ErigonFixtureConsumer":
             args.append("--jsonout")
         proc = self._run([*args, *self.flags, str(path)])
+        verdicts = parse_json_array(proc.stdout)
+        if not verdicts and proc.returncode != 0:
+            return self._all_failed(
+                f"{RUNNER_ERROR_PREFIX}{proc.stderr.strip()[:200]}"
+            )
+        return verdicts
+
+    def _run_ethrex(self, path: Path) -> Dict[str, Verdict]:
+        # One binary per format, so no subcommand: the file and the flags.
+        proc = self._run([*self.flags, str(path)])
         verdicts = parse_json_array(proc.stdout)
         if not verdicts and proc.returncode != 0:
             return self._all_failed(

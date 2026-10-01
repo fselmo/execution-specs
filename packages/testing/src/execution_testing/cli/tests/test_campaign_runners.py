@@ -494,3 +494,117 @@ def test_nethtest_judges_generated_engine_fixtures() -> None:
         )
         verdicts = runner.run_file(path, list(fixtures))
     assert all(v.passed for v in verdicts.values()), verdicts
+
+
+ETHREX_BAL_ERROR = (
+    "block 0xa2747d8a4c7e2c46733c7dd75341cdd6e5f66dcb8d9dd7530ef49287e5894789 "
+    'unexpectedly failed: EvmError(Custom("BAL validation failed for tx 4: '
+    "account 0xaf68e84d67eff2fd6f508394ff060fdcbca7845b balance mismatch at "
+    "index 5: BAL=100017302975090648969, exec=100017302975090648968 "
+    '(diff=+1 wei)"))'
+)
+ETHREX_BLOCKTEST = json.dumps(
+    [
+        {"error": "", "fork": "Amsterdam", "name": "seed_0", "pass": True},
+        {
+            "error": ETHREX_BAL_ERROR,
+            "fork": "Amsterdam",
+            "name": "seed_1",
+            "pass": False,
+        },
+    ],
+    indent=2,
+)
+"""`ethrex-blocktest` on a v36 batch with one delivered access list
+corrupted by a wei: the series feeds the list to the parallel path, which
+rejects it."""
+
+ETHREX_PAYLOAD_ERROR = (
+    "wrong_status[0]  expected=VALID  got=INVALID  validationError=Failed "
+    "to RLP decode BAL: blockAccessList is not a valid RLP encoding of the "
+    "block access list"
+)
+ETHREX_ENGINETEST = json.dumps(
+    [
+        {"error": "", "fork": "Amsterdam", "name": "seed_0", "pass": True},
+        {
+            "error": ETHREX_PAYLOAD_ERROR,
+            "fork": "Amsterdam",
+            "name": "seed_1",
+            "pass": False,
+        },
+    ],
+    indent=2,
+)
+"""`ethrex-enginetest` on a v36 engine batch with one payload's access list
+cut short by a byte."""
+
+
+@pytest.mark.parametrize(
+    "engine,stdout,error",
+    [
+        pytest.param(False, ETHREX_BLOCKTEST, ETHREX_BAL_ERROR, id="block"),
+        pytest.param(
+            True, ETHREX_ENGINETEST, ETHREX_PAYLOAD_ERROR, id="engine"
+        ),
+    ],
+)
+def test_ethrex_runners_take_flags_then_the_file(
+    monkeypatch: Any, tmp_path: Path, engine: bool, stdout: str, error: str
+) -> None:
+    """Each ethrex runner judges one format, so it takes no subcommand."""
+    runner = FixtureRunner(
+        "ethrex",
+        Path("/bin/ethrex"),
+        "EthrexFixtureConsumer",
+        flags=("--bal.sequential",),
+        engine=engine,
+    )
+    args, verdicts = _judge(monkeypatch, tmp_path, runner, stdout)
+    assert args == ["--bal.sequential", str(tmp_path / "batch.json")]
+    assert verdicts == {
+        "seed_0": Verdict(True),
+        "seed_1": Verdict(False, error),
+    }
+
+
+def _fake_ethrex(tmp_path: Path, name: str) -> Path:
+    binary = tmp_path / name
+    binary.write_text(f'#!/bin/sh\necho "{name} 4.0.0"\n')
+    binary.chmod(0o755)
+    return binary
+
+
+@pytest.mark.parametrize(
+    "name,engine",
+    [
+        pytest.param("ethrex-blocktest", False, id="block"),
+        pytest.param("ethrex-enginetest", True, id="engine"),
+    ],
+)
+def test_ethrex_runners_are_detected_by_their_version_line(
+    tmp_path: Path, name: str, engine: bool
+) -> None:
+    """EEST cannot detect ethrex's runners; their `--version` names them."""
+    runner = FixtureRunner.detect(
+        "ethrex", _fake_ethrex(tmp_path, name), engine=engine
+    )
+    assert runner.kind == "EthrexFixtureConsumer"
+    assert runner.engine == engine
+
+
+@pytest.mark.parametrize(
+    "name,engine",
+    [
+        pytest.param("ethrex-blocktest", True, id="block-in-engine"),
+        pytest.param("ethrex-enginetest", False, id="engine-in-block"),
+    ],
+)
+def test_an_ethrex_runner_for_the_other_format_is_refused(
+    tmp_path: Path, name: str, engine: bool
+) -> None:
+    """A runner that cannot read the campaign's format fails at detection."""
+    with pytest.raises(ValueError, match="judges the other fixture format"):
+        FixtureRunner.detect(
+            "ethrex", _fake_ethrex(tmp_path, name), engine=engine
+        )

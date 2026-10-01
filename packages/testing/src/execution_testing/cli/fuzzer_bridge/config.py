@@ -97,6 +97,37 @@ KNOWN_BUILDS: Dict[str, BuildSource] = {
             "src/Nethermind/Ethereum.Test.Base/",
         ),
     ),
+    # ethrex's runners come from its series (patches/ethrex-main), one binary
+    # per fixture format, built in the `tooling` workspace. `release-fast`
+    # is ethrex's own profile for test runners: release optimisation without
+    # thin-LTO. The series' decision print sits at levm's parallel/sequential
+    # dispatch, admitted by name.
+    "ethrex": BuildSource(
+        repo="lambdaclass/ethrex",
+        command=(
+            "cd tooling && cargo build --profile release-fast "
+            "-p ef_tests-blockchain --bin ethrex-blocktest "
+            "&& cp target/release-fast/ethrex-blocktest {out}"
+        ),
+        binary="ethrex-blocktest",
+        patch_paths=(
+            "tooling/ef_tests/",
+            "crates/vm/backends/levm/mod.rs",
+        ),
+    ),
+    "ethrex-engine": BuildSource(
+        repo="lambdaclass/ethrex",
+        command=(
+            "cd tooling && cargo build --profile release-fast "
+            "-p ef_tests-engine --bin ethrex-enginetest "
+            "&& cp target/release-fast/ethrex-enginetest {out}"
+        ),
+        binary="ethrex-enginetest",
+        patch_paths=(
+            "tooling/ef_tests/",
+            "crates/vm/backends/levm/mod.rs",
+        ),
+    ),
     "evmone": BuildSource(
         repo="ethereum/evmone",
         command=(
