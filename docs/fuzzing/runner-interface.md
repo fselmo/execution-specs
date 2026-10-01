@@ -18,7 +18,7 @@ Engine-test runs the client's own Engine API handler in-process. Each payload go
 | geth | `engine_newPayloadV<n>` over in-process RPC (`tests/engine_test_util.go:186`) | `engine_forkchoiceUpdatedV<n>` (`:259`); geth checks the version only against payload attributes, which fixtures never send | yes: `eth.New` backend plus `ConsensusAPI` (`cmd/evm/enginerunner.go:247-290`) |
 | besu | `EngineNewPayloadV1..V5` at the fixture version (`EngineTestSubCommand.java:665`) | `EngineForkchoiceUpdatedV1..V4` at the fixture version (`:633`, `:777`); anything but VALID fails | yes, after replacing `EvmToolMergeCoordinator` with the node's `MergeCoordinator` (`:487-517`) |
 | nethermind | `engine_newPayloadV<n>`, raw params | to check | yes for payloads |
-| ethrex | `handle_new_payload_v4` via the RPC layer | to check | to check |
+| ethrex | `engine_newPayloadV<n>` at the fixture version through `map_engine_requests` (`tooling/ef_tests/engine/src/harness.rs:147`, `crates/networking/rpc/rpc.rs:1558-1562`) | `engine_forkchoiceUpdatedV<n>` at the fixture version (`harness.rs:141`, `fork_choice.rs:120-276`); version checks only look at payload attributes | yes: the node's `RpcApiContext` and `Blockchain` |
 | erigon | engine_x tester's in-process node | to check | yes (full node) |
 
 ## 1. Block-test delivers the access list
