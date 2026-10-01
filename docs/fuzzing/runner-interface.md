@@ -15,8 +15,8 @@ Engine-test runs the client's own Engine API handler in-process. Each payload go
 | Client | Payload at fixture version | Forkchoice at fixture version | Real handler and validator |
 |---|---|---|---|
 | reth | to do: new runner | to do | to do |
-| geth | to do: replace #34650's handler copy with `ConsensusAPI` | to do | to do |
-| besu | `EngineNewPayloadV5` | to check | to check: `EvmToolMergeCoordinator` |
+| geth | `engine_newPayloadV<n>` over in-process RPC (`tests/engine_test_util.go:186`) | `engine_forkchoiceUpdatedV<n>` (`:259`); geth checks the version only against payload attributes, which fixtures never send | yes: `eth.New` backend plus `ConsensusAPI` (`cmd/evm/enginerunner.go:247-290`) |
+| besu | `EngineNewPayloadV1..V5` at the fixture version (`EngineTestSubCommand.java:665`) | `EngineForkchoiceUpdatedV1..V4` at the fixture version (`:633`, `:777`); anything but VALID fails | yes, after replacing `EvmToolMergeCoordinator` with the node's `MergeCoordinator` (`:487-517`) |
 | nethermind | `engine_newPayloadV<n>`, raw params | to check | yes for payloads |
 | ethrex | `handle_new_payload_v4` via the RPC layer | to check | to check |
 | erigon | engine_x tester's in-process node | to check | yes (full node) |
@@ -55,6 +55,7 @@ One line per executed block on stderr: a single-line JSON object, written at the
 - `path` is `parallel` or `sequential`: the executor that actually ran the block.
 - `reason` is empty for `parallel`. For `sequential` it is the first condition, in the client's own gate order, that ruled parallel out. Shared values: `disabled` (the switch), `no-access-list`, `pre-amsterdam`. A client-specific condition uses its own lowercase name, such as `tracer`, `witness` or `single-worker`.
 - Genesis, and blocks rejected before execution, print nothing.
+- A client may add fields of its own; consumers ignore keys they do not know. Besu adds `scheduler` (`bal` or `optimistic`), because without an access list it runs its optimistic parallel scheduler, which is neither BAL-driven nor sequential.
 
 ## 4. Fallback report
 
