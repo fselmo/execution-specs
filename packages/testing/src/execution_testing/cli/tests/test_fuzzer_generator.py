@@ -5,6 +5,8 @@ from execution_testing.forks import Osaka
 
 from ..fuzzer_bridge.corpus import minimize
 from ..fuzzer_bridge.generator import (
+    ACCOUNT_CHARGE_CHILDREN,
+    ACCOUNT_CHARGER_ADDRESS,
     AUTHORITY_ACCOUNTS,
     AUTHORITY_PROBE_ADDRESS,
     BURNER_ADDRESS,
@@ -91,6 +93,8 @@ def test_generated_shape() -> None:
             Address(MAX_INITCODE_CREATOR_ADDRESS),
             Address(DELEGATED_ACCOUNT_ADDRESS),
             Address(AUTHORITY_PROBE_ADDRESS),
+            Address(ACCOUNT_CHARGER_ADDRESS),
+            *(Address(a) for a in ACCOUNT_CHARGE_CHILDREN.values()),
             Address(REPAYER_ADDRESS),
             Address(RESTORER_ADDRESS),
             Address(REVERTING_RESTORER_ADDRESS),

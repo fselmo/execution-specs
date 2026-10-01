@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, FrozenSet, Optional, Tuple
 
 import pytest
 
-from execution_testing.base_types import Address
+from execution_testing.base_types import Address, Bytes, Hash, HexNumber
 from execution_testing.forks import Amsterdam
 from execution_testing.test_types.account_types import EOA
 
@@ -23,10 +23,13 @@ from ..fuzzer_bridge.bal_reach import observer_spec
 from ..fuzzer_bridge.density import axis_collapse_warnings, axis_coverage
 from ..fuzzer_bridge.generator import (
     AUTHORITY_PROBE_ADDRESS,
+    BURNER_ADDRESS,
     MAX_NONCE,
+    auth_prepare_gas,
     generate_fuzzer_output,
 )
 from ..fuzzer_bridge.models import (
+    FuzzerAccountInput,
     FuzzerAuthorizationInput,
     FuzzerOutput,
     FuzzerTransactionInput,
@@ -193,6 +196,71 @@ def test_an_authorization_at_the_highest_nonce_never_loads_its_authority(
         }
     else:
         assert entry is None
+
+
+@pytest.mark.parametrize("exists", [False, True], ids=["absent", "existing"])
+@pytest.mark.parametrize(
+    "margin,committed",
+    [
+        pytest.param(0, True, id="exact"),
+        pytest.param(-1, False, id="one_short"),
+        pytest.param(1, True, id="one_over"),
+    ],
+)
+def test_an_authorization_commits_only_with_gas_for_its_charges(
+    exists: bool, margin: int, committed: bool
+) -> None:
+    """
+    A transaction to the burner carrying one authorization, with gas for
+    exactly its intrinsic cost and the authority's charges, commits the
+    delegation and then halts on the dispatch: the delegation survives.
+    One gas short, preparation fails and rolls it back, so the authority
+    holds no delegation and its nonce is unmoved.
+    """
+    case = generate_fuzzer_output(Amsterdam, 0)
+    key = Hash(0x1234567)
+    authority = Address(EOA(key=key))
+    accounts = dict(case.accounts)
+    if exists:
+        accounts[authority] = FuzzerAccountInput(
+            balance=HexNumber(1), nonce=HexNumber(0)
+        )
+    (first, *_) = case.transactions
+    tx = first.model_copy(
+        update={
+            "to": Address(BURNER_ADDRESS),
+            "gas": HexNumber(auth_prepare_gas(Amsterdam, exists) + margin),
+            "data": Bytes(b""),
+            "value": HexNumber(0),
+            "authorization_list": [
+                FuzzerAuthorizationInput(
+                    chain_id=HexNumber(1),
+                    address=Address(BURNER_ADDRESS),
+                    nonce=HexNumber(0),
+                    signer_key=key,
+                )
+            ],
+            "access_list": None,
+            "gas_need_fraction": None,
+            "block": 0,
+        }
+    )
+    entry, _ = _fill(
+        case.model_copy(
+            update={
+                "accounts": accounts,
+                "transactions": [tx],
+                "block_count": 1,
+                "withdrawals": [],
+            }
+        ),
+        authority,
+    )
+    delegated = entry is not None and bool(entry["codeChanges"])
+    assert delegated == committed
+    if committed:
+        assert entry is not None
+        assert _changes(entry, "nonceChanges", "postNonce") == {1: 1}
 
 
 def test_every_authority_axis_keeps_all_its_values() -> None:

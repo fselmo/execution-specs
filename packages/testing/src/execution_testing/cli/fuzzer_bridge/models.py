@@ -170,3 +170,11 @@ class FuzzerOutput(CamelModel):
     negative: FuzzerNegativeInput | None = None
     """Set when the case's last block is to be modified so it must be
     rejected. Applied only when the case is filled in the engine format."""
+    bal_cap_offset: int | None = None
+    """A declared draw: the genesis gas limit is the last block's measured
+    block access list items times their gas cost, plus this. Set by
+    `resolve_measured_gas`, which then clears it; the limit is derived on
+    every replay, never recorded as a draw."""
+    block_exception: str | None = None
+    """The `BlockException` the last block must be rejected with, when
+    the rejection is the whole block's rather than one transaction's."""

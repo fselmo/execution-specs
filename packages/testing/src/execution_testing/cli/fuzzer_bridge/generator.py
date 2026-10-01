@@ -44,6 +44,7 @@ from execution_testing.fuzzing.draws import (
     chain_weights,
     integers,
 )
+from execution_testing.recipient_type import RecipientType
 from execution_testing.test_types import Environment, compute_create_address
 from execution_testing.test_types.account_types import EOA
 from execution_testing.vm import Bytecode
@@ -63,7 +64,7 @@ from .negative import NEGATIVE_KINDS
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 38
+GENERATOR_VERSION = 39
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -402,6 +403,146 @@ per transaction so each is still dead when it is paid."""
 EMPTY_BENEFICIARY_ADDRESS = 0x2E0FF
 """An account in the pre-state with nothing in it: it exists, and is not
 alive, until something pays it."""
+
+
+ACCOUNT_CHARGER_ADDRESS = 0x1FFEB
+"""Helper like the exact charger, for the state charges that create an
+account: it calls the child calldata word 1 names with the gas word 0
+gives and the transaction's value, keyed by a call counter it also hands
+the child, and records the call's result plus one under the count."""
+
+ACCOUNT_CHARGE_CHILDREN: Dict[str, int] = {
+    "value_call": 0x1FFEA,
+    "create": 0x1FFE9,
+    "selfdestruct": 0x1FFE8,
+    "code_deposit": 0x1FFE7,
+}
+"""The account charger's children, each ending on one state charge:
+paying a dead account by CALL, CREATE from empty initcode, SELFDESTRUCT
+to a dead beneficiary, and CREATE deploying `DEPOSIT_SIZE` bytes."""
+
+ACCOUNT_CHARGE_DEAD_BASE = 0x2C000
+"""The dead accounts the value call and the self-destruct pay, one per
+call by the charger's count, so each is still dead when paid."""
+
+DEPOSIT_SIZE = 32
+"""Bytes the code-deposit child deploys: zeros, so nothing rejects them."""
+
+ACCOUNT_CHARGE_TX_GAS = 1_000_000
+"""Gas for a transaction to the account charger: under the cap, so no
+reservoir, and room for its two stores and the child's share."""
+
+
+def account_charger_code() -> bytes:
+    """Call calldata word 1 with word 0's gas and the value, counted."""
+    return bytes(
+        Op.SSTORE(0, Op.ADD(Op.SLOAD(0), 1))
+        + Op.MSTORE(0, Op.SLOAD(0))
+        + Op.SSTORE(
+            Op.SLOAD(0),
+            Op.ADD(
+                1,
+                Op.CALL(
+                    Op.CALLDATALOAD(0),
+                    Op.CALLDATALOAD(32),
+                    Op.CALLVALUE,
+                    0,
+                    32,
+                    0,
+                    0,
+                ),
+            ),
+        )
+    )
+
+
+def account_charge_child(kind: str) -> Bytecode:
+    """
+    The child of ``kind``, its dead account keyed by calldata word 0,
+    each opcode priced as it runs: cold, paying, creating an account.
+    """
+    dead = Op.ADD(ACCOUNT_CHARGE_DEAD_BASE, Op.CALLDATALOAD(0))
+    if kind == "value_call":
+        return Op.CALL(
+            0,
+            dead,
+            Op.CALLVALUE,
+            0,
+            0,
+            0,
+            0,
+            address_warm=False,
+            value_transfer=True,
+            account_new=True,
+        )
+    elif kind == "create":
+        return Op.CREATE(0, 0, 0)
+    elif kind == "selfdestruct":
+        return Op.SELFDESTRUCT(dead, address_warm=False, account_new=True)
+    elif kind == "code_deposit":
+        # A failed deposit only makes CREATE return zero; the child halts
+        # on it, so the charger's record shows the deposit itself.
+        initcode = deposit_initcode()
+        code = Op.MSTORE(
+            0,
+            int.from_bytes(bytes(initcode).ljust(32, b"\0"), "big"),
+            new_memory_size=32,
+        ) + Op.CREATE(0, 0, len(initcode), init_code_size=len(initcode))
+        deployed = len(code) + len(Op.PUSH1(0)) + len(Op.JUMPI) + 1
+        return code + Op.PUSH1(deployed) + Op.JUMPI + Op.INVALID + Op.JUMPDEST
+    raise ValueError(f"unknown account charge {kind!r}")
+
+
+def deposit_initcode() -> Bytecode:
+    """Initcode returning `DEPOSIT_SIZE` zero bytes, priced with them."""
+    return Op.RETURN(
+        0,
+        DEPOSIT_SIZE,
+        new_memory_size=DEPOSIT_SIZE,
+        code_deposit_size=DEPOSIT_SIZE,
+    )
+
+
+def auth_prepare_gas(fork: Fork, authority_exists: bool) -> int:
+    """
+    The gas a transaction to the burner carrying one authorization needs
+    to commit it and nothing more: its intrinsic cost, then the
+    authority's charges, the new account only when it has none.
+    """
+    costs = fork.gas_costs()
+    intrinsic = fork.transaction_intrinsic_cost_calculator()(
+        authorization_list_or_count=1,
+        recipient_type=RecipientType.CONTRACT,
+    )
+    charges = costs.AUTH_BASE + costs.ACCOUNT_WRITE
+    if not authority_exists:
+        charges += costs.NEW_ACCOUNT
+    return intrinsic + charges
+
+
+def account_charge_need(kind: str, fork: Fork) -> int:
+    """
+    The gas the account charger forwards for the child of ``kind`` to
+    end on its state charge with nothing left: the child's own cost less
+    the stipend the paid call adds. For the code deposit, the last charge
+    is in the init frame, which gets all but a 64th of what the child has
+    after CREATE; the child keeps that 64th for its check after.
+    """
+    stipend = fork.gas_costs().CALL_STIPEND
+    child = account_charge_child(kind)
+    if kind != "code_deposit":
+        return child.gas_cost(fork) - stipend
+    initcode = deposit_initcode()
+    before = (
+        Op.MSTORE(0, 0, new_memory_size=32)
+        + Op.CREATE(0, 0, len(initcode), init_code_size=len(initcode))
+    ).gas_cost(fork)
+    after = (Op.PUSH1(0) + Op.JUMPI + Op.JUMPDEST).gas_cost(fork)
+    init_need = initcode.gas_cost(fork)
+    left = init_need
+    while left - left // 64 < init_need or left // 64 < after:
+        left += 1
+    return before + left - stipend
 
 
 AUTHORITY_PROBE_ADDRESS = 0x1FFEF
@@ -946,6 +1087,8 @@ MOTIFS: Tuple[str, ...] = (
     "authority_alias",
     "max_nonce_authority",
     "repay",
+    "account_charge",
+    "auth_prepare",
     "none",
 )
 """What a transaction runs, in the order the chances are taken."""
@@ -1226,6 +1369,11 @@ def record_case(
         nonce=HexNumber(0),
     )
     for helper, code in (
+        (ACCOUNT_CHARGER_ADDRESS, account_charger_code()),
+        *(
+            (child, bytes(account_charge_child(kind)))
+            for kind, child in ACCOUNT_CHARGE_CHILDREN.items()
+        ),
         (AUTHORITY_PROBE_ADDRESS, authority_probe_code()),
         (REPAYER_ADDRESS, repayer_code()),
         (RESTORER_ADDRESS, restorer_code(reverts=False)),
@@ -1272,6 +1420,8 @@ def record_case(
         delegated_alias: Optional[Tuple[Address, Hash, bool, Address]] = None
         capped: Optional[Tuple[Hash, int, Address]] = None
         restorer: Optional[int] = None
+        account_charge: Optional[Tuple[str, int]] = None
+        prepared: Optional[Tuple[Hash, int]] = None
         grave: Optional[Tuple[Address, int]] = None
         creation: Optional[str] = None
         initcode: Optional[bytes] = None
@@ -1333,6 +1483,19 @@ def record_case(
                     "repay",
                     domains.repay_tx_rate,
                     bool(domains.reservoir_tx_gas) and REPAY_TX_GAS <= room,
+                ),
+                (
+                    "account_charge",
+                    domains.account_charge_tx_rate,
+                    bool(domains.reservoir_tx_gas)
+                    and ACCOUNT_CHARGE_TX_GAS <= room,
+                ),
+                (
+                    "auth_prepare",
+                    domains.auth_prepare_tx_rate,
+                    bool(domains.reservoir_tx_gas)
+                    and 4 in types
+                    and auth_prepare_gas(fork, False) + 1 <= room,
                 ),
             ]
         )
@@ -1491,6 +1654,39 @@ def record_case(
                 )
                 else RESTORER_ADDRESS
             )
+        elif motif == "account_charge":
+            to = Address(ACCOUNT_CHARGER_ADDRESS)
+            account_charge = (
+                m.pick(
+                    "kind", tuple(ACCOUNT_CHARGE_CHILDREN), kind=STRUCTURAL
+                ),
+                m.pick(
+                    "margin",
+                    domains.exact_charge_margins,
+                    domain=integers(-(10**6), 10**6),
+                ),
+            )
+        elif motif == "auth_prepare":
+            # One authorization and gas for exactly its charges, or one
+            # short, sent to the burner: with nothing left the dispatch
+            # halts. At the exact gas the authorization commits and
+            # survives it; one short, preparation fails and rolls it back.
+            to = Address(BURNER_ADDRESS)
+            key = _derive_key(m, "authority/key")
+            exists = m.flag("authority_exists", 0.5, kind=PARAM)
+            if exists:
+                accounts[Address(EOA(key=key))] = FuzzerAccountInput(
+                    balance=HexNumber(1), nonce=HexNumber(0)
+                )
+            prepared = (
+                key,
+                auth_prepare_gas(fork, exists)
+                + m.pick(
+                    "margin",
+                    domains.exact_charge_margins,
+                    domain=integers(-(10**6), 10**6),
+                ),
+            )
         elif motif != "none":
             raise ValueError(f"unknown motif {motif!r}")
         # Drawn only for a transaction no motif above has claimed.
@@ -1588,6 +1784,21 @@ def record_case(
             AUTHORITY_PROBE_ADDRESS
         ):
             data = Bytes(bytes(delegated_alias[0]).rjust(32, b"\0"))
+        if account_charge is not None:
+            kind, margin = account_charge
+            gas = ACCOUNT_CHARGE_TX_GAS
+            tx_type = 2
+            # The paid children need a balance to pay with; one wei.
+            value = 1
+            data = Bytes(
+                (account_charge_need(kind, fork) + margin).to_bytes(32, "big")
+                + ACCOUNT_CHARGE_CHILDREN[kind].to_bytes(32, "big")
+            )
+        if prepared is not None:
+            gas = prepared[1]
+            tx_type = 4
+            value = 0
+            data = Bytes(b"")
         if restorer is not None:
             gas = REPAY_TX_GAS
             tx_type = 2
@@ -1634,6 +1845,15 @@ def record_case(
                     address=delegated_alias[3],
                     nonce=HexNumber(0),
                     signer_key=delegated_alias[1],
+                )
+            ]
+        elif prepared is not None:
+            fields["authorization_list"] = [
+                FuzzerAuthorizationInput(
+                    chain_id=HexNumber(1),
+                    address=Address(BURNER_ADDRESS),
+                    nonce=HexNumber(0),
+                    signer_key=prepared[0],
                 )
             ]
         elif capped is not None:
@@ -1860,12 +2080,58 @@ def record_case(
         base_fee_per_gas=domains.base_fee_per_gas,
     )
 
+    # A case at the access list's size cap is one block of transfers: the
+    # cap gives a block a little over two thousand gas per item, and the
+    # empty block's system accesses are the only allowance a block of
+    # transfers can fit in. Its gas limit is derived from the items the
+    # block measures, at the cap or one gas under it.
+    bal_cap_offset: Optional[int] = None
+    if fork.gas_costs().BLOCK_ACCESS_LIST_ITEM and d.flag(
+        "bal_cap", domains.bal_cap_case_rate
+    ):
+        c = d.unit("bal_cap")
+        bal_cap_offset = c.pick("offset", (0, -1), kind=STRUCTURAL)
+        base_fee = _highest_base_fee(fork, domains, 0, block_gas_limit)
+        intrinsic = fork.transaction_intrinsic_cost_calculator()
+        transactions = []
+        nonces = dict.fromkeys(sender_addresses, 0)
+        # Two transfers at most: three can cost more than the items they
+        # add allow the block.
+        for i in range(c.pick("transfers", (1, 2), kind=STRUCTURAL)):
+            f = c.unit(f"tx:{i}")
+            sender = f.member("sender", sender_addresses)
+            # A sender is alive, so paying it charges no new account and
+            # the intrinsic cost is all the transfer needs.
+            to = f.member("to", sender_addresses)
+            gas = intrinsic(
+                sends_value=True,
+                recipient_type=(
+                    RecipientType.SELF if to == sender else RecipientType.EOA
+                ),
+            )
+            transactions.append(
+                FuzzerTransactionInput(
+                    **{"from": sender},
+                    block=0,
+                    to=to,
+                    gas=HexNumber(gas),
+                    nonce=HexNumber(nonces[sender]),
+                    value=HexNumber(f.integer("value", 1, 10**9, domain=WEI)),
+                    data=Bytes(b""),
+                    **_fee_market_fields(f.unit("fees"), base_fee),
+                )
+            )
+            nonces[sender] += 1
+        block_count = 1
+
     # Drawn last, so the rest of the case is what it would be without it. A
     # case already rejecting a block is left alone: only its last block is
     # modified, and a rejected block is never the parent of another.
     negative = None
-    if not any(tx.error for tx in transactions) and d.flag(
-        "negative", domains.negative_case_rate
+    if (
+        bal_cap_offset is None
+        and not any(tx.error for tx in transactions)
+        and d.flag("negative", domains.negative_case_rate)
     ):
         families, shares = zip(*domains.negative_family_shares, strict=True)
         family = d.pick(
@@ -1888,6 +2154,7 @@ def record_case(
         withdrawals=withdrawals,
         block_count=block_count,
         negative=negative,
+        bal_cap_offset=bal_cap_offset,
     )
     tree = DrawTree(
         GENERATOR_VERSION, fork.name(), seed, list(d.tree.values())

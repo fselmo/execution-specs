@@ -340,6 +340,74 @@ def _tally_authorities(case: Any, tally: Dict[str, Counter]) -> None:
     tally["max_nonce_authority_tx"]["present" if capped else "absent"] += 1
 
 
+def _margin_name(margin: int) -> str:
+    if margin == 0:
+        return "exact"
+    elif margin < 0:
+        return "short"
+    return "over"
+
+
+def _tally_account_charge(
+    case: Any, fork: "Fork", tally: Dict[str, Counter]
+) -> None:
+    """Count the account charger's presence, children and margins."""
+    from execution_testing.base_types import Address
+
+    from .generator import (
+        ACCOUNT_CHARGE_CHILDREN,
+        ACCOUNT_CHARGER_ADDRESS,
+        account_charge_need,
+    )
+
+    charger = Address(ACCOUNT_CHARGER_ADDRESS)
+    kinds = {child: kind for kind, child in ACCOUNT_CHARGE_CHILDREN.items()}
+    owned = [tx for tx in case.transactions if tx.to == charger]
+    tally["account_charge_tx"]["present" if owned else "absent"] += 1
+    for tx in owned:
+        words = bytes(tx.data)
+        kind = kinds[int.from_bytes(words[32:64], "big")]
+        tally["account_charge_kind"][kind] += 1
+        margin = int.from_bytes(words[:32], "big") - account_charge_need(
+            kind, fork
+        )
+        tally["account_charge_margin"][_margin_name(margin)] += 1
+
+
+def _tally_auth_prepare(
+    case: Any, fork: "Fork", tally: Dict[str, Counter]
+) -> None:
+    """Count authorizations sent with gas for exactly their charges."""
+    from execution_testing.base_types import Address
+    from execution_testing.test_types.account_types import EOA
+
+    from .generator import BURNER_ADDRESS, auth_prepare_gas
+
+    burner = Address(BURNER_ADDRESS)
+    owned = [
+        tx
+        for tx in case.transactions
+        if tx.to == burner and tx.authorization_list
+    ]
+    tally["auth_prepare_tx"]["present" if owned else "absent"] += 1
+    for tx in owned:
+        (auth,) = tx.authorization_list
+        exists = Address(EOA(key=auth.signer_key)) in case.accounts
+        tally["auth_prepare_authority"][
+            "existing" if exists else "absent"
+        ] += 1
+        margin = int(tx.gas) - auth_prepare_gas(fork, exists)
+        tally["auth_prepare_margin"][_margin_name(margin)] += 1
+
+
+def _tally_bal_cap(case: Any, tally: Dict[str, Counter]) -> None:
+    """Count cases at the access list's size cap, and which side."""
+    offset = case.bal_cap_offset
+    tally["bal_cap_case"]["absent" if offset is None else "present"] += 1
+    if offset is not None:
+        tally["bal_cap_side"]["at_cap" if offset == 0 else "over_cap"] += 1
+
+
 def _tally_repay(case: Any, tally: Dict[str, Counter]) -> None:
     """Count the repayer's presence and whether its restorer reverts."""
     from execution_testing.base_types import Address
@@ -573,6 +641,14 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "max_nonce_authority_nonce": Counter(),
         "repay_tx": Counter(),
         "repay_child": Counter(),
+        "account_charge_tx": Counter(),
+        "account_charge_kind": Counter(),
+        "account_charge_margin": Counter(),
+        "auth_prepare_tx": Counter(),
+        "auth_prepare_authority": Counter(),
+        "auth_prepare_margin": Counter(),
+        "bal_cap_case": Counter(),
+        "bal_cap_side": Counter(),
         "graver_tx": Counter(),
         "graver_beneficiary": Counter(),
         "graver_value": Counter(),
@@ -683,6 +759,9 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         _tally_exact_charge(case, tally)
         _tally_authorities(case, tally)
         _tally_repay(case, tally)
+        _tally_account_charge(case, fork, tally)
+        _tally_auth_prepare(case, fork, tally)
+        _tally_bal_cap(case, tally)
         _tally_graver(case, tally)
         _tally_creation(case, tally)
         _tally_near_full(case, fork, tally)
@@ -848,6 +927,19 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "max_nonce_authority_nonce": ("below_max", "max"),
     "repay_tx": ("present", "absent"),
     "repay_child": ("succeeds", "reverts"),
+    "account_charge_tx": ("present", "absent"),
+    "account_charge_kind": (
+        "value_call",
+        "create",
+        "selfdestruct",
+        "code_deposit",
+    ),
+    "account_charge_margin": ("exact", "short", "over"),
+    "auth_prepare_tx": ("present", "absent"),
+    "auth_prepare_authority": ("absent", "existing"),
+    "auth_prepare_margin": ("exact", "short", "over"),
+    "bal_cap_case": ("present", "absent"),
+    "bal_cap_side": ("at_cap", "over_cap"),
     "graver_tx": ("present", "absent"),
     "graver_beneficiary": ("nonexistent", "empty", "alive"),
     "graver_value": ("nonzero", "zero"),

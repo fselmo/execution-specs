@@ -13,6 +13,10 @@ is derived, recomputed on every replay, and never recorded as a draw.
 Only owned transactions are measured. Deriving every limit would collapse
 the random under- and over-provisioning that produces incidental outcomes
 everywhere else to one value.
+
+The block gas limit of a case drawn at the block access list's size cap
+is derived the same way: from the items its last block's list holds,
+measured on a fill at the drawn limit.
 """
 
 import contextlib
@@ -90,6 +94,46 @@ def _gas_used(fixture: Dict[str, Any], sender: str, nonce: int) -> int:
     raise LookupError(f"transaction {sender}/{nonce} is not in the fixture")
 
 
+def bal_items(fixture: Dict[str, Any]) -> int:
+    """
+    What the last block's access list holds against its size cap: one
+    item per address and per storage key, read or written, once each.
+    """
+    items = 0
+    for account in fixture["blocks"][-1]["blockAccessList"]:
+        keys = {int(read, 16) for read in account.get("storageReads", [])}
+        keys |= {
+            int(slot["slot"], 16) for slot in account.get("storageChanges", [])
+        }
+        items += 1 + len(keys)
+    return items
+
+
+def resolve_bal_cap(
+    case: FuzzerOutput, fork: Fork, fill: Filler
+) -> FuzzerOutput:
+    """
+    Set the genesis gas limit of a case drawn at the access list's size
+    cap: its last block's items times their cost, plus the drawn offset.
+    Below zero the block holds one item too many for its limit and must
+    be rejected.
+    """
+    offset = case.bal_cap_offset
+    if offset is None:
+        return case
+    items = bal_items(fill(case.model_copy(update={"bal_cap_offset": None})))
+    limit = items * fork.gas_costs().BLOCK_ACCESS_LIST_ITEM + offset
+    return case.model_copy(
+        update={
+            "env": case.env.model_copy(update={"gas_limit": limit}),
+            "bal_cap_offset": None,
+            "block_exception": (
+                "BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED" if offset < 0 else None
+            ),
+        }
+    )
+
+
 def resolve_measured_gas(
     case: FuzzerOutput, fork: Fork, fill: Filler
 ) -> FuzzerOutput:
@@ -105,6 +149,7 @@ def resolve_measured_gas(
     the drawn gas instead would turn an owned transaction into an ordinary
     one without a trace.
     """
+    case = resolve_bal_cap(case, fork, fill)
     if all(tx.gas_need_fraction is None for tx in case.transactions):
         return case
     cap = fork.transaction_gas_limit_cap() or int(case.env.gas_limit)

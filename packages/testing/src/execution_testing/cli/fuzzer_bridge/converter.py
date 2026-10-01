@@ -16,7 +16,7 @@ Key Responsibilities:
 from typing import Dict, List, Optional
 
 from execution_testing.base_types import Account, Address, Hash, HexNumber
-from execution_testing.exceptions import TransactionException
+from execution_testing.exceptions import BlockException, TransactionException
 from execution_testing.forks import Fork
 from execution_testing.fuzzing import (
     blockhash_history,
@@ -209,6 +209,11 @@ def require_resolved_gas(fuzzer_output: FuzzerOutput) -> None:
             f"transactions {pending} carry a gas need fraction; call "
             "resolve_measured_gas before converting"
         )
+    if fuzzer_output.bal_cap_offset is not None:
+        raise UnresolvedGasError(
+            "the genesis gas limit is still to be measured from the block "
+            "access list; call resolve_measured_gas before converting"
+        )
 
 
 def blockchain_test_from_fuzzer(
@@ -317,6 +322,11 @@ def blockchain_test_from_fuzzer(
             for w in fuzzer_output.withdrawals
         ],
     )
+
+    if fuzzer_output.block_exception is not None:
+        blocks[-1] = blocks[-1].model_copy(
+            update={"exception": BlockException[fuzzer_output.block_exception]}
+        )
 
     return BlockchainTest(
         pre=pre,

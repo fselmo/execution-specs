@@ -263,13 +263,23 @@ class ValueDomains:
     same transaction then calls, reads or pays, and which half the time
     sends a transaction of its own later in the block. At v36 no
     authority shared an index with any access: 0 of 2000 seeds."""
-    max_nonce_authority_tx_rate: float = 0.02
+    max_nonce_authority_tx_rate: float = 0.03
     """Share of transactions carrying an authorization that declares its
     authority's nonce at one below the highest or at the highest, where
     it is skipped before the authority is loaded."""
     repay_tx_rate: float = 0.03
     """Share of transactions sent to the repayer, whose post state turns
     on the EIP-8037 repayment at a successful child's merge."""
+    account_charge_tx_rate: float = 0.04
+    """Share of transactions sent to the account charger, whose child ends
+    on a new account's state charge, paying a dead account, creating,
+    self-destructing to a dead beneficiary or depositing code, with the
+    exact gas or one either side."""
+    auth_prepare_tx_rate: float = 0.04
+    """Share of transactions carrying one authorization with gas for
+    exactly its charges, or one short, sent to a halting target: the
+    authorization commits before the dispatch fails, or preparation fails
+    and rolls it back."""
     repay_child_revert_share: float = 0.25
     """Share of repayer transactions whose restorer reverts, so nothing is
     repaid: the rule's other side."""
@@ -360,6 +370,10 @@ class ValueDomains:
     authorization is skipped, not rejected, so the transaction stays
     fillable -- and the nonce comparison is then live in both directions
     for a mutant that flips it."""
+    bal_cap_case_rate: float = 0.07
+    """Share of cases that are one block of transfers at the block access
+    list's size cap, or one gas under it, which must be rejected. At v38
+    no generated block came near the cap."""
     negative_case_rate: float = 0.1
     """Share of cases whose last block is modified to be rejected: its
     block access list, or one header field. Drawn only for a case with no

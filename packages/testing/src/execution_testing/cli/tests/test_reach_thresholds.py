@@ -21,12 +21,17 @@ from execution_testing.vm import Opcodes as Op
 from ..fuzzer_bridge import campaign as mod
 from ..fuzzer_bridge.density import axis_collapse_warnings, axis_coverage
 from ..fuzzer_bridge.generator import (
+    ACCOUNT_CHARGE_CHILDREN,
+    ACCOUNT_CHARGE_DEAD_BASE,
+    ACCOUNT_CHARGE_TX_GAS,
+    ACCOUNT_CHARGER_ADDRESS,
     BURNER_ADDRESS,
     EXACT_CHARGE_CHILD_ADDRESS,
     EXACT_CHARGER_ADDRESS,
     REJECTED_BY_STATE_GAS,
     STATE_FILLER_ADDRESS,
     _exact_charge_gas,
+    account_charge_need,
     exact_charge_child_code,
     generate_fuzzer_output,
 )
@@ -130,6 +135,81 @@ def test_a_state_charge_equal_to_what_is_left_is_paid(
         assert child["storageChanges"] == []
         assert [int(s, 16) for s in child["storageReads"]] == [1]
         assert witness == {0: 1, 1: 1}
+
+
+def _account_charge(kind: str, margin: int) -> FuzzerOutput:
+    """
+    One transaction to the account charger, its ``kind`` child given
+    its exact need plus ``margin``.
+    """
+    case = generate_fuzzer_output(Amsterdam, 0)
+    gas = account_charge_need(kind, Amsterdam) + margin
+    (first, *_) = case.transactions
+    tx = first.model_copy(
+        update={
+            "to": Address(ACCOUNT_CHARGER_ADDRESS),
+            "gas": HexNumber(ACCOUNT_CHARGE_TX_GAS),
+            "data": Bytes(
+                gas.to_bytes(32, "big")
+                + ACCOUNT_CHARGE_CHILDREN[kind].to_bytes(32, "big")
+            ),
+            "value": HexNumber(1),
+            "authorization_list": None,
+            "access_list": None,
+            "gas_need_fraction": None,
+            "block": 0,
+        }
+    )
+    return case.model_copy(
+        update={"transactions": [tx], "block_count": 1, "withdrawals": []}
+    )
+
+
+@pytest.mark.parametrize("kind", list(ACCOUNT_CHARGE_CHILDREN))
+@pytest.mark.parametrize(
+    "margin,charged",
+    [
+        pytest.param(0, True, id="exact"),
+        pytest.param(-1, False, id="one_short"),
+        pytest.param(1, True, id="one_over"),
+    ],
+)
+def test_a_new_account_charge_equal_to_the_gas_left_is_paid(
+    kind: str, margin: int, charged: bool
+) -> None:
+    """
+    Each child ends on the state charge for an account it creates: paying
+    a dead account, CREATE, SELFDESTRUCT to a dead beneficiary, or the
+    deposit of the code it creates. At its exact need the charge takes
+    the last gas and the child succeeds; one short it runs out on that
+    charge. A dead account paid, or one created, appears in the list only
+    when the charge was paid.
+    """
+    fixture = _fill(_account_charge(kind, margin))
+    (block,) = fixture["blocks"]
+    (receipt,) = block["receipts"]
+    assert receipt["status"]
+    charger = _entry(fixture, Address(ACCOUNT_CHARGER_ADDRESS))
+    witness = {
+        int(change["slot"], 16): int(
+            change["slotChanges"][-1]["postValue"], 16
+        )
+        for change in charger["storageChanges"]
+    }
+    assert witness == {0: 1, 1: 2 if charged else 1}
+    child = _entry(fixture, Address(ACCOUNT_CHARGE_CHILDREN[kind]))
+    if kind in ("value_call", "selfdestruct"):
+        dead = Address(ACCOUNT_CHARGE_DEAD_BASE + 1)
+        paid = any(
+            Address(e["address"]) == dead and e["balanceChanges"]
+            for e in block["blockAccessList"]
+        )
+        assert paid == charged
+    elif kind in ("create", "code_deposit"):
+        # The child's nonce moves only when CREATE got past its charge.
+        assert bool(child["nonceChanges"]) == charged
+    else:
+        raise ValueError(kind)
 
 
 def _near_full(margin: int, stores: int = 150) -> FuzzerOutput:
