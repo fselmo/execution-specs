@@ -1,0 +1,205 @@
+From 7b3b2ee0e18fd55c3bd03af62d205093adef42e7 Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <felipe.selmo@ethereum.org>
+Date: Thu, 1 Oct 2026 16:06:10 +0000
+Subject: [PATCH] testing: blocktest --json-array, judging one fixture file
+
+The blocktest subcommand and its per-test JSON results from paradigmxyz/reth#23361 (head a1bc4e9cba66), without that PR's engine runners. run_json also takes a single fixture file, which is how a fuzzing campaign hands over each batch.
+---
+ testing/ef-tests/src/cases/blockchain_test.rs | 64 +++++++++++++++++++
+ testing/ef-tests/src/result.rs                | 22 +++++++
+ testing/ef-tests/src/suite.rs                 |  1 +
+ testing/runner/src/main.rs                    | 55 +++++++++++++---
+ 4 files changed, 134 insertions(+), 8 deletions(-)
+
+diff --git a/testing/ef-tests/src/cases/blockchain_test.rs b/testing/ef-tests/src/cases/blockchain_test.rs
+index 5e6f42922..3c7c1df06 100644
+--- a/testing/ef-tests/src/cases/blockchain_test.rs
++++ b/testing/ef-tests/src/cases/blockchain_test.rs
+@@ -45,6 +45,70 @@ impl BlockchainTests {
+     pub const fn new(suite_path: PathBuf) -> Self {
+         Self { suite_path }
+     }
++
++    /// Run all tests and print per-test results as a JSON array.
++    ///
++    /// Uses the same `par_bridge_buffered` pattern as `Case::run` to
++    /// avoid thread exhaustion while keeping parallelism.
++    pub fn run_json(&self) {
++        use crate::result::CaseResult;
++        use reth_primitives_traits::ParallelBridgeBuffered;
++        use walkdir::{DirEntry, WalkDir};
++
++        fn find_json_files(path: &Path) -> Vec<PathBuf> {
++            WalkDir::new(path)
++                .into_iter()
++                .filter_map(Result::ok)
++                .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
++                .map(DirEntry::into_path)
++                .collect()
++        }
++
++        let mut all_results: Vec<CaseResult> = Vec::new();
++
++        // A single fixture file is judged on its own; a suite directory is
++        // walked by subdirectory, like Suite::run.
++        let files: Vec<PathBuf> = if self.suite_path.is_file() {
++            vec![self.suite_path.clone()]
++        } else {
++            WalkDir::new(&self.suite_path)
++                .min_depth(1)
++                .max_depth(1)
++                .into_iter()
++                .filter_map(Result::ok)
++                .filter(|e| e.file_type().is_dir())
++                .flat_map(|e| find_json_files(&e.into_path()))
++                .collect()
++        };
++        {
++            for path in files {
++                let case = match BlockchainTestCase::load(&path) {
++                    Ok(c) => c,
++                    Err(_) => continue,
++                };
++
++                // Same parallelism as BlockchainTestCase::run()
++                let results: Vec<CaseResult> = case
++                    .tests
++                    .into_iter()
++                    .filter(|(_, t)| {
++                        !BlockchainTestCase::excluded_fork(t.network)
++                    })
++                    .par_bridge_buffered()
++                    .with_min_len(64)
++                    .map(|(name, test)| {
++                        let result =
++                            BlockchainTestCase::run_single_case(&name, &test);
++                        CaseResult::new(&path, name, result)
++                    })
++                    .collect();
++
++                all_results.extend(results);
++            }
++        }
++
++        crate::result::print_json_array(&all_results);
++    }
+ }
+ 
+ impl Suite for BlockchainTests {
+diff --git a/testing/ef-tests/src/result.rs b/testing/ef-tests/src/result.rs
+index beca01f6a..68688e797 100644
+--- a/testing/ef-tests/src/result.rs
++++ b/testing/ef-tests/src/result.rs
+@@ -90,6 +90,28 @@ impl CaseResult {
+     }
+ }
+ 
++/// Serialize CaseResults as a JSON array to stdout.
++pub fn print_json_array(results: &[CaseResult]) {
++    use serde_json::json;
++    let arr: Vec<_> = results
++        .iter()
++        .map(|r| {
++            let (pass, error) = match &r.result {
++                Ok(()) => (true, String::new()),
++                Err(Error::Skipped) => (true, String::new()),
++                Err(e) => (false, e.to_string()),
++            };
++            json!({
++                "name": r.desc,
++                "pass": pass,
++                "fork": "",
++                "error": error,
++            })
++        })
++        .collect();
++    println!("{}", serde_json::to_string(&arr).unwrap());
++}
++
+ /// Assert that all the given tests passed and print the results to stdout.
+ pub(crate) fn assert_tests_pass(suite_name: &str, path: &Path, results: &[CaseResult]) {
+     let (passed, failed, skipped) = categorize_results(results);
+diff --git a/testing/ef-tests/src/suite.rs b/testing/ef-tests/src/suite.rs
+index 0b3ed447a..c4f96ca2b 100644
+--- a/testing/ef-tests/src/suite.rs
++++ b/testing/ef-tests/src/suite.rs
+@@ -26,6 +26,7 @@ pub trait Suite {
+         }
+     }
+ 
++
+     /// Load and run each contained test case for the provided sub-folder.
+     ///
+     /// # Note
+diff --git a/testing/runner/src/main.rs b/testing/runner/src/main.rs
+index a36c44385..078d1ee19 100644
+--- a/testing/runner/src/main.rs
++++ b/testing/runner/src/main.rs
+@@ -1,17 +1,56 @@
+-//! Command-line interface for running tests.
++//! Command-line interface for running Ethereum execution spec tests.
+ use std::path::PathBuf;
+ 
+-use clap::Parser;
++use clap::{Parser, Subcommand};
+ use ef_tests::{cases::blockchain_test::BlockchainTests, Suite};
+ 
+-/// Command-line arguments for the test runner.
++/// Reth test runner for Ethereum execution spec test fixtures.
+ #[derive(Debug, Parser)]
+-pub struct TestRunnerCommand {
+-    /// Path to the test suite
+-    suite_path: PathBuf,
++#[command(name = "ef-test-runner", version)]
++pub struct Cli {
++    #[command(subcommand)]
++    command: Option<Commands>,
++    /// Path to the test suite (used when no subcommand is given).
++    suite_path: Option<PathBuf>,
++}
++
++#[derive(Debug, Subcommand)]
++enum Commands {
++    /// Execute blockchain test fixtures (blockchain_tests format).
++    #[command(name = "blocktest")]
++    BlockTest {
++        /// Path to a fixture file, or a fixtures directory.
++        path: PathBuf,
++        /// Output results as a JSON array.
++        #[arg(long)]
++        json_array: bool,
++    },
+ }
+ 
+ fn main() {
+-    let cmd = TestRunnerCommand::parse();
+-    BlockchainTests::new(cmd.suite_path.join("blockchain_tests")).run();
++    let cli = Cli::parse();
++    match cli.command {
++        Some(Commands::BlockTest { path, json_array }) => {
++            let suite_path = if path.is_file() || path.ends_with("blockchain_tests") {
++                path
++            } else {
++                let candidate = path.join("blockchain_tests");
++                if candidate.exists() {
++                    candidate
++                } else {
++                    path
++                }
++            };
++            if json_array {
++                BlockchainTests::new(suite_path).run_json();
++            } else {
++                BlockchainTests::new(suite_path).run();
++            }
++        }
++        None => {
++            let suite_path =
++                cli.suite_path.expect("suite_path is required when no subcommand is given");
++            BlockchainTests::new(suite_path.join("blockchain_tests")).run();
++        }
++    }
+ }
+-- 
+2.47.3
+

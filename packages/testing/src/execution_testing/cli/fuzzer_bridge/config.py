@@ -97,6 +97,20 @@ KNOWN_BUILDS: Dict[str, BuildSource] = {
             "src/Nethermind/Ethereum.Test.Base/",
         ),
     ),
+    # reth's `ef-test-runner`, with its series (patches/reth-main) adding
+    # `blocktest --json-array` on one fixture file. Its block import is
+    # sequential: reth's BAL-parallel path is only in the engine tree.
+    # reth's storage crate needs libclang for bindgen, through the client's
+    # `env` (LIBCLANG_PATH, BINDGEN_EXTRA_CLANG_ARGS).
+    "reth": BuildSource(
+        repo="paradigmxyz/reth",
+        command=(
+            "cargo build --profile release -p ef-test-runner "
+            "&& cp target/release/ef-test-runner {out}"
+        ),
+        binary="ef-test-runner",
+        patch_paths=("testing/",),
+    ),
     # ethrex's runners come from its series (patches/ethrex-main), one binary
     # per fixture format, built in the `tooling` workspace. `release-fast`
     # is ethrex's own profile for test runners: release optimisation without

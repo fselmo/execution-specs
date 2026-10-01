@@ -608,3 +608,47 @@ def test_an_ethrex_runner_for_the_other_format_is_refused(
         FixtureRunner.detect(
             "ethrex", _fake_ethrex(tmp_path, name), engine=engine
         )
+
+
+RETH_BALANCE_ERROR = (
+    "test failed: Balance does not match\n  left `309698523628523820`,\n "
+    "right `309698523628523819`"
+)
+RETH_BLOCKTEST = json.dumps(
+    [
+        {"error": "", "fork": "", "name": "seed_0", "pass": True},
+        {
+            "error": RETH_BALANCE_ERROR,
+            "fork": "",
+            "name": "seed_1",
+            "pass": False,
+        },
+    ]
+)
+"""`ef-test-runner blocktest --json-array` with reth's series on a v36 batch,
+one fixture's expected post-state balance raised by a wei."""
+
+
+def test_reth_judges_a_batch_with_blocktest_json_array(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The reth runner takes its subcommand, the flags, then the file."""
+    runner = FixtureRunner(
+        "reth", Path("/bin/ef-test-runner"), "RethFixtureConsumer"
+    )
+    args, verdicts = _judge(monkeypatch, tmp_path, runner, RETH_BLOCKTEST)
+    assert args == ["blocktest", "--json-array", str(tmp_path / "batch.json")]
+    assert verdicts == {
+        "seed_0": Verdict(True),
+        "seed_1": Verdict(False, RETH_BALANCE_ERROR),
+    }
+
+
+def test_reth_is_detected_and_has_no_engine_runner_yet(tmp_path: Path) -> None:
+    """The reth runner is named by `--version`; no engine runner yet."""
+    binary = tmp_path / "ef-test-runner"
+    binary.write_text('#!/bin/sh\necho "ef-test-runner 2.7.0"\n')
+    binary.chmod(0o755)
+    assert FixtureRunner.detect("reth", binary).kind == "RethFixtureConsumer"
+    with pytest.raises(ValueError, match="no engine runner"):
+        FixtureRunner.detect("reth", binary, engine=True)

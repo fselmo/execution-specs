@@ -190,6 +190,8 @@ def _native_kind(
     line = native_version(binary, env)
     if line is None:
         return None
+    if line.startswith("ef-test-runner"):
+        return "RethFixtureConsumer"
     if line.startswith("ethrex-enginetest") != engine:
         wanted = "ethrex-enginetest" if engine else "ethrex-blocktest"
         raise ValueError(
@@ -320,6 +322,8 @@ class FixtureRunner:
             verdicts = self._run_json_array(path)
         elif self.kind == "EthrexFixtureConsumer":
             verdicts = self._run_ethrex(path)
+        elif self.kind == "RethFixtureConsumer":
+            verdicts = self._run_reth(path)
         elif self.kind == "EvmOneBlockchainFixtureConsumer":
             verdicts = self._run_gtest(path)
         elif self.kind == "BesuFixtureConsumer":
@@ -397,6 +401,16 @@ class FixtureRunner:
         if self.kind == "ErigonFixtureConsumer":
             args.append("--jsonout")
         proc = self._run([*args, *self.flags, str(path)])
+        verdicts = parse_json_array(proc.stdout)
+        if not verdicts and proc.returncode != 0:
+            return self._all_failed(
+                f"{RUNNER_ERROR_PREFIX}{proc.stderr.strip()[:200]}"
+            )
+        return verdicts
+
+    def _run_reth(self, path: Path) -> Dict[str, Verdict]:
+        # `ef-test-runner blocktest` judges one fixture file with its series.
+        proc = self._run(["blocktest", "--json-array", *self.flags, str(path)])
         verdicts = parse_json_array(proc.stdout)
         if not verdicts and proc.returncode != 0:
             return self._all_failed(

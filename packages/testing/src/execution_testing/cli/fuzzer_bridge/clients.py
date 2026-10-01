@@ -248,11 +248,10 @@ def resolve_client(
     return ResolvedClient(client.name, binary, source, dict(client.env))
 
 
-ETHREX_VERSION = re.compile(r"^ethrex-(block|engine)test\b")
-"""ethrex's two runners, from its series: `ethrex-blocktest` judges
-`blockchain_test` fixtures and `ethrex-enginetest` judges
-`blockchain_test_engine` ones. EEST has no consumer class for either, so
-they are told apart by their `--version` line."""
+NATIVE_VERSION = re.compile(r"^(ethrex-(block|engine)test|ef-test-runner)\b")
+"""Runners EEST has no consumer class for, told apart by their `--version`
+line: ethrex's `ethrex-blocktest` and `ethrex-enginetest`, one per fixture
+format, and reth's `ef-test-runner`, all from their clients' series."""
 
 
 def native_version(
@@ -261,10 +260,10 @@ def native_version(
     """
     The `--version` line of a runner EEST cannot detect, else None.
 
-    Only binaries named like ethrex's runners are asked, so no other
-    client's binary is run with a flag it may not take.
+    Only binaries named like these runners are asked, so no other client's
+    binary is run with a flag it may not take.
     """
-    if not Path(binary).name.startswith("ethrex-"):
+    if not Path(binary).name.startswith(("ethrex-", "ef-test-runner")):
         return None
     try:
         proc = subprocess.run(
@@ -277,7 +276,7 @@ def native_version(
     except (OSError, subprocess.TimeoutExpired):
         return None
     lines = (proc.stdout or "").strip().splitlines()
-    if lines and ETHREX_VERSION.match(lines[0]):
+    if lines and NATIVE_VERSION.match(lines[0]):
         return lines[0]
     return None
 
