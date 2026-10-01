@@ -2634,3 +2634,89 @@ def test_interface_reports_read_as_the_series_lines() -> None:
         assert [line.split()[:3] for _, line in kept] == [
             ["BAL-FALLBACK", "block=12", "hash=0xab"]
         ]
+
+
+GETH_FORK_PARALLEL = (
+    '{"event":"balExecution","block":1,"hash":"0xc0664c61f46c7132d971c97a98'
+    '09da95fccd183cebc7342ee24b72d01301eabd","path":"parallel","reason":""}'
+)
+GETH_FORK_SEQUENTIAL = (
+    '{"event":"balExecution","block":1,"hash":"0xc0664c61f46c7132d971c97a98'
+    '09da95fccd183cebc7342ee24b72d01301eabd","path":"sequential",'
+    '"reason":"disabled"}'
+)
+BESU_FORK_PARALLEL = (
+    '{"event":"balExecution","block":1,"hash":"0xc4f4d8dd4d0c32cb5e33787b9d'
+    '85d86c71febe31a4112aae75532d62b7546e61","path":"parallel","reason":"",'
+    '"scheduler":"bal"}'
+)
+BESU_FORK_FALLBACK = (
+    '{"event":"balFallback","block":3,"hash":"0x75ed8c180a4a18864a120bff763'
+    'be3add755fd8acd1866cbeac2d9ffbde7f35a","parallelError":"provided gas '
+    'insufficient","sequentialResult":"invalid","sequentialError":"provided '
+    'gas insufficient"}'
+)
+"""Lines from the v1 fork branches (geth 1f2de3a3b5, besu d2cc00f64c) on a
+v39 gate batch; nethermind's ad6c264a08 prints geth's lines verbatim."""
+
+
+def test_fork_branch_reports_parse_as_the_series_lines() -> None:
+    """
+    Real interface output: the decisions join their blocks, besu's extra
+    `scheduler` key is ignored, and besu's fallback on a block the batch
+    expects to be rejected is not a masked failure.
+    """
+    from ..fuzzer_bridge.campaign import (
+        expected_valid_lines,
+        parallel_decisions,
+        tagged_stderr_lines,
+    )
+
+    geth_hash = (
+        "0xc0664c61f46c7132d971c97a9809da95fccd183cebc7342ee24b72d01301eabd"
+    )
+    besu_hash = (
+        "0xc4f4d8dd4d0c32cb5e33787b9d85d86c71febe31a4112aae75532d62b7546e61"
+    )
+    rejected = (
+        "0x75ed8c180a4a18864a120bff763be3add755fd8acd1866cbeac2d9ffbde7f35a"
+    )
+    fixtures = {
+        "a": {
+            "blocks": [
+                {
+                    "blockHeader": {"number": "0x1", "hash": geth_hash},
+                    "blockAccessList": [],
+                },
+                {
+                    "blockHeader": {"number": "0x1", "hash": besu_hash},
+                    "blockAccessList": [],
+                },
+                {
+                    "expectException": "TransactionException.X",
+                    "rlp_decoded": {
+                        "blockHeader": {"number": "0x3", "hash": rejected}
+                    },
+                    "blockAccessList": [],
+                },
+            ]
+        }
+    }
+    tagged = tagged_stderr_lines(
+        {
+            "geth": GETH_FORK_PARALLEL,
+            "geth:contrast": GETH_FORK_SEQUENTIAL,
+            "besu": f"{BESU_FORK_PARALLEL}\n{BESU_FORK_FALLBACK}",
+        }
+    )
+    decisions = [t for t in tagged if t[1].startswith("FUZZ-PAR")]
+    fallbacks = [t for t in tagged if not t[1].startswith("FUZZ-PAR")]
+    tallies = parallel_decisions(decisions, fixtures)
+    assert {lane: t["parallel"] for lane, t in tallies.items()} == {
+        "geth": 1,
+        "geth:contrast": 0,
+        "besu": 1,
+    }
+    assert all(t["unmatched"] == 0 for t in tallies.values())
+    assert len(fallbacks) == 1
+    assert expected_valid_lines(fallbacks, fixtures) == []
