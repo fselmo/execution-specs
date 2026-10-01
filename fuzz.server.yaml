@@ -673,7 +673,10 @@ campaigns:
       # once as a stopped control; no hit in the first 2,000 calibration
       # cases pauses as never fired; so do any control runner errors. Only
       # the upper edge is held here.
-      control_band: [0.0, 0.08]
+      # The upper edge rose from 8% at v39: v38's repay motif changes the chain
+      # in about 6% of seeds, and the v39 gate measured besu-gate at 9.3%
+      # (360 of 3,864).
+      control_band: [0.0, 0.15]
       # Every client's primary is its parallel path on this panel.
       parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, ethrex-par-main]
       parallel_baseline_blocks: 2000
