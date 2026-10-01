@@ -247,10 +247,19 @@ clients:
         - patches/ethrex-main/0003-ef_tests-an-ethrex-enginetest-binary-parallel-by-def.patch
     contrast_flags: [--bal.sequential]
   # reth main by full SHA, its block import only: blocktest --json-array
-  # from #23361 (patches/UPSTREAM.md). reth imports sequentially, so this
-  # lane has no contrast and is not a parallel lane; reth's BAL-parallel path
-  # lives in the engine tree and joins with the engine port. libclang comes
-  # from the PyPI wheel, with gcc's builtin headers for bindgen.
+  # from #23361 (patches/UPSTREAM.md). reth's BAL-parallel decision is
+  # bal_path_eligible in crates/engine/tree/src/tree/payload_validator.rs,
+  # reached only through the engine tree. Measured on a v36 shard of 815
+  # blocks (780 carrying a list): all 815 ran on blocktest's sequential
+  # batch executor, none reached that site. So this lane has no contrast and
+  # is not a parallel lane until the engine port. Step 0 on the 3bd832b4
+  # fill: reth shares geth's and besu's pre-#3566 disagreement (system calls
+  # at one BAL index not netted against its start) on exactly the same three
+  # test_block_access_lists_cross_index.py tests, with geth's own BAL hash on
+  # forward_all (6defd017...); and gives a system call its state-gas
+  # reservoir as execution gas, 20 tests in test_state_gas_system_calls.py
+  # (campaigns/reports/reth-system-call-reservoir). libclang comes from the
+  # PyPI wheel, with gcc's builtin headers for bindgen.
   - name: reth-main
     build:
       recipe: reth
@@ -511,7 +520,7 @@ campaigns:
   # v20 gate on the current-head panel: besu-gate's 2d29706a is the control.
   gate-v20:
     fork: Amsterdam
-    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate]
+    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate, ethrex-par-main, reth-main]
     producer: evmone-producer
     seed_start: 210000
     known: []
