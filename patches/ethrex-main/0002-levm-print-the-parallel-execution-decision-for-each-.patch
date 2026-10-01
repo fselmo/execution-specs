@@ -1,0 +1,43 @@
+From 4c76732fefdd9b7f459f3cea2799f79eb682e863 Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <felipe.selmo@ethereum.org>
+Date: Thu, 1 Oct 2026 15:13:17 +0000
+Subject: [PATCH 2/3] levm: print the parallel-execution decision for each
+ block
+
+A fuzzing runner counts FUZZ-PAR-DECISION lines on stderr to show a campaign ran the parallel path on every block that could take it.
+---
+ crates/vm/backends/levm/mod.rs | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/crates/vm/backends/levm/mod.rs b/crates/vm/backends/levm/mod.rs
+index 1f13a9f3b..f9c2ae6b0 100644
+--- a/crates/vm/backends/levm/mod.rs
++++ b/crates/vm/backends/levm/mod.rs
+@@ -599,6 +599,24 @@ impl LEVM {
+         // Without rayon there is no parallel BAL path, so these are unused.
+         // Adding dummy let to avoid unused warnings.
+         let _ = (header_bal, bal_parallel_exec_enabled);
++        // A fuzzing runner counts these lines to show which path each block took.
++        #[cfg(feature = "rayon")]
++        {
++            let (decision, reason) = if header_bal.is_none() {
++                ("sequential", "no-bal")
++            } else if !is_amsterdam {
++                ("sequential", "pre-amsterdam")
++            } else if !bal_parallel_exec_enabled {
++                ("sequential", "disabled")
++            } else {
++                ("parallel", "")
++            };
++            eprintln!(
++                "FUZZ-PAR-DECISION block={} hash={:#x} decision={decision} reason={reason}",
++                block.header.number,
++                block.hash()
++            );
++        }
+         #[cfg(feature = "rayon")]
+         // When BAL is provided (Amsterdam+ validation path): use parallel execution.
+         // The `is_amsterdam` gate is required: `execute_block_parallel` (and the
+-- 
+2.47.3
+

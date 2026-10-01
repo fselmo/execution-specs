@@ -221,6 +221,31 @@ clients:
     # the cap is repeated there.
     runner_flags: [--workers, "2"]
     contrast_flags: [--bal.sequential, --workers, "2"]
+  # ethrex main by full SHA. The series (patches/ethrex-main) adds its two
+  # runners, ethrex-blocktest on each fixture's delivered access list and
+  # ethrex-enginetest through the engine API, both parallel by default with
+  # --bal.sequential as the contrast, and the FUZZ-PAR-DECISION print.
+  # ethrex has no sequential fallback, so there is no masking signal.
+  - name: ethrex-par-main
+    build:
+      recipe: ethrex
+      repo: lambdaclass/ethrex
+      ref: 8f0d260d10972442c490bd777e6bd6bfa819c5cc
+      patches:
+        - patches/ethrex-main/0001-ef_tests-an-ethrex-blocktest-binary-that-runs-fixtur.patch
+        - patches/ethrex-main/0002-levm-print-the-parallel-execution-decision-for-each-.patch
+        - patches/ethrex-main/0003-ef_tests-an-ethrex-enginetest-binary-parallel-by-def.patch
+    contrast_flags: [--bal.sequential]
+  - name: ethrex-eng-main
+    build:
+      recipe: ethrex-engine
+      repo: lambdaclass/ethrex
+      ref: 8f0d260d10972442c490bd777e6bd6bfa819c5cc
+      patches:
+        - patches/ethrex-main/0001-ef_tests-an-ethrex-blocktest-binary-that-runs-fixtur.patch
+        - patches/ethrex-main/0002-levm-print-the-parallel-execution-decision-for-each-.patch
+        - patches/ethrex-main/0003-ef_tests-an-ethrex-enginetest-binary-parallel-by-def.patch
+    contrast_flags: [--bal.sequential]
   - name: geth-main
     build: {recipe: geth, repo: ethereum/go-ethereum, ref: 920c07774c65ebb3023536f85df642c44478b540}
   - name: erigon-par-main
@@ -596,7 +621,7 @@ campaigns:
   # One campaign from v28 on; the two shards above are a closed record.
   continuous-one:
     fork: Amsterdam
-    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate]
+    clients: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, besu-gate, ethrex-par-main]
     producer: evmone-producer
     seed_start: 100000000
     # Measured on this box, same 2,500 seeds per cap (cases/s): 1: 4.02,
@@ -627,7 +652,7 @@ campaigns:
       # the upper edge is held here.
       control_band: [0.0, 0.08]
       # Every client's primary is its parallel path on this panel.
-      parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main]
+      parallel_lanes: [geth-par-main, erigon-par-main, besu-par-main, nethermind-par-main, ethrex-par-main]
       parallel_baseline_blocks: 2000
       parallel_proof_floor: 0.9
   # The engine lane, beside continuous-main rather than in its place.
@@ -644,7 +669,7 @@ campaigns:
   # engine fills are unverified here.
   engine-main:
     fork: Amsterdam
-    clients: [nethermind-par-main, nethermind-main, besu-eng-main, geth-eng-main]
+    clients: [nethermind-par-main, nethermind-main, besu-eng-main, geth-eng-main, ethrex-eng-main]
     fixture_format: blockchain_test_engine
     seed_start: 80000000
     # Shares the box with continuous-one; 3 fill workers.
@@ -660,6 +685,6 @@ campaigns:
       # geth and besu decided parallel on all 518 engine payloads of the
       # server's probe; nethermind-par-main on all 4,040 blocks it printed
       # a decision for on the engine path.
-      parallel_lanes: [geth-eng-main, besu-eng-main, nethermind-par-main]
+      parallel_lanes: [geth-eng-main, besu-eng-main, nethermind-par-main, ethrex-eng-main]
       parallel_baseline_blocks: 2000
       parallel_proof_floor: 0.9

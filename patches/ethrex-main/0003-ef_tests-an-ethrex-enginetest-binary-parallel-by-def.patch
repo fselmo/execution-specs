@@ -1,0 +1,138 @@
+From f2a9516af1543481e2dd5a79cb4c2d0165244564 Mon Sep 17 00:00:00 2001
+From: Felipe Selmo <felipe.selmo@ethereum.org>
+Date: Thu, 1 Oct 2026 15:13:17 +0000
+Subject: [PATCH 3/3] ef_tests: an ethrex-enginetest binary, parallel by
+ default
+
+ethrex-enginetest [--bal.sequential] FILE... replays each fixture's payloads through the engine API and prints one JSON verdict per fixture. --bal.sequential builds each context's chain with BAL-parallel execution off, so the same binary judges a payload both ways.
+---
+ tooling/ef_tests/engine/Cargo.toml        |  4 ++
+ tooling/ef_tests/engine/bin/enginetest.rs | 58 +++++++++++++++++++++++
+ tooling/ef_tests/engine/src/engine_ctx.rs | 24 ++++++++--
+ 3 files changed, 82 insertions(+), 4 deletions(-)
+ create mode 100644 tooling/ef_tests/engine/bin/enginetest.rs
+
+diff --git a/tooling/ef_tests/engine/Cargo.toml b/tooling/ef_tests/engine/Cargo.toml
+index 8295ed8f3..c116e79a2 100644
+--- a/tooling/ef_tests/engine/Cargo.toml
++++ b/tooling/ef_tests/engine/Cargo.toml
+@@ -38,6 +38,10 @@ ctor = "0.2"
+ [lib]
+ path = "src/lib.rs"
+ 
++[[bin]]
++name = "ethrex-enginetest"
++path = "bin/enginetest.rs"
++
+ [[test]]
+ name = "all"
+ harness = false
+diff --git a/tooling/ef_tests/engine/bin/enginetest.rs b/tooling/ef_tests/engine/bin/enginetest.rs
+new file mode 100644
+index 000000000..8bd254da1
+--- /dev/null
++++ b/tooling/ef_tests/engine/bin/enginetest.rs
+@@ -0,0 +1,58 @@
++//! Run `blockchain_test_engine` fixture files and print one JSON verdict per fixture.
++//!
++//! `ethrex-enginetest [--bal.sequential] FILE...` replays each fixture's payloads
++//! through the engine API, on the parallel path unless `--bal.sequential` is
++//! given, and prints a JSON array of `{name, pass, fork, error}` to stdout.
++
++use std::panic::{AssertUnwindSafe, catch_unwind};
++use std::sync::atomic::Ordering;
++
++use ef_tests_engine::engine_ctx::BAL_SEQUENTIAL;
++use ef_tests_engine::{EngineFixtureFile, RunOptions, run_fixture};
++
++fn main() {
++    let mut files = Vec::new();
++    for arg in std::env::args().skip(1) {
++        if arg == "--version" {
++            println!("ethrex-enginetest {}", env!("CARGO_PKG_VERSION"));
++            return;
++        } else if arg == "--bal.sequential" {
++            BAL_SEQUENTIAL.store(true, Ordering::Relaxed);
++        } else {
++            files.push(arg);
++        }
++    }
++    let rt = tokio::runtime::Builder::new_multi_thread()
++        .enable_all()
++        .build()
++        .expect("tokio runtime");
++    let opts = RunOptions::from_env();
++    let mut results = Vec::new();
++    for file in &files {
++        let raw = std::fs::read_to_string(file).expect("read fixture file");
++        let fixtures: EngineFixtureFile = serde_json::from_str(&raw).expect("parse fixture file");
++        for (name, fixture) in &fixtures {
++            let outcome = catch_unwind(AssertUnwindSafe(|| {
++                rt.block_on(run_fixture(name, fixture, &opts))
++            }));
++            let error = match outcome {
++                Ok(Ok(())) => String::new(),
++                Ok(Err(e)) if e.is_skip() => String::new(),
++                Ok(Err(e)) => e.to_string(),
++                Err(panic) => panic
++                    .downcast_ref::<String>()
++                    .cloned()
++                    .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
++                    .unwrap_or_else(|| "panicked".to_string()),
++            };
++            let fork = fixture.fork().map(|f| format!("{f:?}")).unwrap_or_default();
++            results.push(serde_json::json!({
++                "name": name,
++                "pass": error.is_empty(),
++                "fork": fork,
++                "error": error,
++            }));
++        }
++    }
++    println!("{}", serde_json::to_string_pretty(&results).expect("verdicts serialize"));
++}
+diff --git a/tooling/ef_tests/engine/src/engine_ctx.rs b/tooling/ef_tests/engine/src/engine_ctx.rs
+index 8a9dbb708..dacb4c58b 100644
+--- a/tooling/ef_tests/engine/src/engine_ctx.rs
++++ b/tooling/ef_tests/engine/src/engine_ctx.rs
+@@ -28,6 +28,11 @@ use tokio::sync::{Mutex as TokioMutex, OnceCell};
+ ///   `rg "context\.peer_handler|ctx\.peer_handler" crates/networking/rpc/eth/block.rs` -> empty
+ static SHARED_SYNCER: OnceCell<Arc<SyncManager>> = OnceCell::const_new();
+ 
++/// Set by a runner that judges payloads on the sequential path: every context
++/// built after it runs blocks with BAL-parallel execution off.
++pub static BAL_SEQUENTIAL: std::sync::atomic::AtomicBool =
++    std::sync::atomic::AtomicBool::new(false);
++
+ thread_local! {
+     /// Per-OS-thread merkleization pool, lazily built on first use.
+     /// The merkle protocol requires its 16 worker jobs to run concurrently and
+@@ -57,10 +62,21 @@ pub async fn engine_only_context(storage: Store) -> RpcApiContext {
+         .get_or_init(|| async { Arc::new(dummy_sync_manager().await) })
+         .await
+         .clone();
+-    let blockchain = Arc::new(Blockchain::for_test_harness_with_pool(
+-        storage.clone(),
+-        thread_local_merkle_pool(),
+-    ));
++    let blockchain = if BAL_SEQUENTIAL.load(std::sync::atomic::Ordering::Relaxed) {
++        Arc::new(Blockchain::new(
++            storage.clone(),
++            ethrex_blockchain::BlockchainOptions {
++                bal_parallel_exec_enabled: false,
++                mempool_prewarm_enabled: false,
++                ..Default::default()
++            },
++        ))
++    } else {
++        Arc::new(Blockchain::for_test_harness_with_pool(
++            storage.clone(),
++            thread_local_merkle_pool(),
++        ))
++    };
+     // The runner owns this context for its whole lifetime, so the executor thread
+     // is left detached.
+     let (block_worker_channel, _executor) = start_block_executor(blockchain.clone());
+-- 
+2.47.3
+
