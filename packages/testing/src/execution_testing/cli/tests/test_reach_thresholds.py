@@ -23,10 +23,10 @@ from ..fuzzer_bridge.density import axis_collapse_warnings, axis_coverage
 from ..fuzzer_bridge.generator import (
     BURNER_ADDRESS,
     EXACT_CHARGE_CHILD_ADDRESS,
-    EXACT_CHARGE_TX_GAS,
     EXACT_CHARGER_ADDRESS,
     REJECTED_BY_STATE_GAS,
     STATE_FILLER_ADDRESS,
+    _exact_charge_gas,
     exact_charge_child_code,
     generate_fuzzer_output,
 )
@@ -54,15 +54,31 @@ def _entry(fixture: Dict[str, Any], address: Address) -> Dict[str, Any]:
     )
 
 
-def _charge(margin: int) -> FuzzerOutput:
-    """One transaction to the charger, its child given need + margin."""
+def _charge(source: str, margin: int) -> FuzzerOutput:
+    """
+    One transaction to the charger, the first of its case, gas and the
+    child's share sized by the generator for ``source`` and ``margin``.
+    """
     case = generate_fuzzer_output(Amsterdam, 0)
-    child_gas = exact_charge_child_code().gas_cost(Amsterdam) + margin
+    cap = Amsterdam.transaction_gas_limit_cap()
+    assert cap is not None
+    store_state = Op.SSTORE(
+        key_warm=False, original_value=0, new_value=1
+    ).state_cost(Amsterdam)
+    gas, child_gas = _exact_charge_gas(
+        (source, margin),
+        store_state,
+        exact_charge_child_code().gas_cost(Amsterdam),
+        store_state,
+        cap,
+        int(case.env.gas_limit),
+    )
+    assert (gas > cap) == (source != "gas_left")
     (first, *_) = case.transactions
     tx = first.model_copy(
         update={
             "to": CHARGER,
-            "gas": HexNumber(EXACT_CHARGE_TX_GAS),
+            "gas": HexNumber(gas),
             "data": Bytes(child_gas.to_bytes(32, "big")),
             "value": HexNumber(0),
             "authorization_list": None,
@@ -75,6 +91,7 @@ def _charge(margin: int) -> FuzzerOutput:
     )
 
 
+@pytest.mark.parametrize("source", ["gas_left", "reservoir", "split"])
 @pytest.mark.parametrize(
     "margin,stored",
     [
@@ -83,17 +100,18 @@ def _charge(margin: int) -> FuzzerOutput:
         pytest.param(1, True, id="one_over"),
     ],
 )
-def test_a_state_charge_equal_to_the_gas_left_is_paid(
-    margin: int, stored: bool
+def test_a_state_charge_equal_to_what_is_left_is_paid(
+    source: str, margin: int, stored: bool
 ) -> None:
     """
     The child's store leaves exactly its state cost after its execution
-    cost; that charge is paid from execution gas and the slot is written.
-    One gas less and the child runs out on the charge; one more and it is
-    paid with gas to spare. The charger records the call's result plus
-    one, so the parent's slot says which.
+    cost, held in execution gas, in the reservoir, or half in each; that
+    charge is paid and the slot is written. One gas less and the child
+    runs out on the charge; one more and it is paid with gas to spare.
+    The charger records the call's result plus one, so the parent's slot
+    says which.
     """
-    fixture = _fill(_charge(margin))
+    fixture = _fill(_charge(source, margin))
     (block,) = fixture["blocks"]
     (receipt,) = block["receipts"]
     assert receipt["status"]
@@ -265,7 +283,10 @@ def test_asking_one_more_than_the_execution_gas_left_is_rejected(
 
 
 def test_every_exact_charge_axis_keeps_all_its_values() -> None:
-    """Presence and every margin, the exact one above all, stay drawn."""
+    """
+    Presence, every margin, the exact one above all, and every pool
+    paying stay drawn.
+    """
     coverage = axis_coverage(Amsterdam, range(0, 400))
     warnings_ = [
         w

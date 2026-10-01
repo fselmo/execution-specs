@@ -63,7 +63,7 @@ from .negative import NEGATIVE_KINDS
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 37
+GENERATOR_VERSION = 38
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -343,6 +343,13 @@ EXACT_CHARGE_TX_GAS = 1_000_000
 """Gas for a transaction to the charger: under the cap, so no reservoir,
 and enough for its own two fresh stores and the child's forwarded gas."""
 
+EXACT_CHARGE_SOURCES: Tuple[str, ...] = ("gas_left", "reservoir", "split")
+"""Which pool pays the child's store at the equality. `gas_left`: no
+reservoir, the child's gas is the store's whole cost. `reservoir`: the
+child gets the store's execution cost only, and the reservoir its state
+cost, so the reservoir alone must pay. `split`: the reservoir holds half
+the state cost and the child's gas the rest, so neither pays alone."""
+
 
 def exact_charge_child_code() -> Bytecode:
     """The child's code, priced as a first write of a fresh slot."""
@@ -395,6 +402,82 @@ per transaction so each is still dead when it is paid."""
 EMPTY_BENEFICIARY_ADDRESS = 0x2E0FF
 """An account in the pre-state with nothing in it: it exists, and is not
 alive, until something pays it."""
+
+
+AUTHORITY_PROBE_ADDRESS = 0x1FFEF
+"""Helper that reads the account its calldata names, then calls it with
+the transaction's value: sent with an authorization by that account, so
+the delegation and the accesses share one block access index."""
+
+EMPTY_ACCOUNT = FuzzerAccountInput(balance=HexNumber(0))
+"""What an address absent from the pre-state holds."""
+
+AUTHORITY_TX_GAS = 1_000_000
+"""Gas for a transaction carrying one authorization: its intrinsic cost
+and the authority's state charges fit with room, so the authorization is
+never rolled back for want of gas, and the authority's nonce after it is
+known."""
+
+
+def authority_probe_code() -> bytes:
+    """Read, then call with the value, the address in calldata word 0."""
+    target = Op.CALLDATALOAD(0)
+    return bytes(
+        Op.POP(Op.BALANCE(target))
+        + Op.POP(Op.EXTCODEHASH(target))
+        + Op.POP(Op.CALL(Op.GAS, target, Op.CALLVALUE, 0, 0, 0, 0))
+    )
+
+
+REPAYER_ADDRESS = 0x1FFEE
+"""Helper that makes the EIP-8037 repayment (#3478) decide its post state.
+
+Sent with no reservoir, it writes a fresh slot, so the state charge
+spills into execution gas. It then delegate-calls a restorer that sets
+the slot back to zero: the refill lands in the child's frame, which has
+no spill, so it credits the child's reservoir. When the child succeeds,
+the merge holds the parent's spill and that credit in one meter and
+repays the spill from it; when the child reverts, nothing is repaid. The
+helper then stores the call's result and the gas it has left, so the
+repayment reaches the state root."""
+
+RESTORER_ADDRESS = 0x1FFED
+"""Delegate-called by the repayer: sets the slot calldata names to zero."""
+
+REVERTING_RESTORER_ADDRESS = 0x1FFEC
+"""The restorer that reverts after the store, so its refill is undone and
+the merge repays nothing."""
+
+REPAY_TX_GAS = 1_000_000
+"""Gas for a transaction to the repayer: under the cap, so no reservoir."""
+
+
+def repayer_code() -> bytes:
+    """
+    Spill on a fresh slot, delegate-call calldata word 0 to restore it,
+    then store the result and the gas left.
+    """
+    count = Op.SLOAD(0)
+    restored = Op.ADD(2**128, count)
+    return bytes(
+        Op.SSTORE(0, Op.ADD(Op.SLOAD(0), 1))
+        + Op.SSTORE(restored, 1)
+        + Op.MSTORE(0, restored)
+        + Op.MSTORE(
+            32, Op.DELEGATECALL(Op.GAS, Op.CALLDATALOAD(0), 0, 32, 0, 0)
+        )
+        + Op.SSTORE(
+            Op.ADD(2**129, count), Op.ADD(Op.SHL(128, Op.MLOAD(32)), Op.GAS)
+        )
+    )
+
+
+def restorer_code(reverts: bool) -> bytes:
+    """Set the slot in calldata word 0 to zero; revert after if asked."""
+    code = Op.SSTORE(Op.CALLDATALOAD(0), 0)
+    if reverts:
+        code += Op.REVERT(0, 0)
+    return bytes(code)
 
 
 CREATION_TX_GAS = 1_000_000
@@ -860,9 +943,47 @@ MOTIFS: Tuple[str, ...] = (
     "delegated_call",
     "deployer",
     "max_nonce_deployer",
+    "authority_alias",
+    "max_nonce_authority",
+    "repay",
     "none",
 )
 """What a transaction runs, in the order the chances are taken."""
+
+
+def _exact_charge_gas(
+    exact_charge: Tuple[str, int],
+    counter_store: int,
+    need: int,
+    store_state: int,
+    cap: int,
+    budget: int,
+) -> Tuple[int, int]:
+    """
+    The transaction gas and the gas forwarded to the child for one draw
+    of the exact charger, whose child's store costs ``need`` in all and
+    ``store_state`` of it state gas.
+
+    A reservoir goes first to the charger's own counter store,
+    ``counter_store`` when that is fresh, so it is sized to cover that
+    and then the child's share. A draw the block cannot fit above the cap
+    is paid from `gas_left` instead.
+    """
+    source, margin = exact_charge
+    execution = need - store_state
+    half = store_state // 2
+    if source == "reservoir":
+        reservoir, forwarded = store_state + margin, execution
+    elif source == "split":
+        reservoir = half
+        forwarded = execution + store_state - half + margin
+    elif source == "gas_left":
+        reservoir, forwarded = 0, need + margin
+    else:
+        raise ValueError(f"unknown exact-charge source {source!r}")
+    if reservoir == 0 or cap + counter_store + reservoir > budget:
+        return EXACT_CHARGE_TX_GAS, need + margin
+    return cap + counter_store + reservoir, forwarded
 
 
 def generate_fuzzer_output(
@@ -1104,12 +1225,24 @@ def record_case(
         balance=HexNumber(0),
         nonce=HexNumber(0),
     )
+    for helper, code in (
+        (AUTHORITY_PROBE_ADDRESS, authority_probe_code()),
+        (REPAYER_ADDRESS, repayer_code()),
+        (RESTORER_ADDRESS, restorer_code(reverts=False)),
+        (REVERTING_RESTORER_ADDRESS, restorer_code(reverts=True)),
+    ):
+        accounts[Address(helper)] = FuzzerAccountInput(
+            balance=HexNumber(0), nonce=HexNumber(1), code=Bytes(code)
+        )
     fresh_store_state = Op.SSTORE(
         key_warm=False, original_value=0, new_value=1
     ).state_cost(fork)
     nonces: Dict[Address, int] = dict.fromkeys(sender_addresses, 0)
     authority_nonces: Dict[Address, int] = dict(authority_start)
     tx_targets = pool.tx_targets()
+    # The charger's counter slot is a fresh store only on its first call
+    # in the case; a reservoir sized for the equality must cover it then.
+    exact_charge_calls = 0
 
     transactions: List[FuzzerTransactionInput] = []
     # Transactions must fit the block, or the block itself is invalid.
@@ -1135,7 +1268,10 @@ def record_case(
         drawn_to = to
         gas_need_fraction = None
         exhaust: Optional[Tuple[int, int]] = None
-        exact_gas: Optional[int] = None
+        exact_charge: Optional[Tuple[str, int]] = None
+        delegated_alias: Optional[Tuple[Address, Hash, bool, Address]] = None
+        capped: Optional[Tuple[Hash, int, Address]] = None
+        restorer: Optional[int] = None
         grave: Optional[Tuple[Address, int]] = None
         creation: Optional[str] = None
         initcode: Optional[bytes] = None
@@ -1183,6 +1319,21 @@ def record_case(
                     domains.max_nonce_deployer_rate,
                     near_max_creators and DEPLOYER_TX_GAS <= room,
                 ),
+                (
+                    "authority_alias",
+                    domains.authority_alias_tx_rate,
+                    4 in types and AUTHORITY_TX_GAS <= room,
+                ),
+                (
+                    "max_nonce_authority",
+                    domains.max_nonce_authority_tx_rate,
+                    4 in types and AUTHORITY_TX_GAS <= room,
+                ),
+                (
+                    "repay",
+                    domains.repay_tx_rate,
+                    bool(domains.reservoir_tx_gas) and REPAY_TX_GAS <= room,
+                ),
             ]
         )
         motif = t.pick("motif", MOTIFS, weights=chances, kind=STRUCTURAL)
@@ -1213,10 +1364,19 @@ def record_case(
                 )
         elif motif == "exact_charge":
             to = Address(EXACT_CHARGER_ADDRESS)
-            exact_gas = exact_need + m.pick(
-                "margin",
-                domains.exact_charge_margins,
-                domain=integers(-(10**6), 10**6),
+            exact_charge = (
+                m.pick(
+                    "source",
+                    EXACT_CHARGE_SOURCES
+                    if domains.reservoir_tx_gas
+                    else EXACT_CHARGE_SOURCES[:1],
+                    kind=STRUCTURAL,
+                ),
+                m.pick(
+                    "margin",
+                    domains.exact_charge_margins,
+                    domain=integers(-(10**6), 10**6),
+                ),
             )
         elif motif == "graver":
             to = Address(GRAVER_ADDRESS)
@@ -1268,12 +1428,76 @@ def record_case(
                 ]
             )
             initcode = deployer_initcode(1, 1)
+        elif motif == "authority_alias":
+            # A fresh authority per transaction, nonce zero, authorized
+            # with gas to spare: its nonce afterwards is known, so it can
+            # send a transaction of its own later in the block.
+            key = _derive_key(m, "authority/key")
+            alias = Address(EOA(key=key))
+            accounts[alias] = FuzzerAccountInput(
+                balance=HexNumber(10**20),
+                nonce=HexNumber(0),
+                private_key=key,
+            )
+            if (
+                m.pick("kind", ("target", "probe"), kind=STRUCTURAL)
+                == "target"
+            ):
+                to = alias
+            else:
+                to = Address(AUTHORITY_PROBE_ADDRESS)
+            sends_later = m.flag("sends_later", 0.5, kind=PARAM)
+            # Code run as the authority can CREATE, which moves its nonce;
+            # one that sends later is delegated only where there is none,
+            # so its transaction's nonce stays the one the authorization
+            # left.
+            codeless = [
+                target
+                for target in pool.call_targets()
+                if not accounts.get(Address(target), EMPTY_ACCOUNT).code
+            ]
+            sends_later = sends_later and bool(codeless)
+            delegates = codeless if sends_later else pool.call_targets()
+            delegated_alias = (
+                alias,
+                key,
+                sends_later,
+                Address(m.member("delegate", delegates)),
+            )
+        elif motif == "max_nonce_authority":
+            # An authorization declaring the authority's own nonce at the
+            # top: one below applies, the highest is skipped before the
+            # authority is loaded, so it stays out of the access list.
+            key = _derive_key(m, "authority/key")
+            nonce = m.pick("nonce", (MAX_NONCE - 1, MAX_NONCE), domain=NONCE)
+            accounts[Address(EOA(key=key))] = FuzzerAccountInput(
+                balance=HexNumber(0),
+                nonce=HexNumber(nonce),
+                private_key=key,
+            )
+            capped = (
+                key,
+                nonce,
+                Address(m.member("delegate", pool.call_targets())),
+            )
+        elif motif == "repay":
+            to = Address(REPAYER_ADDRESS)
+            restorer = (
+                REVERTING_RESTORER_ADDRESS
+                if m.flag(
+                    "child_reverts",
+                    domains.repay_child_revert_share,
+                    kind=PARAM,
+                )
+                else RESTORER_ADDRESS
+            )
         elif motif != "none":
             raise ValueError(f"unknown motif {motif!r}")
         # Drawn only for a transaction no motif above has claimed.
         if (
             to == drawn_to
             and creation is None
+            and capped is None
             and fork.system_contract_request_types()
             and t.flag("request", domains.request_tx_rate)
             and REQUEST_TX_GAS <= min(tx_gas_cap, budgets[block])
@@ -1316,12 +1540,28 @@ def record_case(
             gas, stores = exhaust
             tx_type = 2
             data = Bytes(stores.to_bytes(32, "big"))
-        elif exact_gas is not None:
-            # No authorizations: their intrinsic state gas would give the
-            # transaction a reservoir the child could draw on.
-            gas = EXACT_CHARGE_TX_GAS
+        elif exact_charge is not None:
+            # No authorizations: their state charges would draw on the
+            # reservoir the equality is sized from.
+            gas, forwarded = _exact_charge_gas(
+                exact_charge,
+                fresh_store_state if exact_charge_calls == 0 else 0,
+                exact_need,
+                fresh_store_state,
+                tx_gas_cap,
+                budgets[block],
+            )
             tx_type = 2
-            data = Bytes(exact_gas.to_bytes(32, "big"))
+            # Words after the first are ignored by the charger; they
+            # record the draw, with the pool that actually pays.
+            source = exact_charge[0] if gas > tx_gas_cap else "gas_left"
+            margin = exact_charge[1]
+            data = Bytes(
+                forwarded.to_bytes(32, "big")
+                + EXACT_CHARGE_SOURCES.index(source).to_bytes(32, "big")
+                + (margin % 2**256).to_bytes(32, "big")
+            )
+            exact_charge_calls += 1
         value = t.integer("value", 0, 10**16 - 1, domain=WEI)
         if grave is not None:
             gas = GRAVER_TX_GAS
@@ -1341,6 +1581,17 @@ def record_case(
             gas = MAX_INITCODE_TX_GAS
             tx_type = 2
             data = Bytes(initcode_size.to_bytes(32, "big"))
+        if delegated_alias is not None or capped is not None:
+            gas = AUTHORITY_TX_GAS
+            tx_type = 4
+        if delegated_alias is not None and to == Address(
+            AUTHORITY_PROBE_ADDRESS
+        ):
+            data = Bytes(bytes(delegated_alias[0]).rjust(32, b"\0"))
+        if restorer is not None:
+            gas = REPAY_TX_GAS
+            tx_type = 2
+            data = Bytes(restorer.to_bytes(32, "big"))
         if requested is not None:
             # No authorizations: they would come out of the request's gas.
             gas = REQUEST_TX_GAS
@@ -1376,7 +1627,25 @@ def record_case(
             fields["access_list"] = [
                 AccessList(address=Address(delegate), storage_keys=[])
             ]
-        if tx_type == 4:
+        if delegated_alias is not None:
+            fields["authorization_list"] = [
+                FuzzerAuthorizationInput(
+                    chain_id=HexNumber(1),
+                    address=delegated_alias[3],
+                    nonce=HexNumber(0),
+                    signer_key=delegated_alias[1],
+                )
+            ]
+        elif capped is not None:
+            fields["authorization_list"] = [
+                FuzzerAuthorizationInput(
+                    chain_id=HexNumber(1),
+                    address=capped[2],
+                    nonce=HexNumber(capped[1]),
+                    signer_key=capped[0],
+                )
+            ]
+        elif tx_type == 4:
             fields["authorization_list"] = _authorizations(
                 t.unit("type:4"),
                 domains,
@@ -1399,6 +1668,25 @@ def record_case(
             )
         )
         nonces[sender] = max(nonces[sender], tx_nonce) + 1
+        if delegated_alias is not None and delegated_alias[2]:
+            later_gas = tx_gas_choices[0]
+            if later_gas <= budgets[block]:
+                # The authority, delegated one transaction ago, sends one
+                # of its own: its nonce is one, as the authorization left
+                # it.
+                budgets[block] -= later_gas
+                transactions.append(
+                    FuzzerTransactionInput(
+                        **{"from": delegated_alias[0]},
+                        block=block,
+                        to=Address(m.member("later/to", tx_targets)),
+                        gas=HexNumber(later_gas),
+                        nonce=HexNumber(1),
+                        value=HexNumber(0),
+                        data=Bytes(b""),
+                        **_fee_market_fields(m.unit("later/fees"), base_fee),
+                    )
+                )
 
     max_nonce_block = False
     if domains.reservoir_tx_gas and d.flag(

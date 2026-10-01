@@ -44,23 +44,23 @@ class StaleGateBaselineError(AssertionError):
     """The gate baseline no longer matches the generator or fork."""
 
 
-BASELINE_GENERATOR_VERSION = 37
+BASELINE_GENERATOR_VERSION = 38
 BASELINE_FORK = "Amsterdam"
 
 GATE_SEEDS: Tuple[int, ...] = (
-    310,
-    321,
-    686,
-    851,
-    1321,
-    1932,
-    2051,
-    2150,
-    2571,
-    3048,
-    3479,
+    22,
+    43,
+    500,
+    504,
+    991,
+    1084,
+    2170,
+    3830,
+    3836,
+    3981,
+    4114,
 )
-"""Greedy cover over a 5000-seed baseline at v37: together these fire
+"""Greedy cover over a 5000-seed baseline at v38: together these fire
 every target below.
 
 Re-baseline over at least `GATE_BASELINE_SEEDS`, which is measured
@@ -571,20 +571,19 @@ GATE_BAL_CELLS: FrozenSet[Tuple[str, str, str]] = frozenset(
     }
 )
 """BAL cells the baseline window samples reliably: 141 of the
-147 reached over 5000 seeds at v37, each seen at least
-`bal_gate_floor` = 9 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
+146 reached over 5000 seeds at v38, each seen at least
+`bal_gate_floor` = 7 times. The rest are `BAL_CELLS_BELOW_WINDOW`."""
 
 BAL_CELLS_BELOW_WINDOW: Dict[Tuple[str, str, str], int] = {
-    ("fork.process_transaction", "code_change", "success"): 1,
-    ("fork.process_transaction", "nonce_change", "success"): 5,
-    ("fork.process_transaction", "storage_read", "success"): 5,
-    ("fork.process_transaction", "touched_account", "success"): 5,
+    ("fork.process_transaction", "nonce_change", "success"): 1,
+    ("fork.process_transaction", "storage_read", "success"): 1,
+    ("fork.process_transaction", "touched_account", "success"): 1,
     (
         "vm.instructions.environment.extcodecopy",
         "touched_account",
         "success",
     ): 3,
-    ("vm.instructions.system.create", "touched_account", "revert"): 1,
+    ("vm.instructions.system.create", "touched_account", "revert"): 3,
 }
 """Reached in the 5000-seed baseline but fewer than `bal_gate_floor` times,
 with their occurrence counts. Listed so they stay visible rather than gated:

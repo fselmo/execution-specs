@@ -37,7 +37,7 @@ from ..fuzzer_bridge.negative import (
     modify_last_block,
 )
 
-SEED = 10
+SEED = 9
 """A one-block case every kind can modify: its list has a list of two
 entries to reverse, and its execution gas, state gas and receipts total
 three different numbers."""
@@ -178,7 +178,8 @@ def test_negatives_are_drawn_only_where_no_block_is_rejected() -> None:
     family is drawn among the rest.
     """
     families = set()
-    for seed in range(300):
+    # The encoding family is about one case in seventy.
+    for seed in range(1000):
         case = generate_fuzzer_output(Amsterdam, seed)
         if case.negative is not None:
             assert not any(tx.error for tx in case.transactions)
@@ -190,9 +191,10 @@ def test_every_negative_axis_keeps_all_its_values() -> None:
     """
     Presence, every family and every kind stay drawn.
     A tenth of cases split twenty-four ways needs more seeds than the other
-    axes to see each kind.
+    axes to see each kind: at 2000 seeds a content kind is drawn about ten
+    times, and v38's seeds drew `add_untouched` twice.
     """
-    coverage = axis_coverage(Amsterdam, range(0, 2000))
+    coverage = axis_coverage(Amsterdam, range(0, 5000))
     warnings_ = [
         w for w in axis_collapse_warnings(coverage) if w.startswith("negative")
     ]

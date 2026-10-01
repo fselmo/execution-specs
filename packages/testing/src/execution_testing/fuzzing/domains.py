@@ -258,6 +258,21 @@ class ValueDomains:
     exact_charge_margins: Tuple[int, ...] = (0, 0, -1, 1)
     """Gas the child is given beyond its store's exact need. Zero is the
     equality; one either side is its near miss, out of gas and not."""
+    authority_alias_tx_rate: float = 0.03
+    """Share of transactions carrying an authorization whose authority the
+    same transaction then calls, reads or pays, and which half the time
+    sends a transaction of its own later in the block. At v36 no
+    authority shared an index with any access: 0 of 2000 seeds."""
+    max_nonce_authority_tx_rate: float = 0.02
+    """Share of transactions carrying an authorization that declares its
+    authority's nonce at one below the highest or at the highest, where
+    it is skipped before the authority is loaded."""
+    repay_tx_rate: float = 0.03
+    """Share of transactions sent to the repayer, whose post state turns
+    on the EIP-8037 repayment at a successful child's merge."""
+    repay_child_revert_share: float = 0.25
+    """Share of repayer transactions whose restorer reverts, so nothing is
+    repaid: the rule's other side."""
     graver_tx_rate: float = 0.04
     """Share of transactions sent to the graver, which self-destructs to a
     drawn beneficiary. At v20 none of 665 SELFDESTRUCT charges in 300

@@ -285,26 +285,75 @@ def _tally_state_exhaust(
             tally["state_exhaust_reservoir"]["several"] += 1
 
 
-def _tally_exact_charge(
-    case: Any, fork: "Fork", tally: Dict[str, Counter]
-) -> None:
-    """Count the exact charger's presence and the margins it was given."""
+def _tally_exact_charge(case: Any, tally: Dict[str, Counter]) -> None:
+    """Count the exact charger's presence, the pool paying, and margins."""
     from execution_testing.base_types import Address
 
-    from .generator import EXACT_CHARGER_ADDRESS, exact_charge_child_code
+    from .generator import EXACT_CHARGE_SOURCES, EXACT_CHARGER_ADDRESS
 
     charger = Address(EXACT_CHARGER_ADDRESS)
     owned = [tx for tx in case.transactions if tx.to == charger]
     tally["exact_charge_tx"]["present" if owned else "absent"] += 1
-    need = exact_charge_child_code().gas_cost(fork)
     for tx in owned:
-        margin = int.from_bytes(bytes(tx.data)[:32], "big") - need
+        words = bytes(tx.data)
+        source = EXACT_CHARGE_SOURCES[int.from_bytes(words[32:64], "big")]
+        tally["exact_charge_source"][source] += 1
+        margin = int.from_bytes(words[64:96], "big", signed=True)
         if margin == 0:
             tally["exact_charge_margin"]["exact"] += 1
         elif margin < 0:
             tally["exact_charge_margin"]["short"] += 1
         else:
             tally["exact_charge_margin"]["over"] += 1
+
+
+def _tally_authorities(case: Any, tally: Dict[str, Counter]) -> None:
+    """
+    Count authorities aliased with their own transaction's accesses, the
+    ones that then send, and authorizations at the nonce's top.
+    """
+    from execution_testing.base_types import Address
+    from execution_testing.test_types.account_types import EOA
+
+    from .generator import AUTHORITY_PROBE_ADDRESS, MAX_NONCE
+
+    probe = Address(AUTHORITY_PROBE_ADDRESS)
+    senders = {tx.from_ for tx in case.transactions}
+    aliased = capped = False
+    for tx in case.transactions:
+        for auth in tx.authorization_list or []:
+            authority = Address(EOA(key=auth.signer_key))
+            if int(auth.nonce) >= MAX_NONCE - 1:
+                capped = True
+                tally["max_nonce_authority_nonce"][
+                    "max" if int(auth.nonce) == MAX_NONCE else "below_max"
+                ] += 1
+            elif tx.to in (authority, probe):
+                aliased = True
+                tally["authority_alias_kind"][
+                    "target" if tx.to == authority else "probe"
+                ] += 1
+                tally["authority_sends_later"][
+                    "yes" if authority in senders else "no"
+                ] += 1
+    tally["authority_alias_tx"]["present" if aliased else "absent"] += 1
+    tally["max_nonce_authority_tx"]["present" if capped else "absent"] += 1
+
+
+def _tally_repay(case: Any, tally: Dict[str, Counter]) -> None:
+    """Count the repayer's presence and whether its restorer reverts."""
+    from execution_testing.base_types import Address
+
+    from .generator import REPAYER_ADDRESS, REVERTING_RESTORER_ADDRESS
+
+    repayer = Address(REPAYER_ADDRESS)
+    owned = [tx for tx in case.transactions if tx.to == repayer]
+    tally["repay_tx"]["present" if owned else "absent"] += 1
+    for tx in owned:
+        restorer = int.from_bytes(bytes(tx.data)[:32], "big")
+        tally["repay_child"][
+            "reverts" if restorer == REVERTING_RESTORER_ADDRESS else "succeeds"
+        ] += 1
 
 
 def _tally_graver(case: Any, tally: Dict[str, Counter]) -> None:
@@ -516,6 +565,14 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
         "state_exhaust_reservoir": Counter(),
         "exact_charge_tx": Counter(),
         "exact_charge_margin": Counter(),
+        "exact_charge_source": Counter(),
+        "authority_alias_tx": Counter(),
+        "authority_alias_kind": Counter(),
+        "authority_sends_later": Counter(),
+        "max_nonce_authority_tx": Counter(),
+        "max_nonce_authority_nonce": Counter(),
+        "repay_tx": Counter(),
+        "repay_child": Counter(),
         "graver_tx": Counter(),
         "graver_beneficiary": Counter(),
         "graver_value": Counter(),
@@ -623,7 +680,9 @@ def axis_coverage(fork: "Fork", seeds: range) -> Dict[str, Dict[str, float]]:
             tally["failing_tx"]["absent"] += 1
         _tally_toucher(case, tally)
         _tally_state_exhaust(case, fork, tally)
-        _tally_exact_charge(case, fork, tally)
+        _tally_exact_charge(case, tally)
+        _tally_authorities(case, tally)
+        _tally_repay(case, tally)
         _tally_graver(case, tally)
         _tally_creation(case, tally)
         _tally_near_full(case, fork, tally)
@@ -781,6 +840,14 @@ EXPECTED_AXIS_VALUES: Dict[str, Tuple[str, ...]] = {
     "state_exhaust_reservoir": ("under_one_store", "one_store", "several"),
     "exact_charge_tx": ("present", "absent"),
     "exact_charge_margin": ("exact", "short", "over"),
+    "exact_charge_source": ("gas_left", "reservoir", "split"),
+    "authority_alias_tx": ("present", "absent"),
+    "authority_alias_kind": ("target", "probe"),
+    "authority_sends_later": ("yes", "no"),
+    "max_nonce_authority_tx": ("present", "absent"),
+    "max_nonce_authority_nonce": ("below_max", "max"),
+    "repay_tx": ("present", "absent"),
+    "repay_child": ("succeeds", "reverts"),
     "graver_tx": ("present", "absent"),
     "graver_beneficiary": ("nonexistent", "empty", "alive"),
     "graver_value": ("nonzero", "zero"),
