@@ -55,7 +55,7 @@ Each client spells it in its own CLI style, reusing a flag the client already ha
 
 ## 3. Decision report
 
-One line per executed block on stderr: a single-line JSON object, written at the point where the client chooses the path.
+With `--bal-report`, one line per executed block on stderr: a single-line JSON object, written at the point where the client chooses the path.
 
 ```json
 {"event":"balExecution","block":12,"hash":"0x…","path":"sequential","reason":"disabled"}
@@ -82,7 +82,7 @@ A block that falls back prints exactly two lines: its `balExecution` line with `
 
 - stdout carries only the runner's JSON results, whose format does not change. Both events go to stderr.
 - Optional, low priority: an output-format flag offering JSONL (one result object per line) beside the default JSON array. A client adds it only where it takes a few lines.
-- A node never prints these lines. The runner turns them on, by a callback it installs or a logger it enables, whichever fits the client.
+- **`--bal-report`**, spelled the same in every client, turns both events on, on both runners. Off by default: without it the runners print neither event and their stderr is as before. A node never prints these lines; with the flag, the runner turns them on by a callback it installs or a logger it enables, whichever fits the client.
 - Under `--workers`, lines from different fixtures interleave; `hash` ties each line to its block.
 
 ## Future work: decisions in execution traces
