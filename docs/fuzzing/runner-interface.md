@@ -36,7 +36,7 @@ Block-test attaches the fixture block's access list to the block before import: 
 
 On this path the list is delivered beside the block, not as part of it. A delivered list that does not match the header's `blockAccessListHash` is a bad list, not an invalid block: the client must not use it, and should fall back to computing the list itself. The block's validity comes from the header alone, so a block whose only fault is its delivered list is a valid block on the import path.
 
-The runner handles the delivered list the way the client's own sync handles a list from a peer: it hashes the list as delivered (its RLP in the order given, not a sorted or normalized copy) and compares that with the header's `blockAccessListHash`. On a match it attaches the list. Otherwise, including when the list does not decode, it drops the list and the block executes without one, and the decision line reports it (§3).
+The runner handles the delivered list the way the client's own sync handles a list from a peer: it hashes the list as delivered (its RLP in the order given, not a sorted or normalized copy) and compares that with the header's `blockAccessListHash`. On a match it attaches the list, even when the client then finds the list malformed (out of order, duplicated, undecodable): the header commits to that list, so the client judges the block with it and rejects it, as it would on the engine path. Only when the hash does not match, or the list cannot be encoded at all to compute one, does the runner drop the list; the block then executes without one, and the decision line reports it (§3). On the shared corpus this drops exactly one EEST block, `test_bal_invalid_hash_mismatch`, in every client.
 
 ## 2. Execution switch
 
