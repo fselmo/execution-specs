@@ -511,6 +511,10 @@ class NethermindExceptionMapper(ExceptionMapper):
             r"|Error decoding block access list:"
             r"|Account changes were in incorrect order\."
             r"|Unexpected length of integer value"
+            # A header field present before its fork or missing after it.
+            r"|NotAllowedBlobGasUsed: Cannot be set\."
+            r"|BlockLevelAccessListHashNotEnabled:"
+            r"|MissingSlotNumber: Must be present in block header\."
         ),
         TransactionException.GAS_ALLOWANCE_EXCEEDED: (
             r"TxGasLimitCapExceeded:"
