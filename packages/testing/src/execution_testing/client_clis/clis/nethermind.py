@@ -420,6 +420,7 @@ class NethermindExceptionMapper(ExceptionMapper):
         BlockException.INVALID_STATE_ROOT: (
             "InvalidStateRoot: State root in header does not match"
         ),
+        BlockException.INVALID_WITHDRAWALS_ROOT: "InvalidWithdrawalsRoot:",
         BlockException.GAS_USED_OVERFLOW: ("Block gas limit exceeded"),
         BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
             "BlockAccessListGasLimitExceeded:"
