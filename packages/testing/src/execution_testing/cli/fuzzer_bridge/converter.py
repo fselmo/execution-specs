@@ -331,6 +331,24 @@ def blockchain_test_from_fuzzer(
         ],
     )
 
+    # A transaction filled with the rule it breaks switched off executes:
+    # its block carries the rule's exception instead, which the fill does
+    # not verify, since EELS with the rule off accepts the block.
+    for fuzzer_tx in fuzzer_output.transactions:
+        if fuzzer_tx.disabled_rule is None:
+            continue
+        index = fuzzer_tx.block if assignment is not None else -1
+        block = blocks[index]
+        blocks[index] = block.model_copy(
+            update={
+                "exception": _transaction_exception(fuzzer_tx.error),
+                "skip_exception_verification": True,
+                "txs": [
+                    tx.model_copy(update={"error": None}) for tx in block.txs
+                ],
+            }
+        )
+
     if fuzzer_output.block_exception is not None:
         blocks[-1] = blocks[-1].model_copy(
             update={"exception": BlockException[fuzzer_output.block_exception]}

@@ -65,7 +65,7 @@ from .negative import NEGATIVE_KINDS
 # (`execution_testing.fuzzing`), the same helpers test authors use. Bump
 # this whenever generation logic changes so old seeds are not silently
 # reinterpreted.
-GENERATOR_VERSION = 40
+GENERATOR_VERSION = 41
 
 AUTHORITY_ACCOUNTS = 3
 """Accounts that exist only to sign EIP-7702 authorizations."""
@@ -705,9 +705,15 @@ def tx_validity_transaction(
         while costs(data)[1] <= cap:
             data = bytes(2 * len(data))
     intrinsic, floor_cost = costs(data)
+    # The rule the transaction breaks is switched off when the case is
+    # filled, so a client lacking it executes the same block the header
+    # commits to; see `disabled_rules.py`. An intrinsic shortfall leaves
+    # nothing to execute, so it is filled with its rule on.
+    disabled: Optional[str] = None
     if kind == "above_total_cap":
         gas = (fork.transaction_total_gas_limit_cap() or 0) + 1
         error = "GAS_LIMIT_EXCEEDS_MAXIMUM"
+        disabled = "total_cap"
     elif kind == "intrinsic_short":
         gas = intrinsic - 1
         # Without an access list or authorization the floor is the
@@ -721,9 +727,11 @@ def tx_validity_transaction(
         # Clients name a floor shortfall either way: evmone reports it as
         # intrinsic gas too low, as EEST's own evmone mapping accepts.
         error = "INTRINSIC_GAS_BELOW_FLOOR_GAS_COST|INTRINSIC_GAS_TOO_LOW"
+        disabled = "floor"
     elif kind == "floor_above_cap":
         gas = floor_cost
         error = "INTRINSIC_GAS_TOO_LOW"
+        disabled = "floor"
     else:
         raise ValueError(f"unknown transaction validity rule {kind!r}")
     return {
@@ -733,6 +741,7 @@ def tx_validity_transaction(
         "data": Bytes(data),
         "value": HexNumber(0),
         "error": error,
+        "disabled_rule": disabled,
     }
 
 
@@ -2122,6 +2131,12 @@ def record_case(
                     value=HexNumber(0),
                     data=data,
                     error=error,
+                    # One over is filled with the block's gas check off, so
+                    # the block is the one where it executed and only that
+                    # check can reject it.
+                    disabled_rule=(
+                        "block_gas_capacity" if error is not None else None
+                    ),
                     **_fee_market_fields(f.unit("fees"), base_fee),
                 )
             )

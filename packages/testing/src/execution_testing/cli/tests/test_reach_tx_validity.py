@@ -46,7 +46,10 @@ def _case(kind: str, tx_type: int, gas_step: int = 0) -> FuzzerOutput:
     )
     fields["gas"] = HexNumber(int(fields["gas"]) + gas_step)
     if gas_step:
+        # Back across the threshold the transaction is valid: no rule is
+        # broken, so none is switched off for the fill.
         fields["error"] = None
+        fields["disabled_rule"] = None
     # The block's base fee is at most the genesis one, which an empty
     # parent can only lower.
     base_fee = int(case.env.base_fee_per_gas or 0)
@@ -126,6 +129,60 @@ def test_a_transaction_breaking_a_validity_rule_is_refused(
         valid = _fill(_case(kind, tx_type, gas_step=step))
         assert "expectException" not in valid["blocks"][-1]
         assert import_fixture(valid, "amsterdam").agreed
+
+
+def _accepted(fixture: Dict[str, Any]) -> Dict[str, Any]:
+    """``fixture`` with its last block expected valid."""
+    last = {
+        k: v
+        for k, v in fixture["blocks"][-1].items()
+        if k != "expectException"
+    }
+    return {**fixture, "blocks": [*fixture["blocks"][:-1], last]}
+
+
+@pytest.mark.parametrize("tx_type", TX_VALIDITY_TYPES)
+@pytest.mark.parametrize(
+    "kind,rule",
+    [
+        pytest.param("above_total_cap", "total_cap", id="total_cap"),
+        pytest.param("floor_short", "floor", id="floor_short"),
+        pytest.param("floor_above_cap", "floor", id="floor_above_cap"),
+    ],
+)
+def test_a_rule_negative_is_the_block_where_the_transaction_executed(
+    kind: str, rule: str, tx_type: int
+) -> None:
+    """
+    Filled with its rule switched off, the block is the one where the
+    transaction executed: EELS with the rule off imports it as valid, as
+    a client lacking the rule would, and EELS with the rule on refuses it
+    with exactly the rule's exception, so only the rule can reject it.
+    """
+    from ..fuzzer_bridge.disabled_rules import rules_disabled
+
+    case = _case(kind, tx_type)
+    (invalid,) = [tx for tx in case.transactions if tx.error]
+    assert invalid.disabled_rule == rule
+    fixture = _fill(case)
+    assert "expectException" in fixture["blocks"][-1]
+    result = import_fixture(fixture, "amsterdam")
+    assert result.agreed, result.reason
+    with rules_disabled("amsterdam", [rule]):
+        lagging = import_fixture(_accepted(fixture), "amsterdam")
+    assert lagging.agreed, lagging.reason
+    assert not import_fixture(_accepted(fixture), "amsterdam").agreed
+
+
+def test_an_intrinsic_shortfall_is_filled_with_its_rule_on() -> None:
+    """
+    Gas below the intrinsic cost leaves nothing to execute, so that case
+    keeps its rule on: the block is filled without the transaction.
+    """
+    case = _case("intrinsic_short", 2)
+    (invalid,) = [tx for tx in case.transactions if tx.error]
+    assert invalid.disabled_rule is None
+    assert import_fixture(_fill(case), "amsterdam").agreed
 
 
 def test_every_tx_validity_axis_keeps_all_its_values() -> None:

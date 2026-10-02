@@ -882,7 +882,9 @@ def test_a_case_the_producer_fails_is_filled_by_eels(
     monkeypatch.setitem(mod._FILL, "eels", _ProducerThatCannotFill())
     result = mod._fill_slice(([over_cap, 1], str(tmp_path)))
     assert set(result["routed_to_eels"]) == {over_cap, 1}
-    assert "producer failed" in result["routed_to_eels"][over_cap]
+    # A rule-disabled case goes to EELS before the producer is asked.
+    assert "switched off" in result["routed_to_eels"][over_cap]
+    assert "producer failed" in result["routed_to_eels"][1]
     assert result["errors"] == {}
     fixtures = json.loads(Path(result["path"]).read_text())
     assert fixtures[f"seed_{over_cap}"]["_info"]["filled_by"]["tool"] == (
@@ -891,8 +893,8 @@ def test_a_case_the_producer_fails_is_filled_by_eels(
 
     monkeypatch.setattr(mod, "_fallback_tool", _ProducerThatCannotFill)
     (tmp_path / "both").mkdir()
-    dropped = mod._fill_slice(([over_cap], str(tmp_path / "both")))
-    assert set(dropped["errors"]) == {over_cap}
+    dropped = mod._fill_slice(([1], str(tmp_path / "both")))
+    assert set(dropped["errors"]) == {1}
     assert dropped["routed_to_eels"] == {}
 
 

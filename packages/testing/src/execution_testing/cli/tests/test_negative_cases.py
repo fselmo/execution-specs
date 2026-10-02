@@ -39,7 +39,7 @@ from ..fuzzer_bridge.negative import (
     modify_last_block,
 )
 
-SEED = 2
+SEED = 9
 """A one-block case every kind can modify: its list has a list of two
 entries to reverse, and its execution gas, state gas and receipts total
 three different numbers."""

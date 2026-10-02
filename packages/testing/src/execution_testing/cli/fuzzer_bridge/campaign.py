@@ -71,6 +71,7 @@ from .config import ContrastRun
 from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
 from .differential import _fork_by_name, is_tool_rejection
+from .disabled_rules import rules_disabled
 from .generator import (
     GENERATOR_VERSION,
     case_kinds,
@@ -1317,9 +1318,17 @@ def fill_case(
     output is discarded and the exception is the whole story.
     """
     case = resolve_measured_gas(case, fork, measuring_filler(fork))
+    # A transaction breaking a validity rule is filled with that rule off,
+    # so the block is the one where it executed (see disabled_rules.py).
+    switched_off = [
+        tx.disabled_rule for tx in case.transactions if tx.disabled_rule
+    ]
 
     def generate(test: Any, fixture_format: Type[BaseFixture]) -> Any:
-        with contextlib.redirect_stdout(io.StringIO()):
+        with (
+            rules_disabled(fork.name().lower(), switched_off),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
             with warnings.catch_warnings():
                 # A violation is a counted finding here, not a warning
                 # printed into a log nobody keeps -- the failure mode that
@@ -1953,11 +1962,18 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
         case, kinds[seed] = _generate_case(fork, seed)
         tool = _FILL["eels"]
         seen: List[Any] = []
+        if _FILL.get("producer") and any(
+            tx.disabled_rule for tx in getattr(case, "transactions", [])
+        ):
+            # A producer cannot switch a rule off, so it would fill the
+            # block without the transaction; EELS fills it instead.
+            tool = _fallback_tool()
+            routed[seed] = "a validity rule is switched off for this fill"
         try:
             try:
                 fixture = _fill_attempt(case, fork, tool, seen)
             except Exception as exc:  # noqa: BLE001 - the producer's
-                if not _FILL.get("producer"):
+                if not _FILL.get("producer") or seed in routed:
                     raise
                 # A case the producer cannot fill is filled by EELS, never
                 # dropped for the producer's sake: an evmone without the
@@ -1970,6 +1986,8 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
                 tool = _fallback_tool()
                 seen.clear()
                 fixture = _fill_attempt(case, fork, tool, seen)
+            if seed in routed:
+                # Provenance: this case's fixture is EELS's, and why.
                 fixture["_info"]["filled_by"] = {
                     "tool": "eels",
                     "reason": routed[seed],

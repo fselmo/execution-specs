@@ -109,6 +109,11 @@ class FuzzerTransactionInput(BaseModel):
     authorization_list: List[FuzzerAuthorizationInput] | None = Field(
         None, alias="authorizationList"
     )
+    disabled_rule: str | None = Field(None, alias="disabledRule")
+    """The validity rule this transaction breaks, switched off in EELS
+    while the case is filled (see `disabled_rules.py`), so the block is
+    the one where the transaction executed and only that rule can reject
+    it. Set together with `error`, the exception the rule raises."""
     error: str | None = Field(None, alias="expectedError")
     """The `TransactionException` the transaction must be rejected with,
     or several joined by `|` when it breaks more than one rule and a client

@@ -249,6 +249,7 @@ def _near_full(margin: int, stores: int = 150) -> FuzzerOutput:
             "nonce": HexNumber(1),
             "data": Bytes(b""),
             "error": REJECTED_BY_STATE_GAS if margin > 0 else None,
+            "disabled_rule": "block_gas_capacity" if margin > 0 else None,
         }
     )
     return case.model_copy(
@@ -275,6 +276,28 @@ def test_asking_exactly_the_state_gas_left_fits_the_block() -> None:
     assert len(filler["storageChanges"]) == 150
 
 
+def _only_the_capacity_check_rejects(fixture: Dict[str, Any]) -> None:
+    """
+    The block one over is the one where its last transaction executed:
+    EELS imports it as valid with the block's gas check off, as a client
+    lacking the check would, and refuses it as named with the check on.
+    """
+    from ..fuzzer_bridge.disabled_rules import rules_disabled
+    from ..fuzzer_bridge.eels_import import import_fixture
+
+    result = import_fixture(fixture, "amsterdam")
+    assert result.agreed, result.reason
+    last = {
+        k: v
+        for k, v in fixture["blocks"][-1].items()
+        if k != "expectException"
+    }
+    accepted = {**fixture, "blocks": [*fixture["blocks"][:-1], last]}
+    with rules_disabled("amsterdam", ["block_gas_capacity"]):
+        lagging = import_fixture(accepted, "amsterdam")
+    assert lagging.agreed, lagging.reason
+
+
 def test_asking_one_more_than_the_state_gas_left_is_rejected() -> None:
     """The near miss: one more gas and the block is invalid."""
     fixture = _fill(_near_full(1))
@@ -282,6 +305,7 @@ def test_asking_one_more_than_the_state_gas_left_is_rejected() -> None:
     assert block["expectException"] == (
         f"TransactionException.{REJECTED_BY_STATE_GAS}"
     )
+    _only_the_capacity_check_rejects(fixture)
 
 
 def _near_full_of_execution(margin: int, left: int) -> FuzzerOutput:
@@ -321,6 +345,7 @@ def _near_full_of_execution(margin: int, left: int) -> FuzzerOutput:
             "gas": HexNumber(left + margin),
             "nonce": HexNumber(len(burns)),
             "error": REJECTED_BY_STATE_GAS if margin > 0 else None,
+            "disabled_rule": "block_gas_capacity" if margin > 0 else None,
         }
     )
     return case.model_copy(
@@ -361,6 +386,7 @@ def test_asking_one_more_than_the_execution_gas_left_is_rejected(
     assert block["expectException"] == (
         f"TransactionException.{REJECTED_BY_STATE_GAS}"
     )
+    _only_the_capacity_check_rejects(fixture)
 
 
 def test_every_exact_charge_axis_keeps_all_its_values() -> None:
@@ -551,13 +577,17 @@ def _drawn(shape: Any) -> FuzzerOutput:
 
 
 def _validity_case(error: str) -> FuzzerOutput:
-    return _drawn(lambda c: any(tx.error == error for tx in c.transactions))
+    return _drawn(
+        lambda c: any(
+            tx.error == error and tx.disabled_rule is None
+            for tx in c.transactions
+        )
+    )
 
 
 @pytest.mark.parametrize(
     "case",
     [
-        pytest.param(lambda: _near_full(1), id="state_gas_one_over"),
         pytest.param(
             lambda: _max_nonce_case([2**64 - 2, 2**64 - 1]),
             id="nonce_at_the_highest",
@@ -570,10 +600,7 @@ def _validity_case(error: str) -> FuzzerOutput:
         ),
         *(
             pytest.param(lambda error=error: _validity_case(error), id=error)
-            for error in (
-                "INTRINSIC_GAS_TOO_LOW",
-                "INTRINSIC_GAS_BELOW_FLOOR_GAS_COST|INTRINSIC_GAS_TOO_LOW",
-            )
+            for error in ("INTRINSIC_GAS_TOO_LOW",)
         ),
     ],
 )
