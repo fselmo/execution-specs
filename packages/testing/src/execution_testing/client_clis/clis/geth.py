@@ -139,6 +139,11 @@ class GethExceptionMapper(ExceptionMapper):
         TransactionException.TYPE_3_TX_MAX_BLOB_GAS_ALLOWANCE_EXCEEDED: (
             r"blob gas used \d+ exceeds maximum allowance \d+"
         ),
+        # A blob transaction in a pre-Cancun block fails body validation
+        # before it is executed.
+        TransactionException.TYPE_3_TX_PRE_FORK: (
+            r"data blobs present in block body"
+        ),
         BlockException.BLOB_GAS_USED_ABOVE_LIMIT: (
             r"blob gas used \d+ exceeds maximum allowance \d+"
         ),
