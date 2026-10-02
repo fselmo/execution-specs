@@ -192,34 +192,33 @@ clients:
   # Current Glamsterdam development heads (mainline default branches,
   # resolved 2026-09-24; no devnet past 11 has a branch of its own). Stock
   # builds sit beside the series builds for the liveness check.
+  # geth on LCC2's runner-interface fork (fselmo/go-ethereum
+  # lcc2/enginetest-bal-v2): blocktest attaches the delivered list, both
+  # runners take --bal.sequential and print the interface's decision lines.
+  # No series.
   - name: geth-par-main
-    # delivered-list negatives: its attach patch reads only a block's top-level blockAccessList, not rlp_decoded's.
+    # delivered-list negatives: proven, and left ignored while the import
+    # lane's delivered-list negatives are re-specified as informational. On
+    # the 13 bal and form kinds it rejects 13 of 13 on both paths and passes
+    # all 13 clean versions; stock geth 920c0777 rejects none. Decisions on a
+    # v40 batch: 710 of 710 BAL blocks parallel by default, 0 under
+    # --bal.sequential (engine: 770 of 770, and 0). No fallback, so no
+    # masking signal. Step 0 on the 3bd832b4 fill: 2 failures per format,
+    # both the known pre-#3566 last-index disagreement. It enforces the
+    # EIP-8037 total gas cap (core/state_transition.go:564).
     delivered_bal: ignored
     build:
       recipe: geth
-      repo: ethereum/go-ethereum
-      ref: 920c07774c65ebb3023536f85df642c44478b540
-      patches:
-        - patches/geth-main/0001-cmd-evm-add-bal.sequential-to-blocktest.patch
-        - patches/geth-main/0002-tests-attach-a-fixture-s-block-access-list-to-the-bl.patch
-        - patches/geth-main/0003-core-print-the-parallel-execution-decision-for-each-.patch
-      # 0003 prints FUZZ-PAR-DECISION in core, admitted by name.
-      patch_paths: [cmd/evm/, tests/, core/state_processor.go]
+      repo: fselmo/go-ethereum
+      ref: d488246aac973ed3bda5a9ecaff1ac3c4178f3d8
     contrast_flags: [--bal.sequential]
-  # The engine lane: geth-par-main's series plus #34650's enginetest (0004)
-  # and --bal.sequential threaded into it (0005).
+  # The engine lane: the same fork's enginetest, which drives the node's
+  # Engine API handler in process.
   - name: geth-eng-main
     build:
       recipe: geth
-      repo: ethereum/go-ethereum
-      ref: 920c07774c65ebb3023536f85df642c44478b540
-      patches:
-        - patches/geth-main/0001-cmd-evm-add-bal.sequential-to-blocktest.patch
-        - patches/geth-main/0002-tests-attach-a-fixture-s-block-access-list-to-the-bl.patch
-        - patches/geth-main/0003-core-print-the-parallel-execution-decision-for-each-.patch
-        - patches/geth-main/0004-cmd-evm-add-enginetest-the-direct-engine-fixture-run.patch
-        - patches/geth-main/0005-cmd-evm-run-enginetest-on-the-parallel-path-with-bal.patch
-      patch_paths: [cmd/evm/, tests/, core/state_processor.go]
+      repo: fselmo/go-ethereum
+      ref: d488246aac973ed3bda5a9ecaff1ac3c4178f3d8
     # enginetest defaults --workers to every core, and the campaign already
     # judges several batches at once. A contrast replaces runner_flags, so
     # the cap is repeated there.
