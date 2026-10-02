@@ -196,6 +196,8 @@ class EthrexExceptionMapper(ExceptionMapper):
             r"Block access list contains index \d+ "
             r"exceeding max valid index \d+|"
             r"Failed to RLP decode BAL|"
-            r"Block access list accounts not in strictly ascending order.*"
+            r"Block access list accounts not in strictly ascending order.*|"
+            # A pre-Amsterdam header carrying the field.
+            r"Block access list hash is present"
         ),
     }
