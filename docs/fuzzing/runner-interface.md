@@ -12,6 +12,8 @@ Every runner binary answers `--version` with one line on stdout that names the c
 
 Every runner takes any number of fixture paths (files or directories) as arguments and runs all of them in one process. A runner that also reads paths from stdin keeps that as an extra input, not as the only batch interface.
 
+A runner SHOULD exit non-zero when any fixture fails, so a caller can tell a failed run from a clean one without parsing the results. Where a client's own CI relies on exit 0 from a failing run, that client records it as a follow-up instead of changing it in these PRs.
+
 ## 0. Engine-test drives the real Engine API handler, and nothing else
 
 Engine-test calls the client's own Engine API handler: the code that serves `engine_newPayloadV<n>` and `engine_forkchoiceUpdatedV<n>`, at the versions the fixture names (`newPayloadVersion`, `forkchoiceUpdatedVersion`). The fixture's params are decoded with the client's own decoder, so the access list reaches the validator as it would from the wire.
