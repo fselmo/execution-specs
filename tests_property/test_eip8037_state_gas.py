@@ -1,0 +1,433 @@
+"""
+Properties of the [EIP-8037] two-pool gas meter.
+
+State gas draws from a reservoir before spilling into `gas_left`, and
+refunds credit the pools in reverse order.
+
+[EIP-8037]: https://eips.ethereum.org/EIPS/eip-8037
+"""
+
+from types import ModuleType
+from typing import List
+
+import pytest
+from ethereum_types.numeric import Uint
+from hypothesis import given, settings
+from hypothesis import strategies as st
+from hypothesis.stateful import (
+    RuleBasedStateMachine,
+    initialize,
+    invariant,
+    precondition,
+    rule,
+    run_state_machine_as_test,
+)
+
+from .forks import forks_from
+from .strategies.gas_meter import (
+    AMOUNT_BOUND,
+    CHARGES,
+    CHARGES_AND_REFUNDS,
+    MeterFields,
+    MeterOp,
+    amounts,
+    apply_ops,
+    fresh_frame,
+    meter_fields,
+    op_lists,
+    pools,
+)
+
+pytestmark = pytest.mark.parametrize(
+    "fork_name", forks_from("amsterdam"), indirect=True
+)
+
+
+@given(gas_left=pools(), reservoir=pools(), data=st.data())
+def test_regular_gas_checks_ignore_the_reservoir(
+    gas: ModuleType, gas_left: int, reservoir: int, data: st.DataObject
+) -> None:
+    """
+    Regular gas checks and charges see only `gas_left`, never the
+    reservoir, and a failed check or charge changes nothing.
+    """
+    amount = data.draw(
+        st.one_of(
+            st.sampled_from(
+                sorted({0, gas_left, gas_left + 1, gas_left + reservoir})
+            ),
+            st.integers(min_value=0, max_value=gas_left + reservoir + 2),
+        )
+    )
+    frame = fresh_frame(gas, gas_left, reservoir)
+    before = meter_fields(frame.gas_meter)
+
+    if amount > gas_left:
+        with pytest.raises(gas.OutOfGasError):
+            gas.check_gas(frame, Uint(amount))
+        assert meter_fields(frame.gas_meter) == before
+        with pytest.raises(gas.OutOfGasError):
+            gas.charge_gas(frame, Uint(amount))
+        assert meter_fields(frame.gas_meter) == before
+    else:
+        gas.check_gas(frame, Uint(amount))
+        assert meter_fields(frame.gas_meter) == before
+        gas.charge_gas(frame, Uint(amount))
+        assert meter_fields(frame.gas_meter) == before._replace(
+            gas_left=gas_left - amount
+        )
+
+
+@given(
+    gas_left=pools(),
+    reservoir=pools(),
+    charges=st.lists(amounts(), max_size=10),
+)
+def test_state_charges_then_reverse_refunds_round_trip(
+    gas: ModuleType, gas_left: int, reservoir: int, charges: List[int]
+) -> None:
+    """
+    Refunding every state charge in reverse order restores both pools,
+    and `gas_left` never rises above its starting value on the way.
+    """
+    frame = fresh_frame(gas, gas_left, reservoir)
+    meter = frame.gas_meter
+    applied = []
+    for amount in charges:
+        if int(meter.gas_left) + int(meter.state_gas_left) < amount:
+            continue
+        gas.charge_state_gas(frame, Uint(amount))
+        applied.append(amount)
+
+    for amount in reversed(applied):
+        gas.credit_state_gas_refund(meter, Uint(amount))
+        assert int(meter.gas_left) <= gas_left
+
+    assert meter_fields(meter) == meter_fields(
+        fresh_frame(gas, gas_left, reservoir).gas_meter
+    )
+
+
+@given(
+    gas_left=pools(),
+    reservoir=pools(),
+    pre_charges=op_lists(CHARGES, max_size=6),
+    commit=st.booleans(),
+    post_ops=op_lists(CHARGES_AND_REFUNDS),
+    refund_counter=st.integers(min_value=-(1 << 20), max_value=1 << 20),
+)
+def test_restore_returns_to_the_last_commit(
+    gas: ModuleType,
+    gas_left: int,
+    reservoir: int,
+    pre_charges: List[MeterOp],
+    commit: bool,
+    post_ops: List[MeterOp],
+    refund_counter: int,
+) -> None:
+    """
+    A frame rollback undoes every state charge and refund since the last
+    commit, keeps the regular gas spent since then, and leaves the state
+    gas charged before the commit in place.
+    """
+    frame = fresh_frame(gas, gas_left, reservoir)
+    meter = frame.gas_meter
+    if commit:
+        _, committed, _ = apply_ops(gas, frame, pre_charges)
+        gas.commit_state_gas(meter)
+        ops_after_commit = post_ops
+    else:
+        # Without a commit the rollback point is the frame entry.
+        committed = 0
+        ops_after_commit = pre_charges + post_ops
+    at_commit = meter_fields(meter)
+    regular_after_commit, _, _ = apply_ops(gas, frame, ops_after_commit)
+    meter.refund_counter = refund_counter
+
+    gas.restore_state_gas(meter)
+
+    assert meter_fields(meter) == at_commit._replace(
+        gas_left=at_commit.gas_left - regular_after_commit
+    )
+    assert gas.tx_state_gas_used(meter, Uint(reservoir)) == committed
+
+
+@given(
+    gas_left=pools(),
+    reservoir=pools(),
+    ops=op_lists(CHARGES_AND_REFUNDS),
+)
+def test_halted_frame_leaves_the_reservoir_whole(
+    gas: ModuleType,
+    gas_left: int,
+    reservoir: int,
+    ops: List[MeterOp],
+) -> None:
+    """
+    An exceptional halt in a frame without a commit burns `gas_left` and
+    leaves the reservoir at its value when the frame started.
+    """
+    frame = fresh_frame(gas, gas_left, reservoir)
+    apply_ops(gas, frame, ops)
+
+    gas.restore_state_gas(frame.gas_meter)
+    gas.forfeit_remaining_gas(frame.gas_meter)
+
+    assert int(frame.gas_meter.gas_left) == 0
+    assert int(frame.gas_meter.state_gas_left) == reservoir
+    assert int(frame.gas_meter.state_gas_spilled) == 0
+
+
+@given(
+    gas_left=pools(),
+    reservoir=pools(),
+    first_charges=op_lists(CHARGES, max_size=6),
+    commit=st.booleans(),
+    second_charges=op_lists(CHARGES, max_size=6),
+)
+def test_restore_to_entry_undoes_the_commit(
+    gas: ModuleType,
+    gas_left: int,
+    reservoir: int,
+    first_charges: List[MeterOp],
+    commit: bool,
+    second_charges: List[MeterOp],
+) -> None:
+    """
+    A failure before dispatch refills every state charge, committed or
+    not, so only the regular charges stay paid.
+    """
+    frame = fresh_frame(gas, gas_left, reservoir)
+    meter = frame.gas_meter
+    regular_first, _, _ = apply_ops(gas, frame, first_charges)
+    if commit:
+        gas.commit_state_gas(meter)
+    regular_second, _, _ = apply_ops(gas, frame, second_charges)
+
+    gas.restore_state_gas_to_entry(meter, Uint(reservoir))
+
+    assert meter_fields(meter) == meter_fields(
+        fresh_frame(
+            gas, gas_left - regular_first - regular_second, reservoir
+        ).gas_meter
+    )
+    assert gas.tx_state_gas_used(meter, Uint(reservoir)) == 0
+
+
+class ReservoirModel:
+    """
+    Reference model of the two pools, following the EIP-8037 charge and
+    refund rules and the `commit_state_gas` docstring.
+    """
+
+    def __init__(self, gas_left: int, reservoir: int) -> None:
+        self.gas_left = gas_left
+        self.reservoir = reservoir
+        self.spilled = 0
+        self.committed_spill = 0
+        self.baseline = reservoir
+        self.refund_counter = 0
+        self.net_state = 0
+
+    def charge_regular(self, amount: int) -> None:
+        """Take a regular charge from `gas_left` only."""
+        self.gas_left -= amount
+
+    def charge_state(self, amount: int) -> None:
+        """Take from the reservoir first and spill the rest."""
+        from_reservoir = min(amount, self.reservoir)
+        remainder = amount - from_reservoir
+        self.reservoir -= from_reservoir
+        self.gas_left -= remainder
+        self.spilled += remainder
+        self.net_state += amount
+
+    def credit_refund(self, amount: int) -> None:
+        """Credit `gas_left` up to the spill, then the reservoir."""
+        from_gas_left = min(amount, self.spilled)
+        self.gas_left += from_gas_left
+        self.spilled -= from_gas_left
+        self.reservoir += amount - from_gas_left
+        self.net_state -= amount
+
+    def commit(self) -> None:
+        """Make the spill permanent and move the baseline down."""
+        self.committed_spill += self.spilled
+        self.spilled = 0
+        self.baseline = self.reservoir
+
+    def fields(self) -> MeterFields:
+        """Return the model in the same shape as `meter_fields`."""
+        return MeterFields(
+            gas_left=self.gas_left,
+            state_gas_left=self.reservoir,
+            state_gas_baseline=self.baseline,
+            refund_counter=self.refund_counter,
+            state_gas_spilled=self.spilled,
+            state_gas_committed_spill=self.committed_spill,
+        )
+
+
+class GasMeterMachine(RuleBasedStateMachine):
+    """
+    Drive a frame's `GasMeter` against `ReservoirModel` in the order real
+    callers use: charges and at most one commit, then dispatch, after which
+    refunds and refund counter changes may happen.
+    """
+
+    gas: ModuleType
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.model: ReservoirModel | None = None
+
+    @initialize(gas_left=pools(), reservoir=pools())
+    def start_frame(self, gas_left: int, reservoir: int) -> None:
+        """Enter a frame."""
+        self.frame = fresh_frame(self.gas, gas_left, reservoir)
+        self.model = ReservoirModel(gas_left, reservoir)
+        self.grant_gas = gas_left
+        self.grant_state = reservoir
+        self.regular_total = 0
+        self.dispatched = False
+        self.committed = False
+
+    @rule(data=st.data())
+    def charge_regular(self, data: st.DataObject) -> None:
+        """Make an affordable regular charge."""
+        assert self.model is not None
+        available = self.model.gas_left
+        amount = data.draw(
+            st.one_of(
+                st.sampled_from(sorted({0, available})),
+                st.integers(min_value=0, max_value=available),
+            )
+        )
+        self.gas.charge_gas(self.frame, Uint(amount))
+        self.model.charge_regular(amount)
+        self.regular_total += amount
+
+    @rule(data=st.data())
+    def charge_state(self, data: st.DataObject) -> None:
+        """
+        Make an affordable state charge, often exactly at the reservoir,
+        one past it, or the two pools combined.
+        """
+        assert self.model is not None
+        available = self.model.gas_left + self.model.reservoir
+        edges = {
+            0,
+            available,
+            min(self.model.reservoir, available),
+            min(self.model.reservoir + 1, available),
+        }
+        amount = data.draw(
+            st.one_of(
+                st.sampled_from(sorted(edges)),
+                st.integers(min_value=0, max_value=available),
+            )
+        )
+        self.gas.charge_state_gas(self.frame, Uint(amount))
+        self.model.charge_state(amount)
+
+    @rule(excess=amounts())
+    def overcharge_regular(self, excess: int) -> None:
+        """An unaffordable regular charge raises and changes nothing."""
+        assert self.model is not None
+        amount = self.model.gas_left + 1 + excess
+        with pytest.raises(self.gas.OutOfGasError):
+            self.gas.charge_gas(self.frame, Uint(amount))
+
+    @rule(excess=amounts())
+    def overcharge_state(self, excess: int) -> None:
+        """An unaffordable state charge raises and changes nothing."""
+        assert self.model is not None
+        amount = self.model.gas_left + self.model.reservoir + 1 + excess
+        with pytest.raises(self.gas.OutOfGasError):
+            self.gas.charge_state_gas(self.frame, Uint(amount))
+
+    @precondition(lambda self: not self.dispatched and not self.committed)
+    @rule()
+    def commit(self) -> None:
+        """Commit once before dispatch, as the top frame does."""
+        assert self.model is not None
+        self.gas.commit_state_gas(self.frame.gas_meter)
+        self.model.commit()
+        self.committed = True
+
+    @precondition(lambda self: not self.dispatched)
+    @rule()
+    def dispatch(self) -> None:
+        """Start running the frame's code."""
+        self.dispatched = True
+
+    @precondition(lambda self: self.dispatched)
+    @rule(data=st.data())
+    def credit_refund(self, data: st.DataObject) -> None:
+        """
+        Credit a refund, often at or next to the current spill. A refund
+        may exceed the frame's own charges.
+        """
+        assert self.model is not None
+        spilled = self.model.spilled
+        edges = sorted({0, spilled, spilled + 1, max(spilled - 1, 0)})
+        amount = data.draw(
+            st.one_of(
+                st.sampled_from(edges),
+                st.integers(min_value=0, max_value=AMOUNT_BOUND),
+            )
+        )
+        self.gas.credit_state_gas_refund(self.frame.gas_meter, Uint(amount))
+        self.model.credit_refund(amount)
+
+    @precondition(lambda self: self.dispatched)
+    @rule(delta=st.integers(min_value=-(1 << 16), max_value=1 << 16))
+    def bump_refund_counter(self, delta: int) -> None:
+        """Change the refund counter, as `SSTORE` does."""
+        assert self.model is not None
+        self.frame.gas_meter.refund_counter += delta
+        self.model.refund_counter += delta
+
+    @invariant()
+    def meter_matches_model(self) -> None:
+        """Every meter field agrees with the model."""
+        if self.model is None:
+            return
+        assert meter_fields(self.frame.gas_meter) == self.model.fields()
+
+    @invariant()
+    def settlement_matches_net_state_gas(self) -> None:
+        """`tx_state_gas_used` is state charges minus state refunds."""
+        if self.model is None:
+            return
+        assert (
+            self.gas.tx_state_gas_used(
+                self.frame.gas_meter, Uint(self.grant_state)
+            )
+            == self.model.net_state
+        )
+
+    @invariant()
+    def regular_gas_never_drifts(self) -> None:
+        """
+        The frame's regular gas always splits into `gas_left`, the spill
+        and the regular charges, so none leaks into the reservoir.
+        """
+        if self.model is None:
+            return
+        meter = self.frame.gas_meter
+        assert (
+            int(meter.gas_left)
+            + int(meter.state_gas_spilled)
+            + int(meter.state_gas_committed_spill)
+            + self.regular_total
+            == self.grant_gas
+        )
+
+
+def test_gas_meter_matches_model(gas: ModuleType) -> None:
+    """The gas meter agrees with the reference model on every sequence."""
+    machine = type("GasMeterMachine", (GasMeterMachine,), {"gas": gas})
+    run_state_machine_as_test(
+        machine, settings=settings(stateful_step_count=40)
+    )
