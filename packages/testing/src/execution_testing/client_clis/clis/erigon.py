@@ -56,6 +56,12 @@ class ErigonExceptionMapper(ExceptionMapper):
         TransactionException.INVALID_SIGNATURE_VRS: (
             "invalid transaction v, r, s values"
         ),
+        TransactionException.TYPE_1_TX_PRE_FORK: (
+            "accessList txn is not supported by signer"
+        ),
+        TransactionException.TYPE_2_TX_PRE_FORK: (
+            "dynamicFee txn is not supported by signer"
+        ),
         TransactionException.TYPE_3_TX_PRE_FORK: (
             "blob txn is not supported by signer"
         ),
@@ -153,6 +159,11 @@ class ErigonExceptionMapper(ExceptionMapper):
             r"invalid blob versioned hash, must start with "
             r"VERSIONED_HASH_VERSION_KZG|"
             r"blob txn versioned hash has invalid version byte"
+        ),
+        # A pre-EIP-155 fork rejects any v other than 27 or 28 as carrying a
+        # chain id; the word boundary keeps out "unprotected txn".
+        TransactionException.INVALID_CHAINID: (
+            r"\bprotected txn is not supported by signer"
         ),
     }
 
