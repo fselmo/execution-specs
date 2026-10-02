@@ -1,10 +1,11 @@
 # Debugging Transition Tools
 
-There are two flags that can help debugging `t8n` tools or the execution-testing framework:
+These flags can help debugging `t8n` tools or the execution-testing framework:
 
 1. `--evm-dump-dir`: Write debug information from `t8n` tool calls to the specified directory.
 2. `--traces`: Collect traces of the execution from the transition tool.
 3. `--verify-fixtures`: Run go-ethereum's `evm blocktest` command to verify the generated test fixtures.
+4. `--invariant-checks`: Check chain invariants on every filled block.
 
 ## EVM Dump Directory
 
@@ -180,3 +181,22 @@ where the `verify_fixtures.sh` script can be used to reproduce the `evm blocktes
 
 [^1]: <!-- markdownlint-disable MD053 (53=link-image-reference-definitions) -->
     This limitation is required to enable support of the [`pytest-xdist` plugin](https://github.com/pytest-dev/pytest-xdist) for concurrent test execution across multiple CPUs. To achieve this we use the we apply the `--dist loadscope` xdist flag in our `pytest-fill.ini`.
+
+## Checking Chain Invariants
+
+The `--invariant-checks` flag checks every valid block the transition tool produces against rules that hold whatever the test exercises:
+
+- Total ether changes only by withdrawals and block rewards minus the base fee and blob fee burn. Before [EIP-8246](https://eips.ethereum.org/EIPS/eip-8246), a block that ran `SELFDESTRUCT` may lose more.
+- The header's gas used stays within the gas limit and is consistent with the receipts: equal to the last receipt's cumulative gas, or within the bounds [EIP-7778](https://eips.ethereum.org/EIPS/eip-7778) and [EIP-8037](https://eips.ethereum.org/EIPS/eip-8037) allow.
+- Nonces never decrease, except through `SELFDESTRUCT`, and each sender's nonce advances by at least its number of included transactions.
+- The block access list ([EIP-7928](https://eips.ethereum.org/EIPS/eip-7928)) has an entry for every changed balance, nonce, code and storage value, its last entry for each equals the post-state, and no entry repeats the value before it.
+- With the EELS transition tool, the storage slots in the block access list lie between the slots `SLOAD` and `SSTORE` finished on and the slots they started on, as observed from the execution trace.
+
+State tests are checked for the first three rules only, since they have no block access list.
+
+A violation is reported as an `InvariantViolationWarning`. To make it fail the fill, as CI does, turn the warning into an error:
+
+```console
+uv run fill tests/amsterdam --until Amsterdam --invariant-checks \
+    -W "error::execution_testing.specs.invariants.InvariantViolationWarning"
+```

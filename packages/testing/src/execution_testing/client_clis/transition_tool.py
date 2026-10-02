@@ -205,6 +205,10 @@ class TransitionTool(EthereumCLI):
     opcode_count_per_block: List[OpcodeCount] | None = None
 
     supports_opcode_count: ClassVar[bool] = False
+    compute_bal_witness: bool = False
+    """Trace storage accesses into `TransitionToolOutput.bal_witness` on
+    forks with block access lists. Only the EELS transition tool honors
+    it."""
     supports_xdist: ClassVar[bool] = True
     supports_blob_params: ClassVar[bool] = False
     attests_block_access_list_hash: ClassVar[bool] = True

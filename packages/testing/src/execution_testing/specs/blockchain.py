@@ -102,6 +102,7 @@ from execution_testing.test_types.chain_config_types import ChainConfigDefaults
 from .base import BaseTest, FillResult, OpMode, verify_result
 from .debugging import print_traces
 from .helpers import verify_block, verify_transactions
+from .invariants import check_block_invariants, invariant_checks_enabled
 
 
 def environment_from_parent_header(parent: "FixtureHeader") -> "Environment":
@@ -1261,6 +1262,23 @@ class BlockchainTest(BaseTest):
                 + "to be invalid. Please verify whether the transaction "
                 + "was indeed expected to fail and add the proper "
                 + "`block.exception`"
+            )
+
+        if invariant_checks_enabled() and block.exception is None:
+            check_block_invariants(
+                fork=fork,
+                pre_alloc=(
+                    previous_alloc.materialize()
+                    if isinstance(previous_alloc, LazyAlloc)
+                    else previous_alloc
+                ),
+                post_alloc=transition_tool_output.alloc.materialize(),
+                result=transition_tool_output.result,
+                env=env,
+                txs=txs,
+                reward=fork.get_reward(),
+                block_access_list=t8n_bal,
+                bal_witness=transition_tool_output.bal_witness,
             )
 
         return built_block
