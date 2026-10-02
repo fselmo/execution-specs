@@ -19,7 +19,7 @@ from typing import (
 
 import pytest
 from _pytest.mark.structures import ParameterSet
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from typing_extensions import Self
 
 from execution_testing.base_types import to_hex
@@ -42,6 +42,8 @@ from execution_testing.test_types import Environment, Withdrawal
 from execution_testing.test_types.receipt_types import (
     TransactionReceipt,
 )
+
+from .invariants import InvariantViolation
 
 
 class HashMismatchExceptionError(Exception):
@@ -154,6 +156,15 @@ class BaseTest(BaseModel):
     is_exception_test: bool = False
     is_inclusion_test: bool = False
     invalid_tx_not_last: bool = False
+
+    _invariant_violations: List[InvariantViolation] = PrivateAttr(
+        default_factory=list
+    )
+
+    @property
+    def invariant_violations(self) -> List[InvariantViolation]:
+        """Invariant violations recorded while generating this test."""
+        return list(self._invariant_violations)
 
     # Class variables, to be set by subclasses
     spec_types: ClassVar[Dict[str, Type["BaseTest"]]] = {}

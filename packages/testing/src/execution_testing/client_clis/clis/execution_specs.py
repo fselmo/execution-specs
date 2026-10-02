@@ -4,7 +4,7 @@ Ethereum Specs EVM Transition Tool Interface.
 
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
 
 from typing_extensions import override
 
@@ -30,6 +30,9 @@ from execution_testing.forks import Fork
 
 if TYPE_CHECKING:
     from execution_testing.evm_tools.t8n import ForkCache
+    from execution_testing.evm_tools.t8n.evm_trace.bal_witness import (
+        BalWitness,
+    )
 
 
 class ExecutionSpecsTransitionTool(TransitionTool):
@@ -48,6 +51,13 @@ class ExecutionSpecsTransitionTool(TransitionTool):
         del binary  # EELS doesn't use an external binary
         self.exception_mapper = ExecutionSpecsExceptionMapper()
         self.trace = trace
+        self.compute_bal_witness = False
+        self.last_bal_witness: Optional["BalWitness"] = None
+        self.bal_witnesses: List["BalWitness"] = []
+        """Every run's witness in order, one per block; the caller empties
+        it between cases. A block access list is per block, so a check of
+        a whole case pairs each block with its own witness rather than the
+        last one with all of them."""
         self._info_metadata: Optional[Dict[str, Any]] = {}
         # Defer importing the `ethereum` package (see `fork_cache` and
         # `version`) until the tool is actually used. The tool is constructed
@@ -141,6 +151,17 @@ class ExecutionSpecsTransitionTool(TransitionTool):
                 tracers = GroupTracer()
             tracers.add(count_tracer)
 
+        bal_tracer = None
+        if self.compute_bal_witness:
+            from execution_testing.evm_tools.t8n.evm_trace.bal_witness import (
+                BalWitnessTracer,
+            )
+
+            bal_tracer = BalWitnessTracer()
+            if tracers is None:
+                tracers = GroupTracer()
+            tracers.add(bal_tracer)
+
         t8n = T8N(
             transition_tool_data,
             cache=self.fork_cache,
@@ -153,6 +174,10 @@ class ExecutionSpecsTransitionTool(TransitionTool):
             output.result.opcode_count = OpcodeCount.model_validate(
                 count_tracer.results()
             )
+
+        if bal_tracer is not None:
+            self.last_bal_witness = bal_tracer.witness()
+            self.bal_witnesses.append(self.last_bal_witness)
 
         if debug_output_path:
             dump_files_to_directory(

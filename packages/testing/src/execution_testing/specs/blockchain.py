@@ -102,6 +102,7 @@ from execution_testing.test_types.chain_config_types import ChainConfigDefaults
 from .base import BaseTest, FillResult, OpMode, verify_result
 from .debugging import print_traces
 from .helpers import verify_block, verify_transactions
+from .invariants import check_block_invariants, invariant_checks_enabled
 
 
 def environment_from_parent_header(parent: "FixtureHeader") -> "Environment":
@@ -1006,6 +1007,12 @@ class BlockchainTest(BaseTest):
                     "transactions are the point"
                 )
 
+        # The access witness is traced, so it has to be asked for before
+        # the run rather than read off the result afterwards. Only the
+        # reference tool offers it.
+        if invariant_checks_enabled() and hasattr(t8n, "compute_bal_witness"):
+            t8n.compute_bal_witness = True
+
         transition_tool_output = t8n.evaluate(
             transition_tool_data=TransitionTool.TransitionToolData(
                 alloc=previous_alloc,
@@ -1261,6 +1268,36 @@ class BlockchainTest(BaseTest):
                 + "to be invalid. Please verify whether the transaction "
                 + "was indeed expected to fail and add the proper "
                 + "`block.exception`"
+            )
+
+        if invariant_checks_enabled() and block.exception is None:
+            self._invariant_violations.extend(
+                check_block_invariants(
+                    # Only the reference tool traces itself, so the
+                    # witness is absent for every other t8n and the
+                    # access check stays silent rather than guessing.
+                    bal_witness=getattr(t8n, "last_bal_witness", None),
+                    block_access_list=t8n_bal,
+                    fork=fork,
+                    pre_alloc=(
+                        previous_alloc.materialize()
+                        if isinstance(previous_alloc, LazyAlloc)
+                        else previous_alloc
+                    ),
+                    post_alloc=(
+                        built_block.alloc.materialize()
+                        if isinstance(built_block.alloc, LazyAlloc)
+                        else built_block.alloc
+                    ),
+                    result=built_block.result,
+                    env=env,
+                    txs=txs,
+                    base_fee_per_gas=(
+                        int(built_block.header.base_fee_per_gas)
+                        if built_block.header.base_fee_per_gas is not None
+                        else None
+                    ),
+                )
             )
 
         return built_block
