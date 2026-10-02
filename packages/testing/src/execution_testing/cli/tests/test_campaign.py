@@ -653,22 +653,37 @@ def test_a_fallback_on_a_block_expected_rejected_keeps_no_batch(
     assert list((tmp_path / "out" / "fixtures").glob("*.json")) == []
 
 
-def test_delivered_list_negatives_are_recorded_never_judged(
+class _DroppingRunner(_FakeRunner):
+    """Prints a decision line reporting the list dropped on every block."""
+
+    def run_file(self, path: Path, fixture_names: Any) -> Dict[str, Verdict]:
+        names = list(fixture_names)
+        self.last_stderr = "".join(
+            json.dumps(
+                {
+                    "event": "balExecution",
+                    "block": 1,
+                    "hash": _hash(int(name.split("_")[1])),
+                    "path": "sequential",
+                    "reason": "bad-access-list",
+                }
+            )
+            + "\n"
+            for name in names
+        )
+        return super().run_file(path, names)
+
+
+def test_a_drops_lane_rejecting_a_delivered_list_case_is_a_finding(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     """
-    An import-lane delivered-list negative is a valid block with a wrong
-    delivered list, which the fixture cannot yet express: each lane's
-    answer is recorded, refused or imported, and none is a finding,
-    counts as a failure, or keeps its batch, whichever way lanes split.
+    A delivered-list case is a valid block with a wrong delivered list.
+    geth is marked to drop such a list, so rejecting the block is a
+    finding; the other cases stay agreed.
     """
-    monkeypatch.setattr(
-        _FakePool, "delivered", staticmethod(lambda s: s % 3 == 0)
-    )
-    failing = {
-        "geth": lambda _s: False,
-        "nethermind": lambda s: s % 3 == 0,
-    }
+    monkeypatch.setattr(_FakePool, "delivered", staticmethod(lambda s: s == 3))
+    failing = {"geth": lambda s: s == 3, "nethermind": lambda _s: False}
     state = _campaign(
         tmp_path,
         monkeypatch,
@@ -676,18 +691,52 @@ def test_delivered_list_negatives_are_recorded_never_judged(
         count=9,
         batch=9,
         baseline=False,
-        delivered_bal={"geth": "attached"},
+        delivered_bal={"geth": "drops"},
     )
-    assert state.delivered == {
-        "geth": {"refused": 3, "imported": 0},
-        "nethermind": {"refused": 0, "imported": 3},
-    }
-    assert state.counts["delivered-informational"] == 3
-    assert state.counts["agreed"] == 6
+    (entry,) = state.signatures.values()
+    assert entry["client"] == "geth"
+    assert entry["reason"].startswith("rejected a valid block over")
+    assert state.delivered["geth"]["rejected"] == 1
+    assert state.counts["agreed"] == 8
+
+
+def test_an_unknown_lane_rejecting_a_delivered_list_case_is_recorded_only(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    Nethermind's handling is unknown, so its rejections are recorded and
+    judged nowhere, with what its decision lines said it did with the
+    list: here, dropped on every block.
+    """
+    monkeypatch.setattr(
+        _FakePool, "delivered", staticmethod(lambda s: s % 3 == 0)
+    )
+    failing = {"geth": lambda _s: False, "nethermind": lambda s: s % 3 == 0}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        count=9,
+        batch=9,
+        baseline=False,
+        runner=lambda name, flags: (
+            _DroppingRunner(name, failing[name], None, flags)
+            if name == "nethermind"
+            else _FakeRunner(name, failing[name], None, flags)
+        ),
+        delivered_bal={"geth": "drops", "nethermind": "unknown"},
+    )
     assert state.signatures == {} and state.client_failures == {}
-    assert state.kept_batches == []
+    assert state.delivered["nethermind"] == {
+        "imported": 0,
+        "rejected": 3,
+        "dropped": 3,
+        "used": 0,
+        "unreported": 0,
+    }
+    assert state.delivered["geth"]["unreported"] == 3
     report = (tmp_path / "out" / "report.md").read_text()
-    assert "geth 3/0, nethermind 0/3" in report
+    assert "nethermind 0/3, 3/0/0" in report
 
 
 def test_a_delivered_negative_that_did_not_apply_is_judged_as_valid(

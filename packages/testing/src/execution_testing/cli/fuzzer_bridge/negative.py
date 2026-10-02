@@ -30,15 +30,13 @@ be a negative on the engine path: a client derives the header's list hash
 from the list it is given, so the block hash no longer matches and the
 payload is refused on its hash before any list check runs (669 besu and
 nethermind failures at v32 were that, not client bugs). It is the import
-lane's instead (`delivered_list_fixture`): a block-test runner attaches
-the fixture's own list to the block it imports, so a client that executes
-from the delivered list, or checks it, refuses it, and one that rebuilds
-its own and ignores it imports it. The block itself is valid, its header
-committing to the true list, so which answer is right depends on the
-runner, and the fixture format cannot yet say "valid block, bad delivered
-list": the campaign records each lane's answer and judges none. EELS cannot
-witness it, since its import never reads that list; each kind was proven
-on a client that attaches the list and on a stock build that does not.
+lane's instead (`delivered_list_fixture`), as a valid-block case: the
+header commits to the true list, so the block is valid and expected
+valid, and only the delivered list a block-test runner attaches is wrong.
+The runner interface (§1) has a runner hash the delivered list against
+the header and drop it on a mismatch, so a client must import the block;
+one that rejects it is using a list it should have dropped. EELS imports
+it as an ordinary valid block, since it never reads that list.
 
 A client that answers VALID to a negative case fails its fixture, as one
 that answers INVALID to a clean case does: both are findings, through the
@@ -613,37 +611,32 @@ def delivered_list_fixture(
     clean: Mapping[str, Any], rehashed: Mapping[str, Any]
 ) -> Dict[str, Any]:
     """
-    The import lane's negative: ``rehashed``, the case filled with its last
-    block's list changed and the header committing to it, with that block's
-    RLP and header put back to ``clean``'s. Only the delivered list,
-    `rlp_decoded.blockAccessList`, is still the changed one, so the header
-    commits to the true list and the block itself is valid.
+    The import lane's delivered-list case: ``clean``, the case as filled,
+    with its last block's delivered list swapped for the changed one from
+    ``rehashed``, the case filled with that list committed to. The header
+    and RLP are the clean fill's, committing to the true list, so the block
+    is valid and expected valid; only the list a runner attaches is wrong.
     """
-    fixture = dict(rehashed)
-    true_block = clean["blocks"][-1]
-    rejected = dict(rehashed["blocks"][-1])
-    decoded = dict(rejected["rlp_decoded"])
-    decoded["blockHeader"] = true_block["blockHeader"]
-    rejected["rlp"] = true_block["rlp"]
-    rejected["rlp_decoded"] = decoded
-    fixture["blocks"] = [*rehashed["blocks"][:-1], rejected]
+    changed = rehashed["blocks"][-1]["rlp_decoded"]["blockAccessList"]
+    fixture = dict(clean)
+    last = {**clean["blocks"][-1], "blockAccessList": changed}
+    fixture["blocks"] = [*clean["blocks"][:-1], last]
     return fixture
 
 
 def delivered_list_fault(fixture: Mapping[str, Any]) -> str:
     """
-    Why ``fixture`` is not a delivered-list negative, or "" when it is:
-    its last block is expected rejected, and the list it delivers is not
-    the one the block's header commits to.
+    Why ``fixture`` is not a delivered-list case, or "" when it is: its
+    last block is expected valid, and the list it delivers is not the one
+    the block's header commits to.
     """
     block = fixture["blocks"][-1]
-    if "expectException" not in block:
-        return "delivered-list negative: last block not expected rejected"
-    decoded = block["rlp_decoded"]
-    delivered = BlockAccessList.model_validate(decoded["blockAccessList"])
-    committed = decoded["blockHeader"]["blockAccessListHash"]
+    if "expectException" in block:
+        return "delivered-list case: last block expected rejected"
+    delivered = BlockAccessList.model_validate(block["blockAccessList"])
+    committed = block["blockHeader"]["blockAccessListHash"]
     if Hash(delivered.rlp_hash) == Hash(committed):
-        return "delivered-list negative: the delivered list is the true one"
+        return "delivered-list case: the delivered list is the true one"
     return ""
 
 

@@ -25,7 +25,7 @@ clients:
   # Pre-fix besu, the campaign's positive control (2d29706a).
   - name: besu-gate
     # delivered-list negatives: the control; it attaches nothing.
-    delivered_bal: ignored
+    delivered_bal: unknown
     build:
       recipe: besu
       repo: besu-eth/besu
@@ -207,7 +207,11 @@ clients:
     # masking signal. Step 0 on the 3bd832b4 fill: 2 failures per format,
     # both the known pre-#3566 last-index disagreement. It enforces the
     # EIP-8037 total gas cap (core/state_transition.go:564).
-    delivered_bal: ignored
+    # As valid-block cases (2026-10-01): the rejections above were measured on
+    # the old rejected-block fixtures. Whether this fork drops a mismatched
+    # list (runner interface §1) is unmeasured; its --bal-report decision
+    # lines will show it, as `dropped` in the report. Unknown until then.
+    delivered_bal: unknown
     build:
       recipe: geth
       repo: fselmo/go-ethereum
@@ -237,7 +241,8 @@ clients:
     # --bal.sequential, which does not check a supplied list (fixed on
     # LCC2's 0af31ed840). Stock ethrex imports all 13; all 13 clean
     # versions pass both ways. Prove again at the fork swap.
-    delivered_bal: ignored
+    # As valid-block cases (2026-10-01): its parallel path uses the delivered list and rejects all 13.
+    delivered_bal: rejects
     build:
       recipe: ethrex
       repo: lambdaclass/ethrex
@@ -273,7 +278,7 @@ clients:
   # PyPI wheel, with gcc's builtin headers for bindgen.
   - name: reth-main
     # delivered-list negatives: interim import lane, until its fork branch lands.
-    delivered_bal: ignored
+    delivered_bal: unknown
     build:
       recipe: reth
       repo: paradigmxyz/reth
@@ -288,7 +293,8 @@ clients:
     # delivered-list negatives: ignored, measured. It imports all 13 bal and
     # form kinds on its primary, hints-off and serial lanes, and passes
     # all 13 clean versions on each.
-    delivered_bal: ignored
+    # As valid-block cases (2026-10-01): it imports all 13, never using the delivered list, so it is judged as one that drops it.
+    delivered_bal: drops
     build:
       recipe: erigon
       repo: erigontech/erigon
@@ -302,7 +308,7 @@ clients:
       serial: {env: {EXEC3_WORKERS: "1"}}
   - name: besu-par-main
     # delivered-list negatives: its series reads no rlp_decoded list; LCC2's besu PR adds that read.
-    delivered_bal: ignored
+    delivered_bal: unknown
     build:
       recipe: besu
       repo: besu-eth/besu
@@ -373,7 +379,7 @@ clients:
           PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
   - name: nethermind-par-main
     # delivered-list negatives: its attach patch reads only a block's top-level list, not rlp_decoded's.
-    delivered_bal: ignored
+    delivered_bal: unknown
     build:
       recipe: nethermind
       repo: NethermindEth/nethermind

@@ -377,8 +377,9 @@ class CampaignState:
     """Per lane, BAL-carrying blocks judged and how many it decided to run
     in parallel, from the series' `FUZZ-PAR-DECISION` lines."""
     delivered: Dict[str, Dict[str, int]] = field(default_factory=dict)
-    """Per lane, how often it refused and imported an import-lane
-    delivered-list negative. Informational only: see `delivered_bal`."""
+    """Per lane, its delivered-list cases by `DELIVERED_OUTCOMES`: whether
+    it imported or rejected the valid block, and whether its decision line
+    says it dropped the list."""
     kept_batches: List[Dict[str, Any]] = field(default_factory=list)
     """The batch files kept after judging, oldest first: each one's name,
     size and the reasons it was kept (see `KEEP_REASONS`)."""
@@ -843,10 +844,12 @@ def render_report(
     ]
     if state.delivered:
         lines.append(
-            "| delivered-list negatives, refused/imported "
-            "(informational) | "
+            "| delivered-list cases, imported/rejected, list dropped/used/"
+            "unreported | "
             + ", ".join(
-                f"{lane} {o['refused']}/{o['imported']}"
+                f"{lane} {o.get('imported', 0)}/{o.get('rejected', 0)}, "
+                f"{o.get('dropped', 0)}/{o.get('used', 0)}/"
+                f"{o.get('unreported', 0)}"
                 for lane, o in sorted(state.delivered.items())
             )
             + " |"
@@ -1411,7 +1414,36 @@ def parallel_decisions(
     return tallies
 
 
-_DECISION_FIELDS = re.compile(r"\b(block|hash|decision|reason)=(\S+)")
+_DECISION_FIELDS = re.compile(
+    r"\b(block|hash|decision|reason|scheduler)=(\S*)"
+)
+
+DELIVERED_OUTCOMES = ("imported", "rejected", "dropped", "used", "unreported")
+"""A lane's record of delivered-list cases: whether it imported or
+rejected the block, and what its decision line says it did with the list
+(see `list_handling`)."""
+
+
+def list_handling(
+    fields: Mapping[Tuple[str, str], Mapping[str, str]],
+    lane: str,
+    block_hash: str,
+) -> str:
+    """
+    What ``lane``'s decision line says it did with the list delivered with
+    the block ``block_hash``: `dropped` when it reports the list dropped
+    (reason `bad-access-list`, or scheduler `optimistic` for a client that
+    still runs parallel without a list), `used` when it reports another
+    path, `unreported` when it printed no line for the block.
+    """
+    line = fields.get((lane, block_hash))
+    if line is None:
+        return "unreported"
+    if line.get("reason") == "bad-access-list":
+        return "dropped"
+    if line.get("scheduler") == "optimistic":
+        return "dropped"
+    return "used"
 
 
 def expected_valid_lines(
@@ -1702,18 +1734,11 @@ def _self_check_case(
 
     negative = fixture.get("_info", {}).get("negative") or {}
     if negative.get("variant") == "delivered" and negative.get("applied"):
-        # EELS never reads the delivered list, so it cannot refuse this
-        # block. What it can witness: the block is valid as delivered,
-        # and the delivered list is not the one its header commits to.
+        # EELS never reads the delivered list: it imports the block as the
+        # valid block it is. The list's own fault is checked here.
         fault = delivered_list_fault(fixture)
         if fault:
             return fault, ""
-        last = {
-            k: v
-            for k, v in fixture["blocks"][-1].items()
-            if k != "expectException"
-        }
-        fixture = {**fixture, "blocks": [*fixture["blocks"][:-1], last]}
     try:
         result = import_fixture(fixture, fork.name().lower())
     except ImportCrashError as exc:
@@ -1950,10 +1975,10 @@ class CampaignOptions:
     baseline: bool = True
     keep_fixtures: bool = False
     delivered_bal: Mapping[str, str] = field(default_factory=dict)
-    """Per client, `attached` when its block-test runner attaches and
-    validates the list a delivered-list negative carries. Shown beside
-    each lane's delivered-list outcomes in the report; it judges nothing.
-    See `ClientConfig.delivered_bal`."""
+    """Per client, what its block-test runner does with a delivered list
+    that does not match the header: `drops`, `rejects` or `unknown`. Only
+    a `drops` lane is judged on delivered-list cases. See
+    `ClientConfig.delivered_bal`."""
     max_kept_bytes: Optional[int] = None
     """A backstop on the batch files kept after judging: past it the
     oldest go, but the newest kept for each reason stays."""
@@ -2514,6 +2539,11 @@ def run_campaign(
                     for lane, line in tagged
                     if line.startswith(PAR_DECISION_TAG)
                 ]
+                decision_fields = {
+                    (lane, fields.get("hash", "").lower()): fields
+                    for lane, line in decisions
+                    for fields in [dict(_DECISION_FIELDS.findall(line))]
+                }
                 tagged = [
                     (lane, line)
                     for lane, line in tagged
@@ -2647,23 +2677,70 @@ def run_campaign(
                     if errored:
                         kept_for.add("runner_error")
                     if fixture_name in delivered_names:
-                        # Informational only: the block is valid, its header
-                        # committing to the true list, and only the
-                        # delivered list is wrong, which the fixture format
-                        # cannot yet express. Each lane's outcome is
-                        # recorded; none is a finding or fails a lane.
+                        # A valid block whose delivered list is wrong. Each
+                        # lane's answer is recorded with what its decision
+                        # line says it did with the list; only a lane marked
+                        # to drop the list is judged, and rejecting the
+                        # block there is a finding.
+                        block_hash = str(
+                            batch_fixtures[fixture_name]["blocks"][-1][
+                                "blockHeader"
+                            ]["hash"]
+                        ).lower()
+                        rejecting: Dict[str, Verdict] = {}
                         for name, verdict in verdicts.items():
                             outcome = state.delivered.setdefault(
-                                name, {"refused": 0, "imported": 0}
+                                name, dict.fromkeys(DELIVERED_OUTCOMES, 0)
                             )
-                            # The fixture expects a rejection, so a pass is
-                            # the lane refusing the delivered list.
                             outcome[
-                                "refused" if verdict.passed else "imported"
+                                "imported" if verdict.passed else "rejected"
                             ] += 1
-                        state.counts["delivered-informational"] = (
-                            state.counts.get("delivered-informational", 0) + 1
+                            outcome[
+                                list_handling(
+                                    decision_fields, name, block_hash
+                                )
+                            ] += 1
+                            if (
+                                not verdict.passed
+                                and options.delivered_bal.get(name) == "drops"
+                            ):
+                                rejecting[name] = verdict
+                        state.counts["delivered-list"] = (
+                            state.counts.get("delivered-list", 0) + 1
                         )
+                        for signature in per_client_signatures(rejecting):
+                            client, reason = signature
+                            signature = (
+                                client,
+                                f"rejected a valid block over its delivered "
+                                f"list: {reason}",
+                            )
+                            known = is_known(signature, options.known)
+                            if not known:
+                                kept_for.add(
+                                    f"finding:{signature_id(signature)}"
+                                )
+                            bundle = corpus_dir / signature_id(signature)
+                            new = state.record_signature(
+                                client,
+                                signature[1],
+                                seed=_seed_of(fixture_name),
+                                bundle=None if known else str(bundle),
+                                known=known,
+                                events=case_events.get(fixture_name, []),
+                            )
+                            if new and not known:
+                                _write_bundle(
+                                    bundle,
+                                    options,
+                                    fixture_name,
+                                    batch_fixtures[fixture_name],
+                                    verdicts,
+                                    runners,
+                                    focus_client=client,
+                                    events=case_events.get(fixture_name, []),
+                                    segment=state.segment,
+                                )
                         continue
                     if fixture_name in negative_names:
                         # The fixture expects INVALID, so a pass is the
@@ -3084,10 +3161,13 @@ def interface_line(line: str) -> Optional[str]:
     block, block_hash = report.get("block"), report.get("hash")
     if report.get("event") == "balExecution":
         reason = report.get("reason") or ""
-        return (
+        line = (
             f"{PAR_DECISION_TAG} block={block} hash={block_hash} "
             f"decision={report.get('path')} reason={reason}"
         )
+        if report.get("scheduler"):
+            line += f" scheduler={report['scheduler']}"
+        return line
     if report.get("event") == "balFallback":
         return (
             f"BAL-FALLBACK block={block} hash={block_hash} "

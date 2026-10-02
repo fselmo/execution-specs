@@ -204,37 +204,30 @@ def test_every_negative_axis_keeps_all_its_values() -> None:
 
 
 @pytest.mark.parametrize("draw", _draws(DELIVERED_FAMILIES))
-def test_the_import_lane_delivers_a_changed_list_beside_the_true_header(
+def test_the_import_lane_delivers_a_changed_list_with_a_valid_block(
     clean: Dict[str, Any], draw: Dict[str, Any]
 ) -> None:
     """
-    In the blockchain format a content or form negative changes only the
-    list the runner is handed: the last block's RLP and header are the
-    clean fill's, its delivered list hashes to something else, and EELS,
-    which never reads that list, imports the block once the expected
-    rejection is taken off. The campaign's self-check passes it on those
-    grounds.
+    In the blockchain format a content or form kind changes only the list
+    the runner is handed: the fixture is the clean fill, the last block
+    expected valid, with its delivered list hashing to something other
+    than the header's commitment. EELS, which never reads that list,
+    imports it as the valid block it is, and the self-check passes it.
     """
     negative = FuzzerNegativeInput(**draw, pick=0)
     mod._init_fill_worker("Amsterdam")
     fixture = mod.fill_case(_case(negative), Amsterdam, mod._FILL["eels"])
     assert fixture["_info"]["negative"]["variant"] == "delivered"
     assert fixture["_info"]["negative"]["applied"]
-    true_block, rejected = clean["blocks"][-1], fixture["blocks"][-1]
-    assert rejected["rlp"] == true_block["rlp"]
-    decoded = rejected["rlp_decoded"]
-    assert decoded["blockHeader"] == true_block["blockHeader"]
-    assert decoded["blockAccessList"] != true_block["blockAccessList"]
+    true_block, delivered = clean["blocks"][-1], fixture["blocks"][-1]
+    assert "expectException" not in delivered
+    assert delivered["rlp"] == true_block["rlp"]
+    assert delivered["blockHeader"] == true_block["blockHeader"]
+    assert delivered["blockAccessList"] != true_block["blockAccessList"]
+    assert fixture["lastblockhash"] == clean["lastblockhash"]
     assert delivered_list_fault(fixture) == ""
     assert mod._self_check_case(fixture, Amsterdam) == ("", "")
-    accepted = {
-        **fixture,
-        "blocks": [
-            *fixture["blocks"][:-1],
-            {k: v for k, v in rejected.items() if k != "expectException"},
-        ],
-    }
-    assert import_fixture(accepted, "amsterdam").agreed
+    assert import_fixture(fixture, "amsterdam").agreed
 
 
 def test_a_delivered_list_equal_to_the_true_one_fails_the_self_check(
@@ -244,12 +237,13 @@ def test_a_delivered_list_equal_to_the_true_one_fails_the_self_check(
     negative = FuzzerNegativeInput(family="bal", kind="drop_account", pick=0)
     mod._init_fill_worker("Amsterdam")
     fixture = mod.fill_case(_case(negative), Amsterdam, mod._FILL["eels"])
-    rejected = dict(fixture["blocks"][-1])
-    rejected["rlp_decoded"] = {
-        **rejected["rlp_decoded"],
-        "blockAccessList": clean["blocks"][-1]["blockAccessList"],
-    }
-    fixture["blocks"] = [*fixture["blocks"][:-1], rejected]
+    fixture["blocks"] = [
+        *fixture["blocks"][:-1],
+        {
+            **fixture["blocks"][-1],
+            "blockAccessList": clean["blocks"][-1]["blockAccessList"],
+        },
+    ]
     failed, _ = mod._self_check_case(fixture, Amsterdam)
     assert "the delivered list is the true one" in failed
 

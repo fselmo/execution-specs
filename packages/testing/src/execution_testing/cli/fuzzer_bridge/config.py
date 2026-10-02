@@ -209,14 +209,14 @@ class ClientConfig(BaseModel):
     the path contrast; `IGNORE_BAL=true` withholds the delivered list while
     execution stays parallel, a hint contrast. Either may be set, or both;
     a client declaring neither has no contrast run."""
-    delivered_bal: Literal["attached", "ignored"] = "ignored"
-    """Whether this client's block-test runner attaches the access list a
-    fixture delivers with a block expected rejected (its
-    `rlp_decoded.blockAccessList`) and validates it. The import lane's
-    delivered-list negatives are informational: each lane's answer is
-    recorded and none is judged, since the block is valid and only the
-    delivered list is wrong. This says which answer to expect of a lane,
-    for reading those records; `ignored` until a runner is proven."""
+    delivered_bal: Literal["drops", "rejects", "unknown"] = "unknown"
+    """What this client's block-test runner does with a delivered access
+    list that does not match the block's header: `drops` it and imports
+    the block on its header, as the runner interface (§1) asks, or
+    `rejects` the block for it. The import lane's delivered-list cases are
+    valid blocks, so on a `drops` lane rejecting one is a finding; on the
+    others the outcome is only recorded, as is each lane's decision line
+    on whether it dropped the list."""
     contrasts: Dict[str, ContrastRun] = Field(default_factory=dict)
     """Further contrast runs by name, for a client with more than one knob
     worth separating: erigon's `IGNORE_BAL` drops the BAL's scheduling
