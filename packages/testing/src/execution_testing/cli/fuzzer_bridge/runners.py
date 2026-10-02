@@ -20,6 +20,16 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from execution_testing.client_clis import FixtureConsumerTool
+from execution_testing.client_clis.clis.besu import BesuExceptionMapper
+from execution_testing.client_clis.clis.erigon import ErigonExceptionMapper
+from execution_testing.client_clis.clis.ethrex import EthrexExceptionMapper
+from execution_testing.client_clis.clis.evmone import EvmoneExceptionMapper
+from execution_testing.client_clis.clis.geth import GethExceptionMapper
+from execution_testing.client_clis.clis.nethermind import (
+    NethermindExceptionMapper,
+)
+from execution_testing.client_clis.clis.reth import RethExceptionMapper
+from execution_testing.exceptions import ExceptionMapper
 
 from .clients import client_environment, native_version
 
@@ -30,6 +40,10 @@ class Verdict:
 
     passed: bool
     error: str = ""
+    rejections: Tuple[Tuple[int, str], ...] = ()
+    """The client's own error for each block or payload it rejected, by
+    its index in the fixture, as a runner on the shared interface reports
+    them (`docs/fuzzing/runner-interface.md` §5)."""
 
 
 RUNNER_ERROR_PREFIX = "runner-error: "
@@ -55,7 +69,8 @@ _NETHERMIND_SUFFIX = re.compile(r"_d\d+g\d+v\d+_$")
 
 def parse_json_array(stdout: str) -> Dict[str, Verdict]:
     """
-    Verdicts from a `[{"name", "pass", "error"}, ...]` list in stdout.
+    Verdicts from a `[{"name", "pass", "error", "rejections"}, ...]` list
+    in stdout.
 
     The list is the first line-initial `[` that decodes: erigon prints
     `[WARN] ... use ERIGON_ prefix` lines ahead of it whenever an
@@ -80,8 +95,89 @@ def parse_json_array(stdout: str) -> Dict[str, Verdict]:
             verdicts[str(entry["name"])] = Verdict(
                 passed=bool(entry.get("pass")),
                 error=str(entry.get("error") or ""),
+                rejections=tuple(
+                    (int(r["index"]), str(r.get("error") or ""))
+                    for r in entry.get("rejections") or []
+                ),
             )
     return verdicts
+
+
+def expected_rejection(fixture: Mapping[str, Any]) -> Optional[str]:
+    """
+    The rejection ``fixture`` expects, as it names it, or None when it
+    expects every block valid: a blockchain test's `expectException`, an
+    engine test's `validationError`.
+    """
+    found = _expected_rejection_at(fixture)
+    return None if found is None else found[1]
+
+
+def _expected_rejection_at(
+    fixture: Mapping[str, Any],
+) -> Optional[Tuple[int, str]]:
+    """The first block expected rejected: its index and exception."""
+    for index, block in enumerate(fixture.get("blocks", [])):
+        if block.get("expectException"):
+            return index, str(block["expectException"])
+    for index, payload in enumerate(fixture.get("engineNewPayloads", [])):
+        if payload.get("validationError"):
+            return index, str(payload["validationError"])
+    return None
+
+
+EXCEPTION_MAPPERS: Dict[str, type[ExceptionMapper]] = {
+    "GethFixtureConsumer": GethExceptionMapper,
+    "ErigonFixtureConsumer": ErigonExceptionMapper,
+    "BesuFixtureConsumer": BesuExceptionMapper,
+    "NethtestFixtureConsumer": NethermindExceptionMapper,
+    "EthrexFixtureConsumer": EthrexExceptionMapper,
+    "RethFixtureConsumer": RethExceptionMapper,
+    "EvmOneBlockchainFixtureConsumer": EvmoneExceptionMapper,
+}
+"""Each runner's mapping from its client's errors to exception names: the
+one `consume` uses for that client."""
+
+WRONG_REASON = "rejected for the wrong reason: "
+UNMAPPED_REASON = "rejected with an error no exception maps: "
+
+
+def check_rejection_reasons(
+    kind: str,
+    verdicts: Dict[str, Verdict],
+    fixtures: Mapping[str, Any],
+) -> None:
+    """
+    Fail each fixture its runner rejected as expected, but for another
+    reason than the one the fixture names.
+
+    A runner on the shared interface reports the client's own error for
+    each rejected block without checking it, so its verdict passes on any
+    rejection; the error at the block the fixture expects rejected is
+    mapped here through the client's mapper instead. A runner from before
+    the interface may carry that error in `error`. A pass with neither is
+    left alone: that runner checked the reason itself. An error mapping to
+    no exception fails apart from a wrong one, as a gap in the mapper
+    rather than a different rejection.
+    """
+    mapper = EXCEPTION_MAPPERS[kind]()
+    for name, verdict in verdicts.items():
+        found = _expected_rejection_at(fixtures.get(name) or {})
+        if not verdict.passed or found is None:
+            continue
+        index, expected = found
+        error = dict(verdict.rejections).get(index, verdict.error)
+        if not error:
+            continue
+        mapped = mapper.message_to_exception(error)
+        if not isinstance(mapped, list):
+            verdicts[name] = Verdict(False, f"{UNMAPPED_REASON}{error}")
+            continue
+        names = [str(exception) for exception in mapped]
+        if set(names).isdisjoint(expected.split("|")):
+            verdicts[name] = Verdict(
+                False, f"{WRONG_REASON}{'|'.join(names)}\n{error}"
+            )
 
 
 _BESU_RUNNING = re.compile(r"^Running (\S+)$", re.MULTILINE)
@@ -337,6 +433,13 @@ class FixtureRunner:
         for name in missing:
             verdicts[name] = Verdict(
                 False, f"{RUNNER_ERROR_PREFIX}no result from {self.name}"
+            )
+        # Read the fixtures only when some pass carries an error to check.
+        if any(
+            v.passed and (v.error or v.rejections) for v in verdicts.values()
+        ):
+            check_rejection_reasons(
+                self.kind, verdicts, json.loads(path.read_text())
             )
         return verdicts
 

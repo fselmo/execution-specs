@@ -92,7 +92,12 @@ from .negative import (
 )
 from .reproducer import client_judge, write_reproducer
 from .run_manifest import RunManifest, _eels_commit, binary_digest
-from .runners import FixtureRunner, Verdict, is_runner_error
+from .runners import (
+    FixtureRunner,
+    Verdict,
+    expected_rejection,
+    is_runner_error,
+)
 
 Signature = Tuple[str, str]
 """One client and the normalized reason it rejected a block."""
@@ -185,21 +190,6 @@ def case_panel(
             "not fed: contrasts sat this batch out",
         )
     return panel
-
-
-def expected_rejection(fixture: Mapping[str, Any]) -> Optional[str]:
-    """
-    The rejection ``fixture`` expects, as it names it, or None when it
-    expects every block valid: a blockchain test's `expectException`, an
-    engine test's `validationError`.
-    """
-    for block in fixture.get("blocks", []):
-        if block.get("expectException"):
-            return str(block["expectException"])
-    for payload in fixture.get("engineNewPayloads", []):
-        if payload.get("validationError"):
-            return str(payload["validationError"])
-    return None
 
 
 def is_known(signature: Signature, known: Sequence[KnownSignature]) -> bool:

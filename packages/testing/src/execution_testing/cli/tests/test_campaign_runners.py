@@ -669,3 +669,75 @@ def test_reth_is_detected_for_both_formats(tmp_path: Path) -> None:
         runner = FixtureRunner.detect("reth", binary, engine=engine)
         assert runner.kind == "RethFixtureConsumer"
         assert runner.engine == engine
+
+
+def test_a_rejection_for_the_wrong_reason_fails(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """
+    A runner on the shared interface passes every rejection and reports
+    the client's error for each rejected block, so the error at the block
+    the fixture expects rejected is mapped through the client's mapper and
+    compared with the expected exception. Only the right reason passes; a
+    wrong one and an unmapped one each fail, keyed on the expected
+    exception. Geth's runner today reports the error in `error`, which is
+    checked the same way, and a pass with no error came from a runner that
+    checked the reason itself.
+    """
+    from ..fuzzer_bridge.campaign import per_client_signatures
+
+    expected = "TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM"
+    names = ["right", "wrong", "unmapped", "legacy_wrong", "checked"]
+    fixture = tmp_path / "batch.json"
+    fixture.write_text(
+        json.dumps(
+            {
+                name: {"blocks": [{}, {"expectException": expected}]}
+                for name in names
+            }
+        )
+    )
+
+    def rejected(name: str, error: str) -> Dict[str, Any]:
+        return {
+            "name": name,
+            "pass": True,
+            "rejections": [{"index": 1, "error": error}],
+        }
+
+    stdout = json.dumps(
+        [
+            rejected("right", "transaction gas limit too high (cap: 2^24)"),
+            rejected("wrong", "max fee per gas less than block base fee"),
+            rejected("unmapped", "no such check"),
+            {
+                "name": "legacy_wrong",
+                "pass": True,
+                "error": "max fee per gas less than block base fee",
+            },
+            {"name": "checked", "pass": True, "error": ""},
+        ]
+    )
+    runner = FixtureRunner("geth", Path("/bin/evm"), "GethFixtureConsumer")
+    monkeypatch.setattr(
+        runner,
+        "_run",
+        lambda _args: type(
+            "P", (), {"stdout": stdout, "stderr": "", "returncode": 0}
+        ),
+    )
+    verdicts = runner.run_file(fixture, names)
+
+    assert verdicts["right"].passed
+    assert verdicts["checked"].passed
+    signatures = dict(per_client_signatures(verdicts, expected))
+    assert set(signatures) == {"wrong", "unmapped", "legacy_wrong"}
+    wrong = (
+        f"expected {expected}: rejected for the wrong reason: "
+        "TransactionException.INSUFFICIENT_MAX_FEE_PER_GAS"
+    )
+    assert signatures["wrong"] == signatures["legacy_wrong"] == wrong
+    assert signatures["unmapped"] == (
+        f"expected {expected}: rejected with an error no exception maps: "
+        "no such check"
+    )
