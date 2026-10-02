@@ -89,7 +89,7 @@ A block that falls back prints exactly two lines: its `balExecution` line with `
 
 ## 5. Expected exceptions
 
-When a fixture names an expected exception (`expectException` on a block, or the payload's `validationError`), the runner checks that the client rejected the block for that reason, not only that it rejected it. The match uses the client's own mapping from its errors to the fixture's exception names, the one `consume` uses for that client, and a fixture may list several names separated by `|`, any of which matches. A block rejected for a different reason fails the fixture, with both the expected and the actual reason in its result. A client error that maps to no name fails too, so the mapping stays complete.
+When a fixture names an expected exception (`expectException` on a block, or the payload's `validationError`), the runner checks that the client rejected the block for that reason, not only that it rejected it. The match uses the client's own mapping from its errors to the fixture's exception names, the one `consume` uses for that client, and a fixture may list several names separated by `|`, any of which matches. A block rejected for a different reason fails the fixture, with both the expected and the actual reason in its result. A client error that maps to no name fails too, so the mapping stays complete. One exception: a block that fails to decode at all counts as rejected without a reason check, as nethermind, geth, besu's reference tests and hive's consume-rlp already treat it, because no client mapping (EEST's included) names decoder errors.
 
 ## Output and wiring
 
