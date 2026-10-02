@@ -679,6 +679,10 @@ campaigns:
     # producer disagreement.
     self_check_every: 25
     known:
+      # reth's interim import runner never checks the EIP-7928 item cap (only
+      # its engine tree does), so v39's size-cap negatives import. Until reth's
+      # fork swap. It matches every balance mismatch on reth-main meanwhile.
+      - {client: reth-main, reason: "test failed: Balance does not match"}
       - {client: besu-par-main, reason: "System call halted"}
       - {client: besu-par-main, reason: "System call did not execute to completion"}
     health:
