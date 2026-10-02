@@ -409,6 +409,9 @@ class NethermindExceptionMapper(ExceptionMapper):
             "InvalidStateRoot: State root in header does not match"
         ),
         BlockException.INVALID_WITHDRAWALS_ROOT: "InvalidWithdrawalsRoot:",
+        BlockException.RLP_STRUCTURES_ENCODING: (
+            "Unexpected length of integer value"
+        ),
         BlockException.GAS_USED_OVERFLOW: ("Block gas limit exceeded"),
         BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
             "BlockAccessListGasLimitExceeded:"
@@ -503,6 +506,7 @@ class NethermindExceptionMapper(ExceptionMapper):
             r"Error decoding block access list:"
             r"|Error decoding block access list:"
             r"|Account changes were in incorrect order\."
+            r"|Unexpected length of integer value"
         ),
         TransactionException.GAS_ALLOWANCE_EXCEEDED: (
             r"TxGasLimitCapExceeded:"
