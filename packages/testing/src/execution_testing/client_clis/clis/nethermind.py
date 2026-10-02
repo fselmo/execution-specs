@@ -352,15 +352,6 @@ class NethermindExceptionMapper(ExceptionMapper):
         TransactionException.INVALID_SIGNATURE_VRS: (
             "InvalidTxSignature: Signature is invalid."
         ),
-        TransactionException.TYPE_1_TX_PRE_FORK: (
-            "InvalidTxType: Transaction type in Custom is not supported"
-        ),
-        TransactionException.TYPE_2_TX_PRE_FORK: (
-            "InvalidTxType: Transaction type in Custom is not supported"
-        ),
-        TransactionException.TYPE_3_TX_PRE_FORK: (
-            "InvalidTxType: Transaction type in Custom is not supported"
-        ),
         TransactionException.TYPE_3_TX_ZERO_BLOBS: (
             "blob transaction must have at least 1 blob"
         ),
@@ -375,9 +366,6 @@ class NethermindExceptionMapper(ExceptionMapper):
         ),
         TransactionException.TYPE_4_TX_CONTRACT_CREATION: (
             "EIP-7702 transaction cannot be used to create contract"
-        ),
-        TransactionException.TYPE_4_TX_PRE_FORK: (
-            "InvalidTxType: Transaction type in Custom is not supported"
         ),
         BlockException.INCORRECT_BLOB_GAS_USED: (
             "HeaderBlobGasMismatch: "
@@ -427,6 +415,19 @@ class NethermindExceptionMapper(ExceptionMapper):
         ),
     }
     mapping_regex = {
+        # The message names the fork the block was validated under.
+        TransactionException.TYPE_1_TX_PRE_FORK: (
+            r"InvalidTxType: Transaction type in [\w ]+ is not supported"
+        ),
+        TransactionException.TYPE_2_TX_PRE_FORK: (
+            r"InvalidTxType: Transaction type in [\w ]+ is not supported"
+        ),
+        TransactionException.TYPE_3_TX_PRE_FORK: (
+            r"InvalidTxType: Transaction type in [\w ]+ is not supported"
+        ),
+        TransactionException.TYPE_4_TX_PRE_FORK: (
+            r"InvalidTxType: Transaction type in [\w ]+ is not supported"
+        ),
         # In-range r that is not an x-coordinate on the curve leaves the
         # transaction without a recovered sender.
         TransactionException.INVALID_SIGNATURE_VRS: (
