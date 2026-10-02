@@ -55,7 +55,11 @@ def runs() -> List[Tuple[int, BalWitness, List[Dict[str, Any]]]]:
         for witness, block in zip(
             eels.bal_witnesses, fixture["blocks"], strict=True
         ):
-            collected.append((seed, witness, [block]))
+            # A block expected rejected carries its list only inside
+            # `rlp_decoded`.
+            collected.append(
+                (seed, witness, [block.get("rlp_decoded", block)])
+            )
     assert collected, "no case filled; the rest of this module proves nothing"
     return collected
 
