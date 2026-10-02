@@ -125,6 +125,9 @@ class GethExceptionMapper(ExceptionMapper):
         BlockException.INVALID_BLOCK_NUMBER: "invalid block number",
         BlockException.EXTRA_DATA_TOO_BIG: "invalid extradata length",
         BlockException.INVALID_RECEIPTS_ROOT: "invalid receipt root hash",
+        BlockException.INVALID_WITHDRAWALS_ROOT: (
+            "withdrawals root hash mismatch"
+        ),
         BlockException.INVALID_LOG_BLOOM: "invalid bloom",
         BlockException.INVALID_STATE_ROOT: "invalid merkle root",
         BlockException.GAS_USED_OVERFLOW: "bal validation failure",
