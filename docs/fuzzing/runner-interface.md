@@ -10,6 +10,8 @@ Every client exposes its runners as `blocktest`, `enginetest` and `statetest`, a
 
 Every runner binary answers `--version` with one line on stdout that names the client and the tool, and exits 0. Tools that already have one keep it (`evm version …`, `Besu evm …`, nethtest's). A new binary names itself `<client>-<runner>`: ethrex's are `ethrex-blocktest`, `ethrex-enginetest` and `ethrex-statetest`, and reth's runner stays `ef-test-runner`. Harnesses identify a runner by that line.
 
+Every runner takes any number of fixture paths (files or directories) as arguments and runs all of them in one process. A runner that also reads paths from stdin keeps that as an extra input, not as the only batch interface.
+
 ## 0. Engine-test drives the real Engine API handler, and nothing else
 
 Engine-test calls the client's own Engine API handler: the code that serves `engine_newPayloadV<n>` and `engine_forkchoiceUpdatedV<n>`, at the versions the fixture names (`newPayloadVersion`, `forkchoiceUpdatedVersion`). The fixture's params are decoded with the client's own decoder, so the access list reaches the validator as it would from the wire.
