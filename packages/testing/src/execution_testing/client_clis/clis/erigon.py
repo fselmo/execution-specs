@@ -94,9 +94,7 @@ class ErigonExceptionMapper(ExceptionMapper):
         ),
         BlockException.INVALID_BLOCK_HASH: "invalid block hash",
         BlockException.RLP_BLOCK_LIMIT_EXCEEDED: "block exceeds max rlp size",
-        BlockException.INVALID_BASEFEE_PER_GAS: (
-            "invalid block: invalid baseFee"
-        ),
+        BlockException.INVALID_BASEFEE_PER_GAS: "invalid baseFee: have",
         BlockException.INVALID_BLOCK_TIMESTAMP_OLDER_THAN_PARENT: (
             "invalid block: timestamp older than parent"
         ),
@@ -104,11 +102,14 @@ class ErigonExceptionMapper(ExceptionMapper):
         BlockException.EXTRA_DATA_TOO_BIG: (
             "invalid block: extra-data longer than 32 bytes"
         ),
-        BlockException.INVALID_GASLIMIT: "invalid block: invalid gas limit",
+        BlockException.INVALID_GASLIMIT: "invalid gas limit",
         BlockException.INVALID_STATE_ROOT: "invalid block: wrong trie root",
         BlockException.INVALID_RECEIPTS_ROOT: "receiptHash mismatch",
         BlockException.INVALID_LOG_BLOOM: "invalid bloom",
-        BlockException.INCORRECT_BLOCK_FORMAT: "invalid block access list",
+        BlockException.INVALID_WITHDRAWALS_ROOT: (
+            "body has invalid withdrawals hash"
+        ),
+        BlockException.INCORRECT_BLOCK_FORMAT: "missing slotNumber",
         BlockException.GAS_USED_OVERFLOW: "block gas used overflow",
     }
     mapping_regex = {
