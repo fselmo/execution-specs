@@ -300,50 +300,34 @@ clients:
     contrasts:
       hints-off: {env: {IGNORE_BAL: "true"}}
       serial: {env: {EXEC3_WORKERS: "1"}}
+  # besu on LCC2's runner-interface fork (fselmo/besu
+  # lcc2/bal-runner-interface-v2, 61ad175bf7): block-test runs the parallel
+  # path on the delivered list, --bal-sequential selects the sequential one,
+  # and --bal-report prints the interface's decision and fallback lines.
+  # No series.
   - name: besu-par-main
-    # delivered-list negatives: its series reads no rlp_decoded list; LCC2's besu PR adds that read.
-    delivered_bal: unknown
+    # delivered-list cases: drops. On 61ad175bf7 all 13 kinds import in both
+    # modes with a bad-access-list decision line (2026-10-02).
+    delivered_bal: drops
     build:
       recipe: besu
-      repo: besu-eth/besu
-      ref: cf89071f9d6dddf7997f35e09929fe059f82ecd1
-      # The devnet-11 port plus 0004, the FUZZ-PAR-DECISION print.
-      patches:
-        - patches/besu-main/0001-referencetests-let-a-caller-ask-for-the-parallel-blo.patch
-        - patches/besu-main/0002-evmtool-run-block-test-on-the-parallel-path-on-the-f.patch
-        - patches/besu-main/0003-core-print-the-parallel-processor-s-sequential-fallb.patch
-        - patches/besu-main/0004-core-print-the-parallel-execution-decision-for-each-.patch
-      patch_paths:
-        - ethereum/evmtool/
-        - ethereum/referencetests/
-        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
-        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/AbstractBlockProcessor.java
+      repo: fselmo/besu
+      ref: 61ad175bf78ae22dcb9e05c1d084a650ccded280
     env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
           PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
-    contrast_flags: [--bal.sequential]
-  # The engine lane (engine-test), parallel by default.
+    runner_flags: [--bal-report]
+    contrast_flags: [--bal-sequential, --bal-report]
+  # The engine lane: the same fork's engine-test.
   - name: besu-eng-main
     build:
       recipe: besu
-      repo: besu-eth/besu
-      ref: cf89071f9d6dddf7997f35e09929fe059f82ecd1
-      # besu-par-main's series plus 0005, engine-test on the parallel path.
-      patches:
-        - patches/besu-main/0001-referencetests-let-a-caller-ask-for-the-parallel-blo.patch
-        - patches/besu-main/0002-evmtool-run-block-test-on-the-parallel-path-on-the-f.patch
-        - patches/besu-main/0003-core-print-the-parallel-processor-s-sequential-fallb.patch
-        - patches/besu-main/0004-core-print-the-parallel-execution-decision-for-each-.patch
-        - patches/besu-main/0005-evmtool-run-engine-test-on-the-parallel-path-on-the-.patch
-      patch_paths:
-        - ethereum/evmtool/
-        - ethereum/referencetests/
-        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/parallelization/MainnetParallelBlockProcessor.java
-        - ethereum/core/src/main/java/org/hyperledger/besu/ethereum/mainnet/AbstractBlockProcessor.java
+      repo: fselmo/besu
+      ref: 61ad175bf78ae22dcb9e05c1d084a650ccded280
     env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
           PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
     # engine-test defaults --workers to every core; capped as geth's is.
-    runner_flags: [--workers, "2"]
-    contrast_flags: [--bal.sequential, --workers, "2"]
+    runner_flags: [--workers, "2", --bal-report]
+    contrast_flags: [--bal-sequential, --workers, "2", --bal-report]
   # Proof only, never on a panel: besu-eng-main plus a print at
   # ParallelTransactionPreprocessing.run.
   - name: besu-eng-probe
