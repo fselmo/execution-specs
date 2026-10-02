@@ -47,6 +47,40 @@ def test_per_client_signatures_one_row_per_failing_client() -> None:
     ]
 
 
+def test_a_new_finding_lists_what_every_client_answered(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A new signature records every client the campaign runs and what each
+    answered on the case: the one failing, the ones passing, and any that
+    never saw it (here, the control sitting out a sampled batch).
+    """
+    from ..fuzzer_bridge.health import HealthPolicy
+
+    failing = {
+        "geth": lambda s: s == 3,
+        "nethermind": lambda _s: False,
+        "besu-gate": lambda _s: False,
+    }
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        failing,
+        count=6,
+        batch=3,
+        baseline=False,
+        control_every=2,
+        health=HealthPolicy(window=1000, control_client="besu-gate"),
+    )
+    (entry,) = [e for e in state.signatures.values() if e["client"] == "geth"]
+    panel = entry["panel"]
+    assert panel["geth"].startswith("failed: geth mismatch")
+    assert panel["nethermind"] == "passed"
+    assert panel["besu-gate"].startswith("not fed")
+    report = (tmp_path / "out" / "report.md").read_text()
+    assert "besu-gate not fed" in report
+
+
 def test_a_rejection_case_signature_carries_what_was_expected() -> None:
     """
     Two clients giving the same generic message for blocks they should

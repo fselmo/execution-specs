@@ -147,6 +147,45 @@ def per_client_signatures(
     ]
 
 
+def case_panel(
+    fixture_name: str,
+    clients: Sequence[str],
+    results: Mapping[str, Mapping[str, Verdict]],
+    contrast_lanes: Sequence[str],
+    contrast_results: Mapping[str, Mapping[str, Verdict]],
+) -> Dict[str, str]:
+    """
+    What every client in the campaign answered on one case, primaries and
+    contrast lanes: passed, failed with its reason, refused, a runner
+    error, or not fed, with why, when its lane sat the batch out.
+    """
+
+    def answer(verdict: Optional[Verdict], absent: str) -> str:
+        if verdict is None:
+            return absent
+        if verdict.passed:
+            return "passed"
+        if is_runner_error(verdict.error):
+            return f"runner error: {normalize_error(verdict.error)}"
+        if is_tool_rejection(verdict.error):
+            return f"refused: {normalize_error(verdict.error)}"
+        return f"failed: {normalize_error(verdict.error)}"
+
+    panel = {
+        name: answer(
+            results.get(name, {}).get(fixture_name),
+            "not fed: its lane sat this batch out",
+        )
+        for name in clients
+    }
+    for lane in contrast_lanes:
+        panel[lane] = answer(
+            contrast_results.get(lane, {}).get(fixture_name),
+            "not fed: contrasts sat this batch out",
+        )
+    return panel
+
+
 def expected_rejection(fixture: Mapping[str, Any]) -> Optional[str]:
     """
     The rejection ``fixture`` expects, as it names it, or None when it
@@ -727,6 +766,7 @@ class CampaignState:
         known: bool = False,
         events: Sequence[str] = (),
         minimized: bool = False,
+        panel: Optional[Mapping[str, str]] = None,
     ) -> bool:
         """
         Count a per-client signature; return True when it is new.
@@ -754,6 +794,12 @@ class CampaignState:
                 "first_seen": time.time(),
                 "minimized": minimized,
             }
+            if panel is not None:
+                # Who else was fed the first hit, and what each answered:
+                # a client that never saw the case is named as such, so a
+                # finding on one client does not read as the others
+                # passing.
+                self.signatures[key]["panel"] = dict(panel)
             return True
         entry["count"] += 1
         per_segment = entry.setdefault("segments", {})
@@ -1077,6 +1123,25 @@ def render_report(
             f"{' '.join(necessary) if necessary else '-'} | "
             f"{entry.get('bundle') or '-'} |"
         )
+    paneled = [e for e in findings if e.get("panel")]
+    if paneled:
+        lines += [
+            "",
+            "## The panel on each finding's first case",
+            "",
+            "Every client the campaign runs, and what it answered on the "
+            "case that first raised the finding. A client marked not fed "
+            "never saw it, so its silence is not a pass.",
+            "",
+        ]
+        for entry in paneled:
+            lines.append(
+                f"- **{entry['client']}** (seed {entry['first_seed']}): "
+                + "; ".join(
+                    f"{name} {answer}"
+                    for name, answer in sorted(entry["panel"].items())
+                )
+            )
     known = sorted(
         (e for e in state.signatures.values() if e.get("known")),
         key=lambda e: -e["count"],
@@ -2729,6 +2794,13 @@ def run_campaign(
                             seed=_seed_of(fixture_name),
                             bundle=str(bundle),
                             events=found.events.get(fixture_name, []),
+                            panel=case_panel(
+                                fixture_name,
+                                list(runners),
+                                results,
+                                list(contrast_runners),
+                                {},
+                            ),
                         )
                         if new:
                             bundle.mkdir(parents=True, exist_ok=True)
@@ -2833,6 +2905,13 @@ def run_campaign(
                                 bundle=None if known else str(bundle),
                                 known=known,
                                 events=case_events.get(fixture_name, []),
+                                panel=case_panel(
+                                    fixture_name,
+                                    list(runners),
+                                    results,
+                                    list(contrast_runners),
+                                    contrast_results,
+                                ),
                             )
                             if new and not known:
                                 _write_bundle(
@@ -2933,6 +3012,13 @@ def run_campaign(
                             bundle=None if known else str(bundle),
                             known=known,
                             events=events,
+                            panel=case_panel(
+                                fixture_name,
+                                list(runners),
+                                results,
+                                list(contrast_runners),
+                                contrast_results,
+                            ),
                         )
                         if new and not known:
                             if shard_fixtures is None:
@@ -2984,6 +3070,13 @@ def run_campaign(
                             known=known,
                             events=events,
                             minimized=options.minimize and not known,
+                            panel=case_panel(
+                                fixture_name,
+                                list(runners),
+                                results,
+                                list(contrast_runners),
+                                contrast_results,
+                            ),
                         )
                         if new and not known:
                             if shard_fixtures is None:
