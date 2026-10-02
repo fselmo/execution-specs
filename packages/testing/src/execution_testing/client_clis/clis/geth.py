@@ -182,7 +182,9 @@ class GethExceptionMapper(ExceptionMapper):
         BlockException.INCORRECT_BLOCK_FORMAT: (
             r"invalid block access list:|"
             # A pre-Amsterdam header carrying the field.
-            r"invalid block access list hash: have [0-9a-f]+, expected nil"
+            r"invalid block access list hash: have [0-9a-f]+, expected nil|"
+            # A pre-Cancun header carrying the field.
+            r"invalid (excessBlobGas|blobGasUsed): have \d+, expected nil"
         ),
         BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
             r"block access list exceeds gas limit|"
