@@ -52,17 +52,12 @@ class ErigonExceptionMapper(ExceptionMapper):
         ),
         TransactionException.NONCE_MISMATCH_TOO_LOW: "nonce too low",
         TransactionException.NONCE_MISMATCH_TOO_HIGH: "nonce too high",
-        TransactionException.GAS_ALLOWANCE_EXCEEDED: "gas limit reached",
         TransactionException.INVALID_CHAINID: "invalid chain id for signer",
         TransactionException.INVALID_SIGNATURE_VRS: (
             "invalid transaction v, r, s values"
         ),
         TransactionException.TYPE_3_TX_PRE_FORK: (
             "blob txn is not supported by signer"
-        ),
-        TransactionException.TYPE_3_TX_INVALID_BLOB_VERSIONED_HASH: (
-            "invalid blob versioned hash, must start with "
-            "VERSIONED_HASH_VERSION_KZG"
         ),
         TransactionException.TYPE_3_TX_BLOB_COUNT_EXCEEDED: (
             "blob transaction has too many blobs"
@@ -75,9 +70,6 @@ class ErigonExceptionMapper(ExceptionMapper):
         ),
         TransactionException.TYPE_3_TX_CONTRACT_CREATION: (
             "wrong size for To: 0"
-        ),
-        TransactionException.TYPE_3_TX_MAX_BLOB_GAS_ALLOWANCE_EXCEEDED: (
-            "blobs/blobgas exceeds max"
         ),
         TransactionException.TYPE_4_EMPTY_AUTHORIZATION_LIST: (
             "SetCodeTransaction without authorizations is invalid"
@@ -147,6 +139,19 @@ class ErigonExceptionMapper(ExceptionMapper):
         ),
         BlockException.INVALID_GAS_USED_ABOVE_LIMIT: (
             r"invalid gasUsed: have \d+, gasLimit \d+"
+        ),
+        # Anchored so the block blob-gas budget's "blob gas limit reached"
+        # does not also read as the execution gas budget.
+        TransactionException.GAS_ALLOWANCE_EXCEEDED: (
+            r"(^|: )gas limit reached"
+        ),
+        TransactionException.TYPE_3_TX_MAX_BLOB_GAS_ALLOWANCE_EXCEEDED: (
+            r"blobs/blobgas exceeds max|blob gas limit reached"
+        ),
+        TransactionException.TYPE_3_TX_INVALID_BLOB_VERSIONED_HASH: (
+            r"invalid blob versioned hash, must start with "
+            r"VERSIONED_HASH_VERSION_KZG|"
+            r"blob txn versioned hash has invalid version byte"
         ),
     }
 
