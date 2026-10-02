@@ -165,12 +165,13 @@ ENGINE_RUNNERS = (
     "GethFixtureConsumer",
     "BesuFixtureConsumer",
     "EthrexFixtureConsumer",
+    "ErigonFixtureConsumer",
+    "RethFixtureConsumer",
 )
 """Runners with an Engine API path wired: `nethtest --engineTest`, geth's
-`evm enginetest` (go-ethereum#34650, carried as a patch) and besu's
-`evmtool engine-test --json-array`, and ethrex's `ethrex-enginetest`
-(carried as a patch). Each prints the same `name`, `pass`, `error` list its
-block runner does. Erigon has no engine runner."""
+and erigon's `evm enginetest`, besu's `evmtool engine-test --json-array`,
+ethrex's `ethrex-enginetest` and reth's `ef-test-runner enginetest`. Each
+prints the same `name`, `pass`, `error` list its block runner does."""
 
 
 class EngineRunnerUnsupportedError(ValueError):
@@ -409,8 +410,8 @@ class FixtureRunner:
         return verdicts
 
     def _run_reth(self, path: Path) -> Dict[str, Verdict]:
-        # `ef-test-runner blocktest` judges one fixture file with its series.
-        proc = self._run(["blocktest", "--json-array", *self.flags, str(path)])
+        command = "enginetest" if self.engine else "blocktest"
+        proc = self._run([command, "--json-array", *self.flags, str(path)])
         verdicts = parse_json_array(proc.stdout)
         if not verdicts and proc.returncode != 0:
             return self._all_failed(

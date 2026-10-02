@@ -305,9 +305,9 @@ def test_an_engine_campaign_refuses_a_client_with_no_engine_runner(
     monkeypatch: Any,
 ) -> None:
     """
-    Erigon has no engine runner: an engine-format campaign naming it stops
-    before it fills anything, rather than judging on import and calling it
-    engine.
+    The evmone blockchain-test runner has no engine path: an engine-format
+    campaign naming it stops before it fills anything, rather than judging
+    on import and calling it engine.
     """
     from ..fuzzer_bridge import runners as runners_module
     from ..fuzzer_bridge.runners import EngineRunnerUnsupportedError
@@ -315,11 +315,11 @@ def test_an_engine_campaign_refuses_a_client_with_no_engine_runner(
     monkeypatch.setattr(
         runners_module.FixtureConsumerTool,
         "from_binary_path",
-        lambda **_: type("ErigonFixtureConsumer", (), {})(),
+        lambda **_: type("EvmOneBlockchainFixtureConsumer", (), {})(),
     )
-    with pytest.raises(EngineRunnerUnsupportedError, match="erigon"):
-        FixtureRunner.detect("erigon", Path("/bin/evm"), engine=True)
-    assert FixtureRunner.detect("erigon", Path("/bin/evm")).engine is False
+    with pytest.raises(EngineRunnerUnsupportedError, match="evmone"):
+        FixtureRunner.detect("evmone", Path("/bin/evmone"), engine=True)
+    assert FixtureRunner.detect("evmone", Path("/bin/evmone")).engine is False
 
 
 def _judge(
@@ -629,23 +629,33 @@ RETH_BLOCKTEST = json.dumps(
 one fixture's expected post-state balance raised by a wei."""
 
 
-def test_reth_judges_a_batch_with_blocktest_json_array(
-    monkeypatch: Any, tmp_path: Path
+@pytest.mark.parametrize(
+    "engine,command",
+    [
+        pytest.param(False, "blocktest", id="block"),
+        pytest.param(True, "enginetest", id="engine"),
+    ],
+)
+def test_reth_judges_a_batch_with_json_array(
+    monkeypatch: Any, tmp_path: Path, engine: bool, command: str
 ) -> None:
     """The reth runner takes its subcommand, the flags, then the file."""
     runner = FixtureRunner(
-        "reth", Path("/bin/ef-test-runner"), "RethFixtureConsumer"
+        "reth",
+        Path("/bin/ef-test-runner"),
+        "RethFixtureConsumer",
+        engine=engine,
     )
     args, verdicts = _judge(monkeypatch, tmp_path, runner, RETH_BLOCKTEST)
-    assert args == ["blocktest", "--json-array", str(tmp_path / "batch.json")]
+    assert args == [command, "--json-array", str(tmp_path / "batch.json")]
     assert verdicts == {
         "seed_0": Verdict(True),
         "seed_1": Verdict(False, RETH_BALANCE_ERROR),
     }
 
 
-def test_reth_is_detected_and_has_no_engine_runner_yet(tmp_path: Path) -> None:
-    """The reth runner is named by `--help`; no engine runner yet."""
+def test_reth_is_detected_for_both_formats(tmp_path: Path) -> None:
+    """The reth runner is named by `--help`; one binary judges both formats."""
     binary = tmp_path / "ef-test-runner"
     binary.write_text(
         "#!/bin/sh\n"
@@ -653,6 +663,7 @@ def test_reth_is_detected_and_has_no_engine_runner_yet(tmp_path: Path) -> None:
         'echo "Usage: ef-test-runner [SUITE_PATH]"\n'
     )
     binary.chmod(0o755)
-    assert FixtureRunner.detect("reth", binary).kind == "RethFixtureConsumer"
-    with pytest.raises(ValueError, match="no engine runner"):
-        FixtureRunner.detect("reth", binary, engine=True)
+    for engine in (False, True):
+        runner = FixtureRunner.detect("reth", binary, engine=engine)
+        assert runner.kind == "RethFixtureConsumer"
+        assert runner.engine == engine
