@@ -683,6 +683,11 @@ campaigns:
       - {client: reth-main, reason: "test failed: Balance does not match"}
       - {client: besu-par-main, reason: "System call halted"}
       - {client: besu-par-main, reason: "System call did not execute to completion"}
+      # besu and reth do not implement TX_MAX_TOTAL_GAS_LIMIT (execution-specs
+      # c335bc4e9, #3582, 2026-09-21) at besu c5ef77bae4 and reth 078d026239;
+      # campaigns/reports/{besu,reth}-total-gas-cap.
+      - {client: besu-par-main, reason: "expected TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM"}
+      - {client: reth-main, reason: "expected TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM"}
     health:
       control: {client: besu-gate, reason: "Chain header mismatch"}
       # No fixed floor: the control's rate moves with the generator (4.56%
@@ -722,7 +727,11 @@ campaigns:
     # Shares the box with continuous-one; 3 fill workers.
     runner_concurrency: 4
     contrast_every: 5
-    known: []
+    known:
+      # besu does not implement TX_MAX_TOTAL_GAS_LIMIT (execution-specs
+      # c335bc4e9, #3582, 2026-09-21) at c5ef77bae4: digest 8641cd38;
+      # campaigns/reports/besu-total-gas-cap.
+      - {client: besu-eng-main, reason: "expected TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM"}
     health:
       # The control: every negative must come back INVALID from every
       # client. Each client's share is held to its segment's baseline by
