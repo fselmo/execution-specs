@@ -68,9 +68,10 @@ With `--bal-report`, one line per executed block on stderr: a single-line JSON o
 ```
 
 - `path` is `parallel` or `sequential`: the executor that actually ran the block.
-- `reason` is empty for `parallel`. For `sequential` it is the first condition, in the client's own gate order, that ruled parallel out. Shared values: `disabled` (the switch), `no-access-list` (none was delivered), `bad-access-list` (one was delivered but dropped because it did not match the header, §1), `pre-amsterdam`. A client-specific condition uses its own lowercase name, such as `tracer`, `witness` or `single-worker`.
+- `reason` is `bad-access-list` whenever the runner dropped the block's delivered list (§1), whatever path the block then took: on a `parallel` line, and under the switch, it takes precedence over every other reason. `path` (and `scheduler`, where present) still says what ran, and the switch is known from the run's own flags.
+- Otherwise `reason` is empty for `parallel`. For `sequential` it is the first condition, in the client's own gate order, that ruled parallel out. Shared values: `disabled` (the switch), `no-access-list` (none was delivered), `pre-amsterdam`. A client-specific condition uses its own lowercase name, such as `tracer`, `witness` or `single-worker`.
 - Genesis, and blocks rejected before execution, print nothing.
-- A client may add fields of its own; consumers ignore keys they do not know. Besu and erigon add `scheduler` (`bal` or `optimistic`), because without an access list they still run the block in parallel, which is neither BAL-driven nor sequential. For them a dropped list shows as `path` `parallel` with `scheduler` `optimistic`, not as a `bad-access-list` reason.
+- A client may add fields of its own; consumers ignore keys they do not know. Besu and erigon add `scheduler` (`bal` or `optimistic`), because without an access list they still run the block in parallel, which is neither BAL-driven nor sequential. For them a dropped list shows as `path` `parallel`, `scheduler` `optimistic` and `reason` `bad-access-list`.
 
 ## 4. Fallback report
 
