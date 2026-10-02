@@ -14,10 +14,13 @@ from execution_testing.test_types.block_access_list import (
     BalStorageChange,
     BalStorageSlot,
     BlockAccessList,
+    BlockAccessListExpectation,
 )
 from execution_testing.test_types.block_access_list.modifiers import (
     BalScalarField,
+    append_account,
     append_change,
+    append_empty_slot,
     append_storage,
     duplicate_account,
     duplicate_balance_change,
@@ -36,6 +39,7 @@ from execution_testing.test_types.block_access_list.modifiers import (
     remove_nonces,
     remove_storage_read,
     reorder_accounts,
+    reverse_accounts,
     reverse_balance_changes,
     reverse_code_changes,
     reverse_nonce_changes,
@@ -96,6 +100,146 @@ def test_duplicate_account_missing_raises() -> None:
     bal = BlockAccessList([BalAccountChange(address=ALICE, nonce_changes=[])])
     with pytest.raises(ValueError, match="not found"):
         duplicate_account(CONTRACT)(bal)
+
+
+def modified(
+    bal: BlockAccessList,
+    *modifiers: Callable[[BlockAccessList], BlockAccessList],
+) -> BlockAccessList:
+    """Apply modifiers the way a test's `modify` call does."""
+    return (
+        BlockAccessListExpectation()
+        .modify(*modifiers)
+        .modify_if_invalid_test(bal)
+    )
+
+
+@pytest.mark.parametrize(
+    "new_address,expected_order",
+    [
+        pytest.param(Address(0x1), [0x1, 0xA, 0xC], id="start"),
+        pytest.param(Address(0xB), [0xA, 0xB, 0xC], id="middle"),
+        pytest.param(Address(0xF), [0xA, 0xC, 0xF], id="end"),
+    ],
+)
+def test_append_account_keeps_address_order(
+    sample_bal: BlockAccessList,
+    new_address: Address,
+    expected_order: list[int],
+) -> None:
+    """Put the new account where address order puts it."""
+    result = modified(
+        sample_bal, append_account(BalAccountChange(address=new_address))
+    )
+    assert [a.address for a in result.root] == [
+        Address(a) for a in expected_order
+    ]
+
+
+def test_append_account_existing_address_raises(
+    sample_bal: BlockAccessList,
+) -> None:
+    """Raise rather than silently add a duplicate account."""
+    with pytest.raises(ValueError, match="already in"):
+        append_account(BalAccountChange(address=ALICE))(sample_bal)
+
+
+@pytest.mark.parametrize(
+    "change,field",
+    [
+        pytest.param(
+            BalNonceChange(block_access_index=0, post_nonce=0),
+            "nonce_changes",
+            id="nonce",
+        ),
+        pytest.param(
+            BalBalanceChange(block_access_index=0, post_balance=0),
+            "balance_changes",
+            id="balance",
+        ),
+        pytest.param(
+            BalCodeChange(block_access_index=0, new_code=b""),
+            "code_changes",
+            id="code",
+        ),
+    ],
+)
+def test_append_change_keeps_index_order(
+    sample_bal: BlockAccessList,
+    change: BalNonceChange | BalBalanceChange | BalCodeChange,
+    field: str,
+) -> None:
+    """Put the change before ALICE's existing change at index 1."""
+    result = modified(sample_bal, append_change(ALICE, change))
+    alice = [a for a in result.root if a.address == ALICE][0]
+    indices = [c.block_access_index for c in getattr(alice, field)]
+    assert indices == [0, 1]
+
+
+@pytest.mark.parametrize(
+    "modifier,listed,expected",
+    [
+        pytest.param(
+            append_storage(
+                CONTRACT,
+                slot=0,
+                change=BalStorageChange(block_access_index=1, post_value=1),
+            ),
+            lambda account: [s.slot for s in account.storage_changes],
+            [0, 1],
+            id="new_slot_by_key",
+        ),
+        pytest.param(
+            append_storage(
+                CONTRACT,
+                slot=1,
+                change=BalStorageChange(block_access_index=0, post_value=1),
+            ),
+            lambda account: [
+                c.block_access_index
+                for c in account.storage_changes[0].slot_changes
+            ],
+            [0, 1],
+            id="slot_change_by_index",
+        ),
+        pytest.param(
+            append_storage(CONTRACT, slot=3, read=True),
+            lambda account: list(account.storage_reads),
+            [2, 3, 5],
+            id="read_by_key",
+        ),
+    ],
+)
+def test_append_storage_keeps_order(
+    sample_bal: BlockAccessList,
+    modifier: Callable[[BlockAccessList], BlockAccessList],
+    listed: Callable[[BalAccountChange], list[int]],
+    expected: list[int],
+) -> None:
+    """Put CONTRACT's new slot, slot change or read in sort order."""
+    result = modified(sample_bal, modifier)
+    contract = [a for a in result.root if a.address == CONTRACT][0]
+    assert listed(contract) == expected
+
+
+def test_append_empty_slot_keeps_slot_order(
+    sample_bal: BlockAccessList,
+) -> None:
+    """Put the empty slot before CONTRACT's existing slot 1."""
+    result = modified(sample_bal, append_empty_slot(CONTRACT, slot=0))
+    contract = [a for a in result.root if a.address == CONTRACT][0]
+    assert [s.slot for s in contract.storage_changes] == [0, 1]
+    assert contract.storage_changes[0].slot_changes == []
+
+
+def test_order_defect_survives_the_sort(sample_bal: BlockAccessList) -> None:
+    """Apply an order defect after the sort, whatever its position."""
+    result = modified(
+        sample_bal,
+        reverse_accounts(),
+        append_account(BalAccountChange(address=Address(0xB))),
+    )
+    assert [a.address for a in result.root] == [CONTRACT, Address(0xB), ALICE]
 
 
 def test_duplicate_nonce_change(sample_bal: BlockAccessList) -> None:
