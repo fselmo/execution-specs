@@ -1,0 +1,74 @@
+# An example fuzz.yaml. Copy it to fuzz.yaml (gitignored) and edit; the
+# server's live file is untracked. Fields and defaults are in
+# packages/testing/src/execution_testing/cli/fuzzer_bridge/config.py.
+clients:
+  # A client is a binary on disk (`path`) or a source build (`build`),
+  # never both.
+  - name: geth-par
+    build:
+      # recipe: a build in KNOWN_BUILDS (geth, erigon, besu, nethermind,
+      # reth, ethrex, ethrex-engine, evmone, evmone-t8n); it fills the
+      # fields left out. Defaults to the client's name.
+      recipe: geth
+      # repo: `owner/name` on GitHub, or a git URL. Pin `ref` by full SHA:
+      # a branch name makes a rerun a different panel.
+      repo: ethereum/go-ethereum
+      ref: <full sha>
+      # patches: a `git format-patch` series applied with `git am` before
+      # the build, relative to this file. A hunk outside patch_paths (the
+      # recipe's by default) fails the build: a series may change the
+      # runner, never the client.
+      patches: []
+    # Extra arguments on every run of the client's fixture runner.
+    runner_flags: [--bal-report]
+    # A second run of the same binary on every shard; a fixture the two
+    # runs judge differently is a contrast-mismatch. contrast_env does the
+    # same for knobs that are not argv, and `contrasts` names more runs.
+    contrast_flags: [--bal.sequential, --bal-report]
+    # What the import runner does with a delivered access list that does
+    # not match the header: drops | rejects | unknown. On a `drops` lane,
+    # rejecting a delivered-list case is a finding.
+    delivered_bal: unknown
+    # Environment for the build and every run, recorded in the manifest:
+    # JAVA_HOME for besu, DOTNET_ROOT for nethermind, LIBCLANG_PATH for reth.
+    env: {}
+  # A transition tool that fills cases instead of EELS (a campaign's
+  # `producer`).
+  - name: evmone-producer
+    build: {recipe: evmone-t8n, ref: <full sha>}
+
+campaigns:
+  continuous:
+    fork: Amsterdam
+    clients: [geth-par]
+    producer: evmone-producer
+    seed_start: 100000000
+    count: 100
+    # fixture_format: blockchain_test (import lane) or
+    # blockchain_test_engine (newPayload lane, where negatives are drawn).
+    fixture_format: blockchain_test
+    runner_concurrency: 4
+    # Contrasts, the health control and EELS's import of every fixture run
+    # on one batch in this many.
+    contrast_every: 5
+    control_every: 5
+    self_check_every: 25
+    # Batch files kept after judging, in GiB; unset keeps all the keep
+    # rule keeps.
+    max_kept_gb: 50
+    # Findings already understood: counted, never bundled again. `reason`
+    # is a substring of the signature's reason.
+    known:
+      - {client: geth-par, reason: "expected TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM"}
+    # Bands checked after every batch; one out of band pauses the run.
+    # The alert webhook comes from FUZZ_ALERT_URL, never this file.
+    health:
+      # control: a client whose known bug fires at a steady rate. Each
+      # segment calibrates its baseline and holds the rate to it both ways.
+      control: {client: geth-par, reason: "Chain header mismatch"}
+      control_band: [0.0, 0.15]
+      # Lanes whose primary run is the parallel path; their decided
+      # fraction is held to the segment's baseline.
+      parallel_lanes: [geth-par]
+      # negative_control: true holds each client's INVALID share on
+      # negatives; it needs fixture_format blockchain_test_engine.
