@@ -103,7 +103,7 @@ Each result object carries a `rejections` array, empty when nothing was rejected
 
 - `index` is the block's position in the fixture's `blocks` (block-test) or the payload's position in `engineNewPayloads` (engine-test), from 0.
 - `hash` is the rejected block's hash when the client computed one, else omitted.
-- `error` is the client's own message, untranslated. For a payload rejected through a JSON-RPC error instead of an `INVALID` status, it is `"<code>: <message>"`.
+- `error` is the client's own message, untranslated. For a payload rejected through a JSON-RPC error instead of an `INVALID` status, it is `"<code>: <message>"`, followed by `": <data>"` when the error carries a data string (geth, for one, puts the specific cause of `-32602` there).
 - A block that fails to decode is reported with the decoder's message.
 - `pass` keeps its meaning (the fixture's expected outcome, valid or rejected, was met). It does not depend on the reason.
 
