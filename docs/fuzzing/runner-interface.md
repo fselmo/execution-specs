@@ -93,7 +93,16 @@ A block that falls back prints exactly two lines: its `balExecution` line with `
 
 When a fixture names an expected exception (`expectException` on a block, or the payload's `validationError`), the runner checks that the client rejected the block for that reason, not only that it rejected it. The match uses the client's own mapping from its errors to the fixture's exception names, the one `consume` uses for that client, and a fixture may list several names separated by `|`, any of which matches. A block rejected for a different reason fails the fixture, with both the expected and the actual reason in its result. A client error that maps to no name fails too, so the mapping stays complete. One exception: a block that fails to decode at all counts as rejected without a reason check, as nethermind, geth, besu's reference tests and hive's consume-rlp already treat it, because no client mapping (EEST's included) names decoder errors.
 
-Where a client's own CI pins fixtures that would fail the check for fixture reasons, the check may ship behind an opt-in flag, off by default, until EEST fixes those fixtures and the pin moves. Today that applies to nethermind's block-test path: its CI pins `tests@v21.0.0`, where 7 fixtures name the engine-path reason and 43 have two defects but one expected name.
+Where a client's own CI pins fixtures that would fail the check for fixture reasons, the check ships behind an opt-in flag, off by default, until EEST fixes those fixtures or mappings and the pin moves. The flag is `--check-exceptions`, spelled the same in every client that has it, on whichever runner it gates.
+
+| Client | Block-test | Engine-test | Why |
+|---|---|---|---|
+| geth | on | on | nothing in geth's CI runs `cmd/evm` with fixtures that would fail |
+| besu | on | on | besu's `consumeRlpTestsGlamsterdam` passes except one fixture the EEST pre-fork header PR fixes |
+| reth | on | on | reth's CI runs `ef-test-runner <suite>`, which keeps the check off |
+| ethrex | on (the `ethrex-blocktest` binary) | on | ethrex's cargo test harness only warns, and its CI uses that |
+| nethermind | behind `--check-exceptions` | on | its CI pins `tests@v21.0.0`: 7 fixtures name the engine-path reason and 43 have two defects (EEST PRs pending) |
+| erigon | behind `--check-exceptions` | behind `--check-exceptions` | its CI, with a zero-failure budget, would see 302 failures on `tests@v21.0.0` from EEST's incomplete erigon mapper (EEST PR pending) |
 
 ## Output and wiring
 
