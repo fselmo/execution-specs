@@ -501,11 +501,16 @@ class NethermindExceptionMapper(ExceptionMapper):
             r"|could not be parsed as a block: "
             r"Error decoding block access list:"
             r"|Error decoding block access list:"
+            # Block import reports the BAL decoder's message bare.
+            r"|(Balance|Nonce|Code|Storage) changes were in incorrect order\."
+            r"|Storage reads were in incorrect order\."
+            r"|Empty storage_changes for slot;"
         ),
         BlockException.INCORRECT_BLOCK_FORMAT: (
             r"could not be parsed as a block: "
             r"Error decoding block access list:"
             r"|Error decoding block access list:"
+            r"|Account changes were in incorrect order\."
         ),
         TransactionException.GAS_ALLOWANCE_EXCEEDED: (
             r"TxGasLimitCapExceeded:"
