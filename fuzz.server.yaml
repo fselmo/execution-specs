@@ -377,27 +377,23 @@ clients:
     build: {recipe: besu, repo: besu-eth/besu, ref: cf89071f9d6dddf7997f35e09929fe059f82ecd1}
     env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
           PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
+  # nethermind on LCC2's runner-interface fork (fselmo/nethermind
+  # lcc2/bal-runner-interface-v2, 2dd348b0aa): the runner attaches the
+  # delivered list, takes --parallelExecution, and under --bal-report prints
+  # the interface's decision lines and a parallel failure's sequential retry.
+  # No series.
   - name: nethermind-par-main
-    # delivered-list negatives: its attach patch reads only a block's top-level list, not rlp_decoded's.
+    # delivered-list negatives: informational; `drops` once LCC2's import-path
+    # fix reaches the pin and is proved on the 13 kinds.
     delivered_bal: unknown
     build:
       recipe: nethermind
-      repo: NethermindEth/nethermind
-      ref: 5246d0c79940962a277c06268e8fa32ee0dbfb6a
-      # nethermind-main: the retry catch's body moved on this head.
-      patches:
-        - patches/nethermind-main/0001-Ethereum.Test.Base-attach-a-fixture-s-block-access-l.patch
-        - patches/nethermind-main/0002-Consensus-print-the-sequential-retry-of-a-parallel-B.patch
-        - patches/nethermind-main/0003-Consensus-print-the-parallel-execution-decision-for-.patch
-      patch_paths:
-        - src/Nethermind/Nethermind.Test.Runner/
-        - src/Nethermind/Ethereum.Test.Base/
-        - src/Nethermind/Nethermind.Consensus/Processing/BranchProcessor.cs
-        - src/Nethermind/Nethermind.Consensus/Processing/BlockAccessListManager.cs
+      repo: fselmo/nethermind
+      ref: 2dd348b0aa1aa17a722d6d417154709240be666a
     env: {DOTNET_ROOT: /home/fselmo/.dotnet,
           PATH: "/home/fselmo/.dotnet:/usr/local/go/bin:/usr/bin:/bin"}
-    runner_flags: [--parallelExecution, "true"]
-    contrast_flags: [--parallelExecution, "false"]
+    runner_flags: [--parallelExecution, "true", --bal-report]
+    contrast_flags: [--parallelExecution, "false", --bal-report]
   - name: nethermind-main
     build: {recipe: nethermind, repo: NethermindEth/nethermind, ref: 5246d0c79940962a277c06268e8fa32ee0dbfb6a}
     env: {DOTNET_ROOT: /home/fselmo/.dotnet,
