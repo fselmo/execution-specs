@@ -388,7 +388,11 @@ def triage(
     finding that does not reproduce on it has nothing to narrow, and
     raises.
     """
-    from .campaign import per_client_signatures, signature_id
+    from .campaign import (
+        expected_rejection,
+        per_client_signatures,
+        signature_id,
+    )
 
     seed = tree.seed
     base_case, tree = record_case(fork, seed, plan=Plan(values=tree.values()))
@@ -431,7 +435,12 @@ def triage(
     def signatures(name: str) -> List[str]:
         panel = {c: v[name] for c, v in verdicts.items() if name in v}
         failing = {c: v for c, v in panel.items() if not v.passed}
-        return [signature_id(s) for s in per_client_signatures(failing)]
+        return [
+            signature_id(s)
+            for s in per_client_signatures(
+                failing, expected_rejection(fixtures[name])
+            )
+        ]
 
     if target not in signatures("base"):
         raise FindingNotReproducedError(
@@ -461,7 +470,9 @@ def triage(
         }
         if others:
             outcomes[label].others += 1
-        for client, reason in per_client_signatures(others):
+        for client, reason in per_client_signatures(
+            others, expected_rejection(fixtures[name])
+        ):
             failures.append(
                 PanelFailure(
                     client,

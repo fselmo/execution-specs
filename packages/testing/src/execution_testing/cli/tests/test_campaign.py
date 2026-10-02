@@ -47,6 +47,37 @@ def test_per_client_signatures_one_row_per_failing_client() -> None:
     ]
 
 
+def test_a_rejection_case_signature_carries_what_was_expected() -> None:
+    """
+    Two clients giving the same generic message for blocks they should
+    have rejected for different reasons are two signatures, and a valid
+    case's signature carries no expectation.
+    """
+    from ..fuzzer_bridge.campaign import expected_rejection
+
+    accepted = {"besu": Verdict(False, "Block should have been invalid")}
+    over_cap = per_client_signatures(
+        accepted, "TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM"
+    )
+    over_floor = per_client_signatures(
+        accepted, "TransactionException.INTRINSIC_GAS_TOO_LOW"
+    )
+    assert over_cap != over_floor
+    assert over_cap[0][1].startswith(
+        "expected TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM: "
+    )
+    assert per_client_signatures(accepted) == [
+        ("besu", "Block should have been invalid")
+    ]
+    blockchain = {
+        "blocks": [{}, {"expectException": "TransactionException.X"}]
+    }
+    engine = {"engineNewPayloads": [{"validationError": "BlockException.Y"}]}
+    assert expected_rejection(blockchain) == "TransactionException.X"
+    assert expected_rejection(engine) == "BlockException.Y"
+    assert expected_rejection({"blocks": [{}]}) is None
+
+
 def test_classify_agreed_divergence_and_all_fail() -> None:
     """All-pass is agreement, all-fail is suspect, otherwise a divergence."""
     ok = Verdict(passed=True, error="")

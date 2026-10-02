@@ -122,6 +122,7 @@ def normalize_error(error: str) -> str:
 
 def per_client_signatures(
     verdicts: Mapping[str, Verdict],
+    expected: Optional[str] = None,
 ) -> List[Signature]:
     """
     One signature per failing client, each with *its own* reason.
@@ -130,12 +131,35 @@ def per_client_signatures(
     that happen to fire on the same case (common when both touch the block
     access list) would land under one ``besu+erigon`` row wearing one
     client's error text. Per-client keying keeps each bug to its own row.
+
+    For a case expecting a rejection, ``expected`` (see
+    `expected_rejection`) leads the reason. A runner's message for a
+    block it imported but should have rejected is often generic, so
+    without it a new reason for accepting a block merges into an older
+    finding: five clients accepting a transaction above the total gas
+    cap could read as one.
     """
+    prefix = f"expected {expected}: " if expected else ""
     return [
-        (name, normalize_error(v.error))
+        (name, prefix + normalize_error(v.error))
         for name, v in sorted(verdicts.items())
         if not v.passed
     ]
+
+
+def expected_rejection(fixture: Mapping[str, Any]) -> Optional[str]:
+    """
+    The rejection ``fixture`` expects, as it names it, or None when it
+    expects every block valid: a blockchain test's `expectException`, an
+    engine test's `validationError`.
+    """
+    for block in fixture.get("blocks", []):
+        if block.get("expectException"):
+            return str(block["expectException"])
+    for payload in fixture.get("engineNewPayloads", []):
+        if payload.get("validationError"):
+            return str(payload["validationError"])
+    return None
 
 
 def is_known(signature: Signature, known: Sequence[KnownSignature]) -> bool:
@@ -295,7 +319,7 @@ def signature_id(signature: Signature) -> str:
     return f"{client}--{slug or 'error'}-{digest}"
 
 
-SIG_VERSION = 2
+SIG_VERSION = 3
 """Bumped when the signature scheme changes; a stale state recounts."""
 
 
@@ -2943,7 +2967,10 @@ def run_campaign(
                             batch_failures[name] += 1
                     if kind != "divergence":
                         continue
-                    for signature in per_client_signatures(verdicts):
+                    for signature in per_client_signatures(
+                        verdicts,
+                        expected_rejection(batch_fixtures[fixture_name]),
+                    ):
                         known = is_known(signature, options.known)
                         if not known:
                             kept_for.add(f"finding:{signature_id(signature)}")

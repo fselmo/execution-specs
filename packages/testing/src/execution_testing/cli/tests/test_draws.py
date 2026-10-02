@@ -156,7 +156,11 @@ def test_triage_narrows_a_finding_to_the_label_it_needs(
     transaction's value keeps it every time.
     """
     seed = _seed_with(**NEAR_FULL_MARGIN_ONE)
-    target = signature_id(("geth", "boom"))
+    # The near-full block one over expects a rejection, so the signature
+    # leads with it.
+    target = signature_id(
+        ("geth", "expected TransactionException.GAS_ALLOWANCE_EXCEEDED: boom")
+    )
 
     def judge(path: Path, names: List[str]) -> Dict[str, Any]:
         import json
@@ -351,7 +355,11 @@ def test_triage_keeps_the_whole_panel_and_other_clients_failures(
     from ..fuzzer_bridge.focus import queue_failures
 
     seed = _seed_with(**NEAR_FULL_MARGIN_ONE)
-    target = signature_id(("geth", "boom"))
+    # The near-full block one over expects a rejection, so the signature
+    # leads with it.
+    target = signature_id(
+        ("geth", "expected TransactionException.GAS_ALLOWANCE_EXCEEDED: boom")
+    )
 
     def judge(path: Path, names: List[str]) -> Dict[str, Any]:
         fixtures = json.loads(path.read_text())
