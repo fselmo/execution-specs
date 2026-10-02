@@ -43,7 +43,17 @@ fix:
 
 # Run all static checks (spellcheck, lint, format, mypy, ...)
 [group('static analysis'), parallel]
-static: typecheck lint-spec spellcheck deadcode lint-actions lock-check format-check lint
+static: typecheck lint-spec spellcheck deadcode lint-actions lock-check format-check lint no-run-output
+
+# Keep campaign and held-out run output out of git
+[group('static analysis')]
+no-run-output:
+    #!/usr/bin/env bash
+    if git ls-files | grep -E '(^|/)(by-version|crashes|summaries)/'; then
+        echo ""
+        echo "Run output is tracked. Archive it on the server instead."
+        exit 1
+    fi
 
 # Ensure the spec package never imports the testing package
 [group('static analysis')]
