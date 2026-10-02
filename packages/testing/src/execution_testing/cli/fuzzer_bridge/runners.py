@@ -420,8 +420,8 @@ class FixtureRunner:
         return verdicts
 
     def _run_ethrex(self, path: Path) -> Dict[str, Verdict]:
-        # One binary per format, so no subcommand: the file and the flags.
-        proc = self._run([*self.flags, str(path)])
+        # One binary per format, so no subcommand: the flags and the file.
+        proc = self._run([*self.flags, "--json", "--path", str(path)])
         verdicts = parse_json_array(proc.stdout)
         if not verdicts and proc.returncode != 0:
             return self._all_failed(

@@ -497,11 +497,8 @@ def test_nethtest_judges_generated_engine_fixtures() -> None:
 
 
 ETHREX_BAL_ERROR = (
-    "block 0xa2747d8a4c7e2c46733c7dd75341cdd6e5f66dcb8d9dd7530ef49287e5894789 "
-    'unexpectedly failed: EvmError(Custom("BAL validation failed for tx 4: '
-    "account 0xaf68e84d67eff2fd6f508394ff060fdcbca7845b balance mismatch at "
-    "index 5: BAL=100017302975090648969, exec=100017302975090648968 "
-    '(diff=+1 wei)"))'
+    "Expected transaction execution to fail in test: seed_1 with error: "
+    "Some([Other])"
 )
 ETHREX_BLOCKTEST = json.dumps(
     [
@@ -515,14 +512,14 @@ ETHREX_BLOCKTEST = json.dumps(
     ],
     indent=2,
 )
-"""`ethrex-blocktest` on a v36 batch with one delivered access list
-corrupted by a wei: the series feeds the list to the parallel path, which
-rejects it."""
+"""`ethrex-blocktest --json` on a block expected rejected for a list
+changed by a wei and committed to, which it imports."""
 
 ETHREX_PAYLOAD_ERROR = (
-    "wrong_status[0]  expected=VALID  got=INVALID  validationError=Failed "
-    "to RLP decode BAL: blockAccessList is not a valid RLP encoding of the "
-    "block access list"
+    "wrong_status[0]  expected=VALID  got=INVALID  validationError=Invalid "
+    "block hash. Expected 0x4fa3cca22412fb1fe572a88ffee476e2191e982374ed91c8"
+    "00b327abdbff246a, got 0x63ebc003ca696a5696088b447039d1572fc09a9edba4f186"
+    "acc42711f5d19c31"
 )
 ETHREX_ENGINETEST = json.dumps(
     [
@@ -536,8 +533,8 @@ ETHREX_ENGINETEST = json.dumps(
     ],
     indent=2,
 )
-"""`ethrex-enginetest` on a v36 engine batch with one payload's access list
-cut short by a byte."""
+"""`ethrex-enginetest --json` on a payload whose `gasUsed` was edited
+after the fill."""
 
 
 @pytest.mark.parametrize(
@@ -549,7 +546,7 @@ cut short by a byte."""
         ),
     ],
 )
-def test_ethrex_runners_take_flags_then_the_file(
+def test_ethrex_runners_take_flags_then_the_path(
     monkeypatch: Any, tmp_path: Path, engine: bool, stdout: str, error: str
 ) -> None:
     """Each ethrex runner judges one format, so it takes no subcommand."""
@@ -557,11 +554,16 @@ def test_ethrex_runners_take_flags_then_the_file(
         "ethrex",
         Path("/bin/ethrex"),
         "EthrexFixtureConsumer",
-        flags=("--bal.sequential",),
+        flags=("--no-bal-parallel-exec",),
         engine=engine,
     )
     args, verdicts = _judge(monkeypatch, tmp_path, runner, stdout)
-    assert args == ["--bal.sequential", str(tmp_path / "batch.json")]
+    assert args == [
+        "--no-bal-parallel-exec",
+        "--json",
+        "--path",
+        str(tmp_path / "batch.json"),
+    ]
     assert verdicts == {
         "seed_0": Verdict(True),
         "seed_1": Verdict(False, error),

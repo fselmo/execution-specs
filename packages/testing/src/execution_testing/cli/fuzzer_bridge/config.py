@@ -111,36 +111,29 @@ KNOWN_BUILDS: Dict[str, BuildSource] = {
         binary="ef-test-runner",
         patch_paths=("testing/",),
     ),
-    # ethrex's runners come from its series (patches/ethrex-main), one binary
-    # per fixture format, built in the `tooling` workspace. `release-fast`
-    # is ethrex's own profile for test runners: release optimisation without
-    # thin-LTO. The series' decision print sits at levm's parallel/sequential
-    # dispatch, admitted by name.
+    # ethrex's runners (tooling/ef_tests/runners), one binary per fixture
+    # format, built in the `tooling` workspace. `release-fast` is ethrex's
+    # own profile for test runners: release optimisation without thin-LTO.
+    # Copied under an `ethrex-` name, which is how detection finds them.
     "ethrex": BuildSource(
         repo="lambdaclass/ethrex",
         command=(
             "cd tooling && cargo build --profile release-fast "
-            "-p ef_tests-blockchain --bin ethrex-blocktest "
-            "&& cp target/release-fast/ethrex-blocktest {out}"
+            "-p ef_tests-runners --bin blocktest "
+            "&& cp target/release-fast/blocktest {out}"
         ),
         binary="ethrex-blocktest",
-        patch_paths=(
-            "tooling/ef_tests/",
-            "crates/vm/backends/levm/mod.rs",
-        ),
+        patch_paths=("tooling/ef_tests/",),
     ),
     "ethrex-engine": BuildSource(
         repo="lambdaclass/ethrex",
         command=(
             "cd tooling && cargo build --profile release-fast "
-            "-p ef_tests-engine --bin ethrex-enginetest "
-            "&& cp target/release-fast/ethrex-enginetest {out}"
+            "-p ef_tests-runners --bin enginetest "
+            "&& cp target/release-fast/enginetest {out}"
         ),
         binary="ethrex-enginetest",
-        patch_paths=(
-            "tooling/ef_tests/",
-            "crates/vm/backends/levm/mod.rs",
-        ),
+        patch_paths=("tooling/ef_tests/",),
     ),
     "evmone": BuildSource(
         repo="ethereum/evmone",
