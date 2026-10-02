@@ -124,7 +124,12 @@ def test_invalid_pre_fork_block_with_bal_hash_field(
                 timestamp=FORK_TIMESTAMP - 1,
                 txs=[tx],
                 rlp_modifier=Header(block_access_list_hash=Hash(0)),
-                exception=BlockException.INVALID_BLOCK_HASH,
+                # The engine path fails on the hash; RLP import fails on
+                # the header's format.
+                exception=[
+                    BlockException.INVALID_BLOCK_HASH,
+                    BlockException.INCORRECT_BLOCK_FORMAT,
+                ],
             ),
         ],
     )
