@@ -102,16 +102,17 @@ class ErigonExceptionMapper(ExceptionMapper):
         BlockException.RLP_BLOCK_LIMIT_EXCEEDED: "block exceeds max rlp size",
         BlockException.INVALID_BASEFEE_PER_GAS: "invalid baseFee: have",
         BlockException.INVALID_BLOCK_TIMESTAMP_OLDER_THAN_PARENT: (
-            "invalid block: timestamp older than parent"
+            "timestamp older than parent"
         ),
-        BlockException.INVALID_BLOCK_NUMBER: "invalid block number",
-        BlockException.EXTRA_DATA_TOO_BIG: (
-            "invalid block: extra-data longer than 32 bytes"
-        ),
+        BlockException.EXTRA_DATA_TOO_BIG: "extra-data longer than 32 bytes",
         BlockException.INVALID_GASLIMIT: "invalid gas limit",
-        BlockException.INVALID_STATE_ROOT: "invalid block: wrong trie root",
         BlockException.INVALID_RECEIPTS_ROOT: "receiptHash mismatch",
         BlockException.INVALID_LOG_BLOOM: "invalid bloom",
+        BlockException.INVALID_TRANSACTIONS_ROOT: (
+            "body has invalid transaction hash"
+        ),
+        BlockException.INVALID_UNCLES_HASH: "body has invalid uncle hash",
+        BlockException.RLP_WITHDRAWALS_NOT_READ: "body is missing withdrawals",
         BlockException.INVALID_WITHDRAWALS_ROOT: (
             "body has invalid withdrawals hash"
         ),
@@ -164,6 +165,34 @@ class ErigonExceptionMapper(ExceptionMapper):
         # chain id; the word boundary keeps out "unprotected txn".
         TransactionException.INVALID_CHAINID: (
             r"\bprotected txn is not supported by signer"
+        ),
+        BlockException.INVALID_STATE_ROOT: (
+            r"invalid block: wrong trie root|invalid state root hash"
+        ),
+        # A header claiming height 0 skips the parent lookup on import and is
+        # only turned away when it would become the head.
+        BlockException.INVALID_BLOCK_NUMBER: (
+            r"invalid block number|"
+            r"forkchoice head is a non-genesis block at height 0"
+        ),
+        BlockException.GASLIMIT_TOO_BIG: (
+            r"invalid gasLimit: have \d+, max \d+"
+        ),
+        BlockException.UNKNOWN_PARENT: (
+            r"parent's total difficulty not found with hash [0-9a-f]+ "
+        ),
+        BlockException.UNKNOWN_PARENT_ZERO: (
+            r"parent's total difficulty not found with hash 0{64} "
+        ),
+        # After the merge a body/header uncle hash mismatch can only mean
+        # uncles where none are allowed.
+        BlockException.IMPORT_IMPOSSIBLE_UNCLES_OVER_PARIS: (
+            r"non empty uncle hash|body has invalid uncle hash"
+        ),
+        # The proof-of-stake check; the proof-of-work formula check reads
+        # "invalid difficulty: have ..., want ...".
+        BlockException.IMPORT_IMPOSSIBLE_DIFFICULTY_OVER_PARIS: (
+            r"invalid difficulty($|[^:])"
         ),
     }
 
