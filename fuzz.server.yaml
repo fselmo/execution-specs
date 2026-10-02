@@ -236,13 +236,9 @@ clients:
   # --bal.sequential as the contrast, and the FUZZ-PAR-DECISION print.
   # ethrex has no sequential fallback, so there is no masking signal.
   - name: ethrex-par-main
-    # delivered-list negatives: ignored on the v1 series (8f0d260d1097). Of the
-    # 13 bal and form kinds it rejects 13 in parallel and 0 under
-    # --bal.sequential, which does not check a supplied list (fixed on
-    # LCC2's 0af31ed840). Stock ethrex imports all 13; all 13 clean
-    # versions pass both ways. Prove again at the fork swap.
-    # As valid-block cases (2026-10-01): its parallel path uses the delivered list and rejects all 13.
-    delivered_bal: rejects
+    # delivered-list cases: unknown until proven on its swapped build; the
+    # v1 series' rejections are reverted in the fork.
+    delivered_bal: unknown
     build:
       recipe: ethrex
       repo: lambdaclass/ethrex
@@ -290,11 +286,9 @@ clients:
   - name: geth-main
     build: {recipe: geth, repo: ethereum/go-ethereum, ref: 920c07774c65ebb3023536f85df642c44478b540}
   - name: erigon-par-main
-    # delivered-list negatives: ignored, measured. It imports all 13 bal and
-    # form kinds on its primary, hints-off and serial lanes, and passes
-    # all 13 clean versions on each.
-    # As valid-block cases (2026-10-01): it imports all 13, never using the delivered list, so it is judged as one that drops it.
-    delivered_bal: drops
+    # delivered-list cases: unknown until proven on its swapped build; the
+    # imports measured before the swap ignored the list rather than dropping it.
+    delivered_bal: unknown
     build:
       recipe: erigon
       repo: erigontech/erigon
@@ -378,18 +372,18 @@ clients:
     env: {JAVA_HOME: /home/fselmo/jdk/jdk-25.0.4.1+1,
           PATH: "/home/fselmo/jdk/jdk-25.0.4.1+1/bin:/usr/local/go/bin:/usr/bin:/bin"}
   # nethermind on LCC2's runner-interface fork (fselmo/nethermind
-  # lcc2/bal-runner-interface-v2, 2dd348b0aa): the runner attaches the
+  # lcc2/bal-runner-interface-v2, 79d3cfef3c): the runner attaches the
   # delivered list, takes --parallelExecution, and under --bal-report prints
   # the interface's decision lines and a parallel failure's sequential retry.
   # No series.
   - name: nethermind-par-main
-    # delivered-list negatives: informational; `drops` once LCC2's import-path
-    # fix reaches the pin and is proved on the 13 kinds.
-    delivered_bal: unknown
+    # delivered-list cases: drops. On 79d3cfef3c all 13 kinds import in both
+    # modes with a bad-access-list decision line (2026-10-02).
+    delivered_bal: drops
     build:
       recipe: nethermind
       repo: fselmo/nethermind
-      ref: 2dd348b0aa1aa17a722d6d417154709240be666a
+      ref: 79d3cfef3c98f58b9a2d3890411a0f69f3184091
     env: {DOTNET_ROOT: /home/fselmo/.dotnet,
           PATH: "/home/fselmo/.dotnet:/usr/local/go/bin:/usr/bin:/bin"}
     runner_flags: [--parallelExecution, "true", --bal-report]
