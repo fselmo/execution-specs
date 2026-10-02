@@ -856,7 +856,7 @@ def render_report(
         )
     if state.counts.get("routed-to-eels"):
         lines.append(
-            f"| filled by EELS, the producer cannot | "
+            f"| filled by EELS after the producer failed | "
             f"{state.counts['routed-to-eels']} |"
         )
     if state.counts.get("escalated"):
@@ -1121,33 +1121,30 @@ def _reference_tool() -> Any:
     return eels
 
 
-PRODUCER_GAPS: Dict[str, str] = {
-    "GAS_LIMIT_EXCEEDS_MAXIMUM": (
-        "the producer does not implement TX_MAX_TOTAL_GAS_LIMIT"
-    ),
-}
-"""Rejections a case may expect that the producer cannot fill, by the
-transaction exception, with why. evmone's newest Amsterdam branch accepts
-a transaction above the total gas cap, so such a case fails to fill there
-and would be dropped. Remove an entry once the producer implements it."""
-
-
-def producer_gap(case: FuzzerOutput) -> Optional[str]:
-    """Why the producer cannot fill ``case``, or None when it can."""
-    for tx in case.transactions:
-        for name in (tx.error or "").split("|"):
-            if name in PRODUCER_GAPS:
-                return PRODUCER_GAPS[name]
-    return None
-
-
-def _gap_tool() -> ExecutionSpecsTransitionTool:
-    """EELS, traced as the reference is without a producer, for gaps."""
-    tool = _FILL.get("gap_eels")
+def _fallback_tool() -> ExecutionSpecsTransitionTool:
+    """
+    EELS, traced as the reference is without a producer, for cases the
+    producer failed to fill.
+    """
+    tool = _FILL.get("fallback_eels")
     if tool is None:
-        tool = _FILL["gap_eels"] = ExecutionSpecsTransitionTool()
+        tool = _FILL["fallback_eels"] = ExecutionSpecsTransitionTool()
         tool.compute_signature = True
     return tool
+
+
+def _fill_attempt(
+    case: FuzzerOutput, fork: Fork, tool: Any, seen: List[Any]
+) -> Dict[str, Any]:
+    """Fill ``case`` through ``tool`` under the per-case deadline."""
+    tool.reset_opcode_count()
+    tool.bal_witnesses = []
+    if hasattr(tool, "last_signature"):
+        tool.last_signature = None
+    with _case_deadline(FILL_TIMEOUT_SECONDS):
+        return fill_case(
+            case, fork, tool, violations=seen, fixture_format=_FILL["format"]
+        )
 
 
 def fill_case(
@@ -1801,40 +1798,42 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
     for seed in seeds:
         case_started = time.perf_counter()
         case = generate_fuzzer_output(fork, seed)
-        gap = producer_gap(case) if _FILL.get("producer") else None
-        tool = _gap_tool() if gap else _FILL["eels"]
-        tool.reset_opcode_count()
-        tool.bal_witnesses = []
-        if hasattr(tool, "last_signature"):
-            tool.last_signature = None
+        tool = _FILL["eels"]
         seen: List[Any] = []
         try:
-            with _case_deadline(FILL_TIMEOUT_SECONDS):
-                fixtures[f"seed_{seed}"] = fill_case(
-                    case,
-                    fork,
-                    tool,
-                    violations=seen,
-                    fixture_format=_FILL["format"],
-                )
-                if gap:
-                    # Provenance: this case's fixture is EELS's, not the
-                    # producer's, and why.
-                    fixtures[f"seed_{seed}"]["_info"]["filled_by"] = {
-                        "tool": "eels",
-                        "reason": gap,
-                    }
-                    routed[seed] = gap
+            try:
+                fixture = _fill_attempt(case, fork, tool, seen)
+            except Exception as exc:  # noqa: BLE001 - the producer's
+                if not _FILL.get("producer"):
+                    raise
+                # A case the producer cannot fill is filled by EELS, never
+                # dropped for the producer's sake: an evmone without the
+                # total gas cap once kept every such case from every
+                # client in its lane.
+                if isinstance(exc, FillTimeoutError):
+                    _FILL["eels"] = _recover_tool()
+                reason = f"producer failed: {type(exc).__name__}: {exc}"
+                routed[seed] = reason[:200]
+                tool = _fallback_tool()
+                seen.clear()
+                fixture = _fill_attempt(case, fork, tool, seen)
+                fixture["_info"]["filled_by"] = {
+                    "tool": "eels",
+                    "reason": routed[seed],
+                }
+            fixtures[f"seed_{seed}"] = fixture
         except FillTimeoutError:
+            routed.pop(seed, None)
             timeouts[seed] = FILL_TIMEOUT_SECONDS
             # The interrupted fill may have left the tool mid-transition,
             # so the worker takes a fresh one rather than carrying that
             # into the next case.
-            if gap:
-                _FILL.pop("gap_eels", None)
-            else:
+            if tool is _FILL["eels"]:
                 _FILL["eels"] = _recover_tool()
+            else:
+                _FILL.pop("fallback_eels", None)
         except Exception as exc:  # noqa: BLE001 - a fill failure is data
+            routed.pop(seed, None)
             errors[seed] = f"{type(exc).__name__}: {exc}"[:200]
         else:
             opcodes[seed] = _case_opcodes(tool)
@@ -2432,7 +2431,7 @@ def run_campaign(
             state.counts["fill_error"] = state.counts.get(
                 "fill_error", 0
             ) + len(fill_errors)
-            # Filled by EELS because the producer cannot: not fill errors,
+            # Filled by EELS because the producer failed: not fill errors,
             # and not the producer's fixtures.
             state.counts["routed-to-eels"] = state.counts.get(
                 "routed-to-eels", 0

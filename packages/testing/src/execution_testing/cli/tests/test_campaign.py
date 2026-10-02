@@ -790,43 +790,45 @@ class _ProducerThatCannotFill:
         raise AttributeError(f"the producer cannot fill ({name})")
 
 
-def test_a_case_the_producer_cannot_fill_is_filled_by_eels(
+def test_a_case_the_producer_fails_is_filled_by_eels(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     """
-    Under a producer, a case expecting a rejection the producer does not
-    implement (a transaction above the total gas cap) is filled by EELS,
+    Under a producer, any case it fails to fill (an evmone without the
+    total gas cap accepts a transaction it must reject) is filled by EELS,
     says so in its provenance, and is counted as routed, not as a fill
-    error; any other case still goes to the producer.
+    error. A case is dropped only when EELS fails it too.
     """
     from execution_testing.forks import Amsterdam
 
     from ..fuzzer_bridge import campaign as mod
     from ..fuzzer_bridge.generator import generate_fuzzer_output
 
-    def first(shape: Any) -> int:
-        return next(
-            s
-            for s in range(3000)
-            if shape(generate_fuzzer_output(Amsterdam, s))
-        )
-
-    gap = first(
-        lambda c: any(
-            tx.error == "GAS_LIMIT_EXCEEDS_MAXIMUM" for tx in c.transactions
+    over_cap = next(
+        s
+        for s in range(3000)
+        if any(
+            tx.error == "GAS_LIMIT_EXCEEDS_MAXIMUM"
+            for tx in generate_fuzzer_output(Amsterdam, s).transactions
         )
     )
-    plain = first(lambda c: not any(tx.error for tx in c.transactions))
     mod._init_fill_worker("Amsterdam")
     monkeypatch.setitem(mod._FILL, "producer", "/no/such/evmone")
     monkeypatch.setitem(mod._FILL, "eels", _ProducerThatCannotFill())
-    result = mod._fill_slice(([gap, plain], str(tmp_path)))
-    assert result["routed_to_eels"] == {
-        gap: mod.PRODUCER_GAPS["GAS_LIMIT_EXCEEDS_MAXIMUM"]
-    }
-    assert set(result["errors"]) == {plain}
+    result = mod._fill_slice(([over_cap, 1], str(tmp_path)))
+    assert set(result["routed_to_eels"]) == {over_cap, 1}
+    assert "producer failed" in result["routed_to_eels"][over_cap]
+    assert result["errors"] == {}
     fixtures = json.loads(Path(result["path"]).read_text())
-    assert fixtures[f"seed_{gap}"]["_info"]["filled_by"]["tool"] == "eels"
+    assert fixtures[f"seed_{over_cap}"]["_info"]["filled_by"]["tool"] == (
+        "eels"
+    )
+
+    monkeypatch.setattr(mod, "_fallback_tool", _ProducerThatCannotFill)
+    (tmp_path / "both").mkdir()
+    dropped = mod._fill_slice(([over_cap], str(tmp_path / "both")))
+    assert set(dropped["errors"]) == {over_cap}
+    assert dropped["routed_to_eels"] == {}
 
 
 def test_kept_batches_over_the_cap_keep_the_newest_per_reason() -> None:
