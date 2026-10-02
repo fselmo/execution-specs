@@ -17,6 +17,7 @@ from execution_testing.test_types.block_access_list import (
 )
 from execution_testing.test_types.block_access_list.modifiers import (
     BalScalarField,
+    append_account,
     append_change,
     append_storage,
     duplicate_account,
@@ -95,6 +96,34 @@ def test_duplicate_account_missing_raises() -> None:
     bal = BlockAccessList([BalAccountChange(address=ALICE, nonce_changes=[])])
     with pytest.raises(ValueError, match="not found"):
         duplicate_account(CONTRACT)(bal)
+
+
+@pytest.mark.parametrize(
+    "new_address,expected_order",
+    [
+        pytest.param(Address(0x1), [0x1, 0xA, 0xC], id="start"),
+        pytest.param(Address(0xB), [0xA, 0xB, 0xC], id="middle"),
+        pytest.param(Address(0xF), [0xA, 0xC, 0xF], id="end"),
+    ],
+)
+def test_append_account_keeps_address_order(
+    sample_bal: BlockAccessList,
+    new_address: Address,
+    expected_order: list[int],
+) -> None:
+    """Insert the new account where address order puts it."""
+    result = append_account(BalAccountChange(address=new_address))(sample_bal)
+    assert [a.address for a in result.root] == [
+        Address(a) for a in expected_order
+    ]
+
+
+def test_append_account_existing_address_raises(
+    sample_bal: BlockAccessList,
+) -> None:
+    """Raise rather than silently add a duplicate account."""
+    with pytest.raises(ValueError, match="already in"):
+        append_account(BalAccountChange(address=ALICE))(sample_bal)
 
 
 def test_duplicate_nonce_change(sample_bal: BlockAccessList) -> None:

@@ -396,11 +396,27 @@ def swap_bal_indices(
 def append_account(
     account_change: BalAccountChange,
 ) -> Callable[[BlockAccessList], BlockAccessList]:
-    """Append an account to account changes."""
+    """
+    Add an extraneous account at its sorted position by address.
+
+    Keeping the order leaves the extra account as the BAL's only defect;
+    use `duplicate_account` or the reordering modifiers for those defects.
+    """
 
     def transform(bal: BlockAccessList) -> BlockAccessList:
+        new_address = account_change.address
+        if any(a.address == new_address for a in bal.root):
+            raise ValueError(
+                f"Address {new_address} is already in the BAL; use "
+                "duplicate_account to add a duplicate"
+            )
         new_root = list(bal.root)
-        new_root.append(account_change)
+        insert_idx = len(new_root)
+        for i, existing in enumerate(new_root):
+            if existing.address > new_address:
+                insert_idx = i
+                break
+        new_root.insert(insert_idx, account_change)
         return BlockAccessList(root=new_root)
 
     return transform
