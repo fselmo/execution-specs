@@ -374,6 +374,10 @@ class NethermindExceptionMapper(ExceptionMapper):
         BlockException.INVALID_REQUESTS: (
             "InvalidRequestsHash: Requests hash mismatch in block"
         ),
+        BlockException.INVALID_GAS_USED: (
+            "HeaderGasUsedMismatch: "
+            "Gas used in header does not match calculated"
+        ),
         BlockException.INVALID_GAS_USED_ABOVE_LIMIT: (
             "ExceededGasLimit: Gas used exceeds gas limit."
         ),
