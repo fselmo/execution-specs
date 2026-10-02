@@ -230,6 +230,50 @@ def test_the_import_lane_delivers_a_changed_list_with_a_valid_block(
     assert import_fixture(fixture, "amsterdam").agreed
 
 
+@pytest.mark.parametrize(
+    "draw,fixture_format,blocks_key",
+    [
+        pytest.param(
+            {"family": "form", "kind": "read_and_write"},
+            BlockchainFixture,
+            "blocks",
+            id="delivered",
+        ),
+        pytest.param(
+            {"family": "header", "kind": "gas_used"},
+            BlockchainEngineFixture,
+            "engineNewPayloads",
+            id="engine",
+        ),
+    ],
+)
+def test_a_negative_keeps_one_bal_witness_per_block(
+    draw: Dict[str, Any],
+    fixture_format: Type[BaseFixture],
+    blocks_key: str,
+) -> None:
+    """
+    A negative is filled twice, clean and then modified, and the witness
+    check pairs each block with its own witness, so only the fill the
+    fixture records may leave witnesses behind.
+    """
+    mod._init_fill_worker("Amsterdam")
+    eels = mod._FILL["eels"]
+    eels.compute_bal_witness = True
+    eels.bal_witnesses = []
+    try:
+        fixture = mod.fill_case(
+            _case(FuzzerNegativeInput(**draw, pick=0)),
+            Amsterdam,
+            eels,
+            fixture_format=fixture_format,
+        )
+    finally:
+        eels.compute_bal_witness = False
+    assert fixture["_info"]["negative"]["applied"]
+    assert len(eels.bal_witnesses) == len(fixture[blocks_key])
+
+
 def test_a_delivered_list_equal_to_the_true_one_fails_the_self_check(
     clean: Dict[str, Any],
 ) -> None:

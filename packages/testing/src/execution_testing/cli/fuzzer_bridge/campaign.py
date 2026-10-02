@@ -1339,6 +1339,8 @@ def fill_case(
     test = blockchain_test_from_fuzzer(case, fork)
     negative: Optional[Dict[str, Any]] = None
     delivered: Optional[Dict[str, Any]] = None
+    witnesses: List[Any] = getattr(eels, "bal_witnesses", [])
+    before_first_fill = len(witnesses)
     if fixture_format is BlockchainEngineFixture and case.negative is not None:
         # The modification is chosen from what the block really holds, so
         # the case is filled clean first.
@@ -1365,7 +1367,16 @@ def fill_case(
             modify_last_block(test, overrides)
         else:
             delivered = None
+    before_last_fill = len(witnesses)
     result = generate(test, fixture_format)
+    # A negative is filled twice, and each fill adds one BAL witness per
+    # block; keep those of the fill whose execution the fixture records.
+    # A delivered list sits beside the clean fill's blocks, so its
+    # witnesses are the clean ones; otherwise the last fill's are.
+    if delivered is not None:
+        del witnesses[before_last_fill:]
+    else:
+        del witnesses[before_first_fill:before_last_fill]
     if violations is not None:
         violations.extend(test.invariant_violations)
     fixture = result.fixture.json_dict_with_info()
