@@ -129,7 +129,11 @@ class ErigonExceptionMapper(ExceptionMapper):
         BlockException.INVALID_BLOCK_ACCESS_LIST: (
             r"invalid block access list|block access list mismatch"
         ),
-        BlockException.INCORRECT_BLOCK_FORMAT: (r"invalid block access list"),
+        BlockException.INCORRECT_BLOCK_FORMAT: (
+            r"invalid block access list|"
+            # A pre-Amsterdam header carrying the field.
+            r"unexpected bal hash"
+        ),
         BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
             r"block access list too large"
         ),
