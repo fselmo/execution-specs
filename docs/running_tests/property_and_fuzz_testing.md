@@ -413,10 +413,12 @@ every verdict names both. A hunk outside the recipe's runner paths
 `ethereum/evmtool/` and `ethereum/referencetests/` for besu,
 `src/Nethermind/Nethermind.Test.Runner/` plus `Ethereum.Test.Base/` for
 nethermind, where the runner's block construction lives) fails the build:
-the series may change the runner, never the client. A series that stops
-applying when the pin moves is the signal that upstream touched the
-runner; rebase it then, on our schedule. The series is also the upstream
-ask -- the diff we run daily against the devnet branch.
+the series may change the runner, never the client. The example below
+shows the devnet-8 series, which have since left the repository: geth,
+besu and nethermind now run from runner branches on `fselmo` forks, pinned
+like any other build. A series that stops applying when the pin moves is
+the signal that upstream touched the runner; rebase it then, on our
+schedule. The series is also the upstream ask -- the diff we run daily against the devnet branch.
 
 ```yaml
   - name: geth

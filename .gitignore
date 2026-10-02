@@ -54,6 +54,8 @@ venv/
 # User config; not imposed
 .python-version
 fuzz.yaml
+# The server's live config; fuzz.server.example.yaml documents it.
+fuzz.server.yaml
 
 # pycharm
 .idea/
