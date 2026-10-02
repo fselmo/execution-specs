@@ -87,16 +87,16 @@ Where a client re-runs a block sequentially after its parallel executor failed (
 
 A block that falls back prints exactly two lines: its `balExecution` line with `path` `parallel`, then the `balFallback` line. The sequential re-run does not print a second `balExecution` line.
 
+## 5. Expected exceptions
+
+When a fixture names an expected exception (`expectException` on a block, or the payload's `validationError`), the runner checks that the client rejected the block for that reason, not only that it rejected it. The match uses the client's own mapping from its errors to the fixture's exception names, the one `consume` uses for that client, and a fixture may list several names separated by `|`, any of which matches. A block rejected for a different reason fails the fixture, with both the expected and the actual reason in its result. A client error that maps to no name fails too, so the mapping stays complete.
+
 ## Output and wiring
 
 - stdout carries only the runner's JSON results, whose format does not change. Both events go to stderr.
 - Optional, low priority: an output-format flag offering JSONL (one result object per line) beside the default JSON array. A client adds it only where it takes a few lines.
 - **`--bal-report`**, spelled the same in every client, turns both events on, on both runners. Off by default: without it the runners print neither event and their stderr is as before. A node never prints these lines; with the flag, the runner turns them on by a callback it installs or a logger it enables, whichever fits the client.
 - Under `--workers`, lines from different fixtures interleave; `hash` ties each line to its block.
-
-## Future work: expected exceptions
-
-When a fixture names an expected exception, the runner checks that the client rejected the block for that reason, not just that it rejected it. nethermind's and geth's runners already do; besu's, erigon's and reth's do not, so a client that rejects for the wrong reason passes there. This needs each client's mapping from its errors to the fixture's exception names, as `consume` has, and is a follow-up to these PRs.
 
 ## Future work: decisions in execution traces
 
