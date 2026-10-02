@@ -91,12 +91,18 @@ A block that falls back prints exactly two lines: its `balExecution` line with `
 
 When a fixture names an expected exception (`expectException` on a block, or the payload's `validationError`), the runner checks that the client rejected the block for that reason, not only that it rejected it. The match uses the client's own mapping from its errors to the fixture's exception names, the one `consume` uses for that client, and a fixture may list several names separated by `|`, any of which matches. A block rejected for a different reason fails the fixture, with both the expected and the actual reason in its result. A client error that maps to no name fails too, so the mapping stays complete. One exception: a block that fails to decode at all counts as rejected without a reason check, as nethermind, geth, besu's reference tests and hive's consume-rlp already treat it, because no client mapping (EEST's included) names decoder errors.
 
+Where a client's own CI pins fixtures that would fail the check for fixture reasons, the check may ship behind an opt-in flag, off by default, until EEST fixes those fixtures and the pin moves. Today that applies to nethermind's block-test path: its CI pins `tests@v21.0.0`, where 7 fixtures name the engine-path reason and 43 have two defects but one expected name.
+
 ## Output and wiring
 
 - stdout carries only the runner's JSON results, whose format does not change. Both events go to stderr.
 - Optional, low priority: an output-format flag offering JSONL (one result object per line) beside the default JSON array. A client adds it only where it takes a few lines.
 - **`--bal-report`**, spelled the same in every client, turns both events on, on both runners. Off by default: without it the runners print neither event and their stderr is as before. A node never prints these lines; with the flag, the runner turns them on by a callback it installs or a logger it enables, whichever fits the client.
 - Under `--workers`, lines from different fixtures interleave; `hash` ties each line to its block.
+
+## Runner notes
+
+- To cap CPU, use the runner's `--workers` and run it under `nice`. Do not set `DOTNET_PROCESSOR_COUNT` (or `DOTNET_GCHeapCount`) for nethtest: at 4 it crashed nethtest at random with a SIGBUS in .NET's background garbage collector.
 
 ## Future work: decisions in execution traces
 
