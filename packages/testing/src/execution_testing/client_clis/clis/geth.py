@@ -179,7 +179,11 @@ class GethExceptionMapper(ExceptionMapper):
             r"failed to decode BAL|"
             r"[bB][aA][lL] validation fail"
         ),
-        BlockException.INCORRECT_BLOCK_FORMAT: (r"invalid block access list:"),
+        BlockException.INCORRECT_BLOCK_FORMAT: (
+            r"invalid block access list:|"
+            # A pre-Amsterdam header carrying the field.
+            r"invalid block access list hash: have [0-9a-f]+, expected nil"
+        ),
         BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
             r"block access list exceeds gas limit|"
             r"block access list exceeds size constraint"
