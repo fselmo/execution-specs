@@ -340,6 +340,9 @@ class CampaignConfig(BaseModel):
     reproduce_runs: int = 5
     """Times a new finding's case is judged again alone, and again under
     load; 0 skips it."""
+    fill_kind_window: int = Field(default=20, ge=1)
+    """Consecutive attempts of one case kind that must all fail to fill
+    before the campaign alerts that the kind has gone dark."""
     max_kept_gb: Optional[float] = Field(default=None, gt=0)
     """A backstop on the batch files kept after judging, in GiB: past it
     the oldest go, but the newest kept for each reason stays, and any

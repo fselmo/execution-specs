@@ -831,6 +831,58 @@ def test_a_case_the_producer_fails_is_filled_by_eels(
     assert dropped["routed_to_eels"] == {}
 
 
+def test_a_case_kind_that_never_fills_alerts_once_per_run(
+    tmp_path: Path,
+) -> None:
+    """
+    Fill attempts and failures are counted per case kind. A kind whose
+    last `window` attempts all failed alerts once, when the run reaches
+    the window; a success ends the run, and a kind failing beside others
+    that fill is still counted on its own.
+    """
+    state = CampaignState.load(tmp_path / "state.json", seed_start=0)
+    alerts = []
+    for seed in range(5):
+        alerts += state.record_fill_kinds(
+            {seed: ["tx_validity:above_total_cap"], 100 + seed: ["ordinary"]},
+            {seed},
+            window=3,
+        )
+    assert alerts == ["tx_validity:above_total_cap"]
+    assert state.fill_kinds["tx_validity:above_total_cap"] == {
+        "attempts": 5,
+        "failures": 5,
+        "streak": 5,
+    }
+    assert state.fill_kinds["ordinary"]["failures"] == 0
+    state.record_fill_kinds({9: ["tx_validity:above_total_cap"]}, set(), 3)
+    assert state.fill_kinds["tx_validity:above_total_cap"]["streak"] == 0
+    report = render_report(
+        state, fork="Amsterdam", versions={}, elapsed_seconds=1.0
+    )
+    assert "tx_validity:above_total_cap 5/6 (0)" in report
+
+
+def test_case_kinds_name_what_a_case_is() -> None:
+    """A one-block shape is all a case is; otherwise its motifs."""
+    from ..fuzzer_bridge.generator import case_kinds
+
+    assert case_kinds({"bal_cap": True, "tx:0/motif": "repay"}) == ["bal_cap"]
+    assert case_kinds(
+        {"tx_validity": True, "tx_validity/kind": "above_total_cap"}
+    ) == ["tx_validity:above_total_cap"]
+    assert case_kinds(
+        {
+            "tx:0/motif": "repay",
+            "tx:1/motif": "none",
+            "near_full": True,
+            "negative": True,
+            "negative/family": "form",
+        }
+    ) == ["motif:repay", "near_full", "negative:form"]
+    assert case_kinds({"tx:0/motif": "none"}) == ["ordinary"]
+
+
 def test_kept_batches_over_the_cap_keep_the_newest_per_reason() -> None:
     """
     Past the cap the oldest kept batches go, but the newest kept for each
@@ -1312,7 +1364,9 @@ def test_a_timed_out_case_is_recorded_and_the_slice_continues(
         del fork
         return SimpleNamespace(transactions=[], _seed=seed)
 
-    monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
+    monkeypatch.setattr(
+        mod, "_generate_case", lambda f, s: (fake_generate(f, s), ["ordinary"])
+    )
 
     def fake_fill(
         case: Any,
@@ -1371,7 +1425,9 @@ def test_a_degraded_rebuild_after_a_timeout_stops_the_worker(
     mod._FILL["eels"] = original
     mod._FILL["capabilities"] = mod._capabilities(original)
     monkeypatch.setattr(
-        mod, "generate_fuzzer_output", lambda _f, s: SimpleNamespace(_seed=s)
+        mod,
+        "_generate_case",
+        lambda _f, s: (SimpleNamespace(_seed=s), ["ordinary"]),
     )
 
     def fake_fill(*_: Any, **__: Any) -> Dict[str, Any]:
@@ -1424,7 +1480,9 @@ def test_a_fill_slice_reports_its_own_generator_version(
         del fork
         return SimpleNamespace(transactions=[], _seed=seed)
 
-    monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
+    monkeypatch.setattr(
+        mod, "_generate_case", lambda f, s: (fake_generate(f, s), ["ordinary"])
+    )
 
     def fake_fill(
         case: Any,
@@ -1482,7 +1540,9 @@ def test_invariant_violations_are_counted_not_warned(
             violations.append(SimpleNamespace(invariant="bal_access_witness"))
         return {"ok": case._seed}
 
-    monkeypatch.setattr(mod, "generate_fuzzer_output", fake_generate)
+    monkeypatch.setattr(
+        mod, "_generate_case", lambda f, s: (fake_generate(f, s), ["ordinary"])
+    )
     monkeypatch.setattr(mod, "fill_case", fake_fill)
     result = mod._fill_slice(([1, 2, 3], str(tmp_path)))
 
@@ -1656,8 +1716,11 @@ def test_a_producer_fill_carries_no_events(
     assert mod._FILL["capabilities"]["compute_signature"] is False
     monkeypatch.setattr(
         mod,
-        "generate_fuzzer_output",
-        lambda _f, s: SimpleNamespace(transactions=[], _seed=s),
+        "_generate_case",
+        lambda _f, s: (
+            SimpleNamespace(transactions=[], _seed=s),
+            ["ordinary"],
+        ),
     )
     monkeypatch.setattr(
         mod, "fill_case", lambda case, *_, **__: {"ok": case._seed}

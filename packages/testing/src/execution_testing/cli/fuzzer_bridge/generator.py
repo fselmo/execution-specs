@@ -13,6 +13,7 @@ worth running.
 """
 
 import random
+import re
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from execution_testing.base_types import (
@@ -1279,6 +1280,31 @@ def generate_fuzzer_output(
         plan=plan,
     )
     return case
+
+
+def case_kinds(values: Dict[str, Any]) -> List[str]:
+    """
+    The kinds of case a draw tree's values make, for counting fill errors
+    by kind: a one-block shape (the size cap, a transaction-validity
+    rule) is all a case is when drawn, since it replaces the case's
+    transactions; otherwise each transaction's motif, then any appended
+    block shape and negative family.
+    """
+    if values.get("bal_cap"):
+        return ["bal_cap"]
+    if values.get("tx_validity"):
+        return [f"tx_validity:{values.get('tx_validity/kind')}"]
+    kinds = {
+        f"motif:{value}"
+        for label, value in values.items()
+        if re.fullmatch(r"tx:\d+/motif", label) and value != "none"
+    }
+    for shape in ("near_full", "max_nonce_block"):
+        if values.get(shape):
+            kinds.add(shape)
+    if values.get("negative"):
+        kinds.add(f"negative:{values.get('negative/family')}")
+    return sorted(kinds) or ["ordinary"]
 
 
 def record_case(

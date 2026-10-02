@@ -270,6 +270,7 @@ def campaign(
         fresh=fresh,
         baseline=not no_baseline,
         keep_fixtures=keep_fixtures,
+        fill_kind_window=campaign_config.fill_kind_window,
         max_kept_bytes=(
             int(campaign_config.max_kept_gb * 2**30)
             if campaign_config.max_kept_gb is not None

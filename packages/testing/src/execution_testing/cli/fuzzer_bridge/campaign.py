@@ -71,7 +71,12 @@ from .config import ContrastRun
 from .converter import blockchain_test_from_fuzzer
 from .corpus import minimize, save_case
 from .differential import _fork_by_name, is_tool_rejection
-from .generator import GENERATOR_VERSION, generate_fuzzer_output, record_case
+from .generator import (
+    GENERATOR_VERSION,
+    case_kinds,
+    generate_fuzzer_output,
+    record_case,
+)
 from .health import HealthPolicy, batch_sample, send_alert
 from .health import evaluate as evaluate_health
 from .health import snapshot as health_snapshot
@@ -376,6 +381,9 @@ class CampaignState:
     parallel: Dict[str, Dict[str, int]] = field(default_factory=dict)
     """Per lane, BAL-carrying blocks judged and how many it decided to run
     in parallel, from the series' `FUZZ-PAR-DECISION` lines."""
+    fill_kinds: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    """Per case kind (`generator.case_kinds`): attempts, fill failures,
+    and the current run of consecutive failures."""
     delivered: Dict[str, Dict[str, int]] = field(default_factory=dict)
     """Per lane, its delivered-list cases by `DELIVERED_OUTCOMES`: whether
     it imported or rejected the valid block, and whether its decision line
@@ -622,6 +630,7 @@ class CampaignState:
                 negatives=data.get("negatives", {}),
                 kept_batches=data.get("kept_batches", []),
                 delivered=data.get("delivered", {}),
+                fill_kinds=data.get("fill_kinds", {}),
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
             return state
@@ -662,6 +671,7 @@ class CampaignState:
                     "negatives": self.negatives,
                     "kept_batches": self.kept_batches,
                     "delivered": self.delivered,
+                    "fill_kinds": self.fill_kinds,
                     # Written for readers of the file, the status page
                     # among them, so none has to derive it.
                     "summary": {
@@ -737,6 +747,38 @@ class CampaignState:
                 set(entry["events_necessary"]) & set(events)
             )
         return False
+
+    def record_fill_kinds(
+        self,
+        kinds: Mapping[Any, Sequence[str]],
+        failed: Set[Any],
+        window: int,
+    ) -> List[str]:
+        """
+        Count a batch's fill attempts and failures by case kind; return
+        the kinds whose last ``window`` attempts all failed, once each
+        time the run of failures reaches it.
+
+        A kind the producer or the generator cannot fill vanishes from
+        every client's view while the fill-error total barely moves: the
+        total-cap case was dropped for a day that way.
+        """
+        alerts = []
+        for seed, case_kinds_ in kinds.items():
+            lost = seed in failed or str(seed) in failed
+            for kind in case_kinds_:
+                tally = self.fill_kinds.setdefault(
+                    kind, {"attempts": 0, "failures": 0, "streak": 0}
+                )
+                tally["attempts"] += 1
+                if lost:
+                    tally["failures"] += 1
+                    tally["streak"] += 1
+                    if tally["streak"] == window:
+                        alerts.append(kind)
+                else:
+                    tally["streak"] = 0
+        return alerts
 
     def unique_findings(self) -> int:
         """Distinct signatures that are not configured as known."""
@@ -851,6 +893,21 @@ def render_report(
                 f"{o.get('dropped', 0)}/{o.get('used', 0)}/"
                 f"{o.get('unreported', 0)}"
                 for lane, o in sorted(state.delivered.items())
+            )
+            + " |"
+        )
+    failing_kinds = {
+        kind: tally
+        for kind, tally in sorted(state.fill_kinds.items())
+        if tally.get("failures")
+    }
+    if failing_kinds:
+        lines.append(
+            "| fill errors by kind (failed/attempts, current run) | "
+            + ", ".join(
+                f"{kind} {tally['failures']}/{tally['attempts']} "
+                f"({tally['streak']})"
+                for kind, tally in failing_kinds.items()
             )
             + " |"
         )
@@ -1119,6 +1176,12 @@ def _reference_tool() -> Any:
     if _FILL.get("invariants"):
         eels.compute_bal_witness = True
     return eels
+
+
+def _generate_case(fork: Fork, seed: int) -> Tuple[FuzzerOutput, List[str]]:
+    """Generate ``seed``'s case once, with the kinds it is made of."""
+    case, tree = record_case(fork, seed)
+    return case, case_kinds(tree.values())
 
 
 def _fallback_tool() -> ExecutionSpecsTransitionTool:
@@ -1795,9 +1858,10 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
     case_ms: List[Tuple[int, float]] = []
     opcodes: Dict[int, int] = {}
     routed: Dict[int, str] = {}
+    kinds: Dict[int, List[str]] = {}
     for seed in seeds:
         case_started = time.perf_counter()
-        case = generate_fuzzer_output(fork, seed)
+        case, kinds[seed] = _generate_case(fork, seed)
         tool = _FILL["eels"]
         seen: List[Any] = []
         try:
@@ -1916,6 +1980,7 @@ def _fill_slice(args: Tuple[Any, ...]) -> Dict[str, Any]:
         "errors": errors,
         "timeouts": timeouts,
         "routed_to_eels": routed,
+        "kinds": kinds,
         "violations": violating,
         "self_checked": self_checked,
         "self_checks": self_checks,
@@ -1978,6 +2043,9 @@ class CampaignOptions:
     that does not match the header: `drops`, `rejects` or `unknown`. Only
     a `drops` lane is judged on delivered-list cases. See
     `ClientConfig.delivered_bal`."""
+    fill_kind_window: int = 20
+    """Consecutive attempts of one case kind that must all fail to fill
+    before the campaign alerts that the kind has gone dark."""
     max_kept_bytes: Optional[int] = None
     """A backstop on the batch files kept after judging: past it the
     oldest go, but the newest kept for each reason stays."""
@@ -2431,6 +2499,20 @@ def run_campaign(
             state.counts["fill_error"] = state.counts.get(
                 "fill_error", 0
             ) + len(fill_errors)
+            alerts = state.record_fill_kinds(
+                slice_result.get("kinds", {}),
+                {*fill_errors, *slice_result.get("timeouts", {})},
+                options.fill_kind_window,
+            )
+            for kind in alerts:
+                message = (
+                    f"campaign {output.name}: every one of the last "
+                    f"{options.fill_kind_window} {kind} cases failed to fill"
+                )
+                echo(f"  {message}")
+                failure = send_alert(message)
+                if failure:
+                    echo(f"alert not sent: {failure}")
             # Filled by EELS because the producer failed: not fill errors,
             # and not the producer's fixtures.
             state.counts["routed-to-eels"] = state.counts.get(
