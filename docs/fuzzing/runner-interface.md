@@ -10,7 +10,7 @@ Every client exposes its runners as `blocktest`, `enginetest` and `statetest`, a
 
 Every runner binary answers `--version` with one line on stdout that names the client and the tool, and exits 0. Tools that already have one keep it (`evm version …`, `Besu evm …`, nethtest's). A new binary names itself `<client>-<runner>`: ethrex's are `ethrex-blocktest`, `ethrex-enginetest` and `ethrex-statetest`, and reth's runner stays `ef-test-runner`. Harnesses identify a runner by that line.
 
-Every runner takes any number of fixture paths (files or directories) as arguments and runs all of them in one process. A runner that also reads paths from stdin keeps that as an extra input, not as the only batch interface.
+Every runner takes any number of fixture paths (files or directories) as arguments and runs all of them in one process. A path that does not exist or cannot be read is an error: the runner reports it on stderr and exits non-zero before running anything, so a typo in a long list never silently drops fixtures. A runner that also reads paths from stdin keeps that as an extra input, not as the only batch interface.
 
 A runner SHOULD exit non-zero when any fixture fails, so a caller can tell a failed run from a clean one without parsing the results. Where a client's own CI relies on exit 0 from a failing run, that client records it as a follow-up instead of changing it in these PRs.
 
