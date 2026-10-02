@@ -23,7 +23,7 @@ v28 is the first version to move the evaluation half. The requests motif was aim
 
 v30, which includes v29, kills its three tuning targets: 60 on 21 seeds, 80 on 15 and 99 on 2. It moves nothing in the evaluation half, and loses 74 there, which v28 killed on 2 seeds. v20's set holds at 23 kills with none lost. Motif work pauses here: from v21 to v30, the evaluation half gained only where a motif's own code covered it, in v28's deposits and requests.
 
-**The import leg** (v31, `by-version/v31/`) reaches the six block-import mutants the t8n lane never evaluates. It kills the three tuning ones, 71, 77 and 78, on all 300 seeds, and two of the three evaluation ones: 72 on all 300 and 76 on 294. 73 survives, as expected: it loosens `header.timestamp <= parent_header.timestamp` to `<`, which differs only for a block whose timestamp equals its parent's, and no generated block has one. v32's timestamp negative builds exactly that block, and with 73 applied its import witness fails, refused at the state root instead of the timestamp check; that is the engine campaign's witness, not a held-out measurement. Differentially, v31 gains 23 and 74 over v30, each killed on one or two seeds before, and loses nothing.
+**The import leg** (v31) reaches the six block-import mutants the t8n lane never evaluates. It kills the three tuning ones, 71, 77 and 78, on all 300 seeds, and two of the three evaluation ones: 72 on all 300 and 76 on 294. 73 survives, as expected: it loosens `header.timestamp <= parent_header.timestamp` to `<`, which differs only for a block whose timestamp equals its parent's, and no generated block has one. v32's timestamp negative builds exactly that block, and with 73 applied its import witness fails, refused at the state root instead of the timestamp check; that is the engine campaign's witness, not a held-out measurement. Differentially, v31 gains 23 and 74 over v30, each killed on one or two seeds before, and loses nothing.
 
 v27 loses two tuning kills, 23 and 101. Each was killed on 1 of 300 seeds at v26, which is sampling noise, not a regression.
 
@@ -32,8 +32,8 @@ v27 loses two tuning kills, 23 and 101. Each was killed on 1 of 300 seeds at v26
 ## Setup
 
 - **Set:** `held_out_v26.json`, 102 mutants frozen at v26 before any measurement, across 13 strata (see `AMSTERDAM_STRATA`). It uses v20's anchoring: a mutant is its construct, and a construct that occurs twice in a module is not drawn for a function-limited stratum.
-- **Runs:** seeds 0–299, generator v26, per-seed scoring, against geth `1.17.6-unstable-aa1f2fcf` (glamsterdam-devnet-8). The summaries are in `by-version/v26/`.
-- **Survivor diagnostic:** `mutate --held-out ... --liveness` on the 42 mutants that neither diverged nor crashed on every seed. `liveness-v26.txt` has the raw output.
+- **Runs:** seeds 0–299, generator v26, per-seed scoring, against geth `1.17.6-unstable-aa1f2fcf` (glamsterdam-devnet-8).
+- **Survivor diagnostic:** `mutate --held-out ... --liveness` on the 42 mutants that neither diverged nor crashed on every seed.
 
 ## Per stratum
 
@@ -104,3 +104,7 @@ Killing them needs transactions that queue EIP-7002 withdrawal requests and EIP-
 ## Crashes wherever reached
 
 27, 37, 53 (found at v28), 65, 81, 86, 89 and 98. 37 changes the execution only on the seeds where it crashes (159 of the 226 that reach it). Everywhere else its value differs and the execution does not.
+
+## Archive
+
+The per-version summaries and the liveness output left git at `ba860b5c07`. The server keeps them under `campaigns/reports/held-out-archive/`, and `git archive ba860b5c07 docs/fuzzing/held-out-v26` rebuilds them.
