@@ -672,6 +672,9 @@ campaigns:
       # campaigns/reports/{besu,reth}-total-gas-cap.
       - {client: besu-par-main, reason: "expected TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM"}
       - {client: reth-main, reason: "expected TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM"}
+      # erigon's pin 01c118ee1f predates its total cap; main (30774a8c66) and
+      # the fork head 26c5e5c776 enforce it. Remove at erigon's swap.
+      - {client: erigon-par-main, reason: "expected TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM"}
     health:
       control: {client: besu-gate, reason: "Chain header mismatch"}
       # No fixed floor: the control's rate moves with the generator (4.56%
