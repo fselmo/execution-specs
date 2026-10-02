@@ -2147,6 +2147,68 @@ def test_a_new_finding_alerts_once_and_a_known_one_never(
     assert "erigon" in alert and "geth" not in alert
 
 
+class _UnmappedRunner(_FakeRunner):
+    """
+    Geth rejects seeds 1 and 4 as expected, with an error no mapper names;
+    erigon rejects seed 2 for a mapped but wrong reason.
+    """
+
+    def run_file(self, path: Path, fixture_names: Any) -> Dict[str, Verdict]:
+        out = super().run_file(path, fixture_names)
+        for fixture_name in out:
+            seed = int(fixture_name.split("_")[1])
+            if self.name == "geth" and seed in (1, 4):
+                out[fixture_name] = Verdict(
+                    True, unmapped=f"block {seed}: unheard-of check failed"
+                )
+            elif self.name == "erigon" and seed == 2:
+                out[fixture_name] = Verdict(
+                    False,
+                    "rejected for the wrong reason: "
+                    "TransactionException.INSUFFICIENT_MAX_FEE_PER_GAS",
+                )
+        return out
+
+
+def test_an_unmapped_rejection_is_a_mapper_gap_not_a_finding(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """
+    A rejection whose error the client's mapper misses is counted per
+    client, under its normalized message with an example fixture, and
+    listed in the report as a mapper gap: no signature and no alert, even
+    the first time the message appears. A wrong-reason rejection in the
+    same run stays a finding and alerts.
+    """
+    from ..fuzzer_bridge import campaign as campaign_module
+
+    sent: List[str] = []
+    monkeypatch.setattr(campaign_module, "send_alert", sent.append)
+    never = {"geth": lambda _s: False, "erigon": lambda _s: False}
+    state = _campaign(
+        tmp_path,
+        monkeypatch,
+        never,
+        batch=3,
+        count=6,
+        baseline=False,
+        runner=lambda name, flags: _UnmappedRunner(
+            name, never[name], None, flags
+        ),
+    )
+    assert state.status != "paused"
+    (gap,) = state.unmapped["geth"]["messages"].values()
+    assert state.unmapped["geth"]["count"] == gap["count"] == 2
+    assert gap["example"] == "seed_1"
+    assert "erigon" not in state.unmapped
+    assert [e["client"] for e in state.signatures.values()] == ["erigon"]
+    (alert,) = sent
+    assert "erigon" in alert and "geth" not in alert
+    report = (tmp_path / "out" / "report.md").read_text()
+    assert "## Mapper gaps" in report
+    assert "block 1: unheard-of check failed | seed_1 |" in report
+
+
 def test_a_token_in_a_client_env_never_reaches_disk(
     tmp_path: Path, monkeypatch: Any
 ) -> None:

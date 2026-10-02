@@ -445,6 +445,11 @@ class CampaignState:
     kept_batches: List[Dict[str, Any]] = field(default_factory=list)
     """The batch files kept after judging, oldest first: each one's name,
     size and the reasons it was kept (see `KEEP_REASONS`)."""
+    unmapped: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    """Per client, rejections its EEST mapper names no exception for: a
+    count, and each distinct message (normalized) with its own count, the
+    message as first seen and an example fixture. Mapper gaps to fix in
+    EEST, never a finding: no signature, no alert, no pause."""
     negatives: Dict[str, List[int]] = field(default_factory=dict)
     """Per client, [answered INVALID, judged] over the negative cases it
     returned a verdict on. A pass on a negative fixture is the client
@@ -550,6 +555,16 @@ class CampaignState:
                 ].items()
                 if decisions and blocks
             }
+
+    def record_unmapped(self, client: str, message: str, example: str) -> None:
+        """Count one rejection whose error ``client``'s mapper misses."""
+        tally = self.unmapped.setdefault(client, {"count": 0, "messages": {}})
+        tally["count"] += 1
+        entry = tally["messages"].setdefault(
+            normalize_error(message),
+            {"count": 0, "message": message[:300], "example": example},
+        )
+        entry["count"] += 1
 
     def record_negatives(
         self, judged: Mapping[str, Sequence[int]], calibration_cases: int
@@ -684,6 +699,7 @@ class CampaignState:
                 negatives=data.get("negatives", {}),
                 kept_batches=data.get("kept_batches", []),
                 delivered=data.get("delivered", {}),
+                unmapped=data.get("unmapped", {}),
                 fill_kinds=data.get("fill_kinds", {}),
             )
             state.signatures_reset = reset and bool(data.get("signatures"))
@@ -725,6 +741,7 @@ class CampaignState:
                     "negatives": self.negatives,
                     "kept_batches": self.kept_batches,
                     "delivered": self.delivered,
+                    "unmapped": self.unmapped,
                     "fill_kinds": self.fill_kinds,
                     # Written for readers of the file, the status page
                     # among them, so none has to derive it.
@@ -1004,17 +1021,20 @@ def render_report(
         "",
         "## Failures per client",
         "",
-        "| client | fixtures failed | inputs refused | no verdict |",
-        "| --- | --- | --- | --- |",
+        "| client | fixtures failed | inputs refused | no verdict "
+        "| unmapped rejections |",
+        "| --- | --- | --- | --- | --- |",
     ]
     lines += [
         f"| {name} | {state.client_failures.get(name, 0)} "
         f"| {state.rejections.get(name, 0)} "
-        f"| {state.runner_errors.get(name, 0)} |"
+        f"| {state.runner_errors.get(name, 0)} "
+        f"| {state.unmapped.get(name, {}).get('count', 0)} |"
         for name in sorted(
             set(state.client_failures)
             | set(state.rejections)
             | set(state.runner_errors)
+            | set(state.unmapped)
         )
     ]
     if state.contrast:
@@ -1133,6 +1153,27 @@ def render_report(
                     for name, answer in sorted(entry["panel"].items())
                 )
             )
+    if state.unmapped:
+        lines += [
+            "",
+            "## Mapper gaps",
+            "",
+            "Rejections where the fixture expected one, whose error the "
+            "client's EEST mapper names no exception for. They count as "
+            "passes; each is a mapping to add in EEST.",
+            "",
+            "| client | count | message | example |",
+            "| --- | --- | --- | --- |",
+        ]
+        for client, gaps in sorted(state.unmapped.items()):
+            for message in sorted(
+                gaps["messages"].values(), key=lambda m: -m["count"]
+            ):
+                lines.append(
+                    f"| {client} | {message['count']} | "
+                    f"{message['message'].splitlines()[0][:200]} | "
+                    f"{message['example']} |"
+                )
     known = sorted(
         (e for e in state.signatures.values() if e.get("known")),
         key=lambda e: -e["count"],
@@ -2872,6 +2913,11 @@ def run_campaign(
                     verdicts, errored = partition_runner_errors(verdicts)
                     if errored:
                         kept_for.add("runner_error")
+                    for name, verdict in verdicts.items():
+                        if verdict.unmapped:
+                            state.record_unmapped(
+                                name, verdict.unmapped, fixture_name
+                            )
                     if fixture_name in delivered_names:
                         # A valid block whose delivered list is wrong. Each
                         # lane's answer is recorded with what its decision

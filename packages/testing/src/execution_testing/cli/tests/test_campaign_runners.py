@@ -679,10 +679,10 @@ def test_a_rejection_for_the_wrong_reason_fails(
     the client's error for each rejected block, so the error at the block
     the fixture expects rejected is mapped through the client's mapper and
     compared with the expected exception. Only the right reason passes; a
-    wrong one and an unmapped one each fail, keyed on the expected
-    exception. Geth's runner today reports the error in `error`, which is
-    checked the same way, and a pass with no error came from a runner that
-    checked the reason itself.
+    wrong one fails, keyed on the expected exception, and an unmapped one
+    stays a pass carrying its error, as a mapper gap. Geth's runner today
+    reports the error in `error`, which is checked the same way, and a
+    pass with no error came from a runner that checked the reason itself.
     """
     from ..fuzzer_bridge.campaign import per_client_signatures
 
@@ -698,6 +698,8 @@ def test_a_rejection_for_the_wrong_reason_fails(
         )
     )
 
+    right = "transaction gas limit too high (cap: 2^24)"
+
     def rejected(name: str, error: str) -> Dict[str, Any]:
         return {
             "name": name,
@@ -707,7 +709,7 @@ def test_a_rejection_for_the_wrong_reason_fails(
 
     stdout = json.dumps(
         [
-            rejected("right", "transaction gas limit too high (cap: 2^24)"),
+            rejected("right", right),
             rejected("wrong", "max fee per gas less than block base fee"),
             rejected("unmapped", "no such check"),
             {
@@ -728,16 +730,14 @@ def test_a_rejection_for_the_wrong_reason_fails(
     )
     verdicts = runner.run_file(fixture, names)
 
-    assert verdicts["right"].passed
-    assert verdicts["checked"].passed
+    assert verdicts["right"] == Verdict(True, rejections=((1, right),))
+    assert verdicts["checked"] == Verdict(True)
+    assert verdicts["unmapped"].passed
+    assert verdicts["unmapped"].unmapped == "no such check"
     signatures = dict(per_client_signatures(verdicts, expected))
-    assert set(signatures) == {"wrong", "unmapped", "legacy_wrong"}
+    assert set(signatures) == {"wrong", "legacy_wrong"}
     wrong = (
         f"expected {expected}: rejected for the wrong reason: "
         "TransactionException.INSUFFICIENT_MAX_FEE_PER_GAS"
     )
     assert signatures["wrong"] == signatures["legacy_wrong"] == wrong
-    assert signatures["unmapped"] == (
-        f"expected {expected}: rejected with an error no exception maps: "
-        "no such check"
-    )

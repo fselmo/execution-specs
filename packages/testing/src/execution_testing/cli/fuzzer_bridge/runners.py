@@ -44,6 +44,10 @@ class Verdict:
     """The client's own error for each block or payload it rejected, by
     its index in the fixture, as a runner on the shared interface reports
     them (`docs/fuzzing/runner-interface.md` §5)."""
+    unmapped: str = ""
+    """A rejection error the client's mapper names no exception for: the
+    client rejected as expected, but why cannot be read. A gap in EEST's
+    mapper, so the verdict stays a pass and the campaign lists it apart."""
 
 
 RUNNER_ERROR_PREFIX = "runner-error: "
@@ -139,7 +143,6 @@ EXCEPTION_MAPPERS: Dict[str, type[ExceptionMapper]] = {
 one `consume` uses for that client."""
 
 WRONG_REASON = "rejected for the wrong reason: "
-UNMAPPED_REASON = "rejected with an error no exception maps: "
 
 
 def check_rejection_reasons(
@@ -157,8 +160,8 @@ def check_rejection_reasons(
     mapped here through the client's mapper instead. A runner from before
     the interface may carry that error in `error`. A pass with neither is
     left alone: that runner checked the reason itself. An error mapping to
-    no exception fails apart from a wrong one, as a gap in the mapper
-    rather than a different rejection.
+    no exception is a gap in the mapper, not a finding: the pass stands,
+    carrying the error in `unmapped`.
     """
     mapper = EXCEPTION_MAPPERS[kind]()
     for name, verdict in verdicts.items():
@@ -171,7 +174,7 @@ def check_rejection_reasons(
             continue
         mapped = mapper.message_to_exception(error)
         if not isinstance(mapped, list):
-            verdicts[name] = Verdict(False, f"{UNMAPPED_REASON}{error}")
+            verdicts[name] = replace(verdict, unmapped=error)
             continue
         names = [str(exception) for exception in mapped]
         if set(names).isdisjoint(expected.split("|")):
