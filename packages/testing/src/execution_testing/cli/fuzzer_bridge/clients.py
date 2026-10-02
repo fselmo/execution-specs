@@ -248,26 +248,31 @@ def resolve_client(
     return ResolvedClient(client.name, binary, source, dict(client.env))
 
 
-NATIVE_VERSION = re.compile(r"^(ethrex-(block|engine)test|ef-test-runner)\b")
-"""Runners EEST has no consumer class for, told apart by their `--version`
-line: ethrex's `ethrex-blocktest` and `ethrex-enginetest`, one per fixture
-format, and reth's `ef-test-runner`, all from their clients' series."""
+NATIVE_VERSION = re.compile(r"^ethrex-(block|engine)test\b")
+"""ethrex's `ethrex-blocktest` and `ethrex-enginetest`, one per fixture
+format and from its series, by their `--version` line."""
+
+RETH_USAGE = re.compile(r"^Usage: ef-test-runner\b", re.MULTILINE)
+"""reth's `ef-test-runner`, by the usage line of its `--help`: the runner on
+reth's fork branch takes no `--version`."""
 
 
 def native_version(
     binary: Path, env: Optional[Mapping[str, str]] = None
 ) -> Optional[str]:
     """
-    The `--version` line of a runner EEST cannot detect, else None.
+    The version line of a runner EEST cannot detect, else None; for reth's
+    runner, which may have none, its name.
 
     Only binaries named like these runners are asked, so no other client's
     binary is run with a flag it may not take.
     """
-    if not Path(binary).name.startswith(("ethrex-", "ef-test-runner")):
+    reth = Path(binary).name.startswith("ef-test-runner")
+    if not reth and not Path(binary).name.startswith("ethrex-"):
         return None
     try:
         proc = subprocess.run(
-            [str(binary), "--version"],
+            [str(binary), "--help" if reth else "--version"],
             capture_output=True,
             text=True,
             env={**os.environ, **(env or {})},
@@ -275,6 +280,10 @@ def native_version(
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
+    if reth:
+        return (
+            "ef-test-runner" if RETH_USAGE.search(proc.stdout or "") else None
+        )
     lines = (proc.stdout or "").strip().splitlines()
     if lines and NATIVE_VERSION.match(lines[0]):
         return lines[0]

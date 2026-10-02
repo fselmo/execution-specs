@@ -645,9 +645,13 @@ def test_reth_judges_a_batch_with_blocktest_json_array(
 
 
 def test_reth_is_detected_and_has_no_engine_runner_yet(tmp_path: Path) -> None:
-    """The reth runner is named by `--version`; no engine runner yet."""
+    """The reth runner is named by `--help`; no engine runner yet."""
     binary = tmp_path / "ef-test-runner"
-    binary.write_text('#!/bin/sh\necho "ef-test-runner 2.7.0"\n')
+    binary.write_text(
+        "#!/bin/sh\n"
+        '[ "$1" = --help ] || exit 2\n'
+        'echo "Usage: ef-test-runner [SUITE_PATH]"\n'
+    )
     binary.chmod(0o755)
     assert FixtureRunner.detect("reth", binary).kind == "RethFixtureConsumer"
     with pytest.raises(ValueError, match="no engine runner"):
