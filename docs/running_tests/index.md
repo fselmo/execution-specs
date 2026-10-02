@@ -13,3 +13,5 @@ This section documents how EL clients can run EEST tests to verify their impleme
 5. **[Consume](./consume/index.md):** Commands that help clients run tests by consuming test fixtures.
 
 6. **[Execute](./execute/index.md):** Commands that help clients run tests by executing test source.
+
+7. **[Property Testing](./property_testing.md):** The property suite, `fill --invariant-checks`, and the EIP change manifest.

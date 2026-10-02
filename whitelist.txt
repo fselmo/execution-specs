@@ -390,6 +390,7 @@ dir
 dirname
 dirs
 discordapp
+disjointness
 div
 divmod
 docc
@@ -993,8 +994,8 @@ pytestmark
 q1
 qGpsxSA
 qs
-qube
 quantized
+qube
 questionary
 quickstart
 qx
