@@ -193,8 +193,9 @@ clients:
   # resolved 2026-09-24; no devnet past 11 has a branch of its own). Stock
   # builds sit beside the series builds for the liveness check.
   # geth on LCC2's runner-interface fork (fselmo/go-ethereum
-  # lcc2/enginetest-bal-v2): blocktest attaches the delivered list, both
-  # runners take --bal.sequential and print the interface's decision lines.
+  # lcc2/enginetest-bal-v2, b37c9aafe9): blocktest attaches the delivered
+  # list, both runners take --bal.sequential, and --bal-report turns on the
+  # interface's decision lines.
   # No series.
   - name: geth-par-main
     # delivered-list negatives: proven, and left ignored while the import
@@ -210,20 +211,21 @@ clients:
     build:
       recipe: geth
       repo: fselmo/go-ethereum
-      ref: d488246aac973ed3bda5a9ecaff1ac3c4178f3d8
-    contrast_flags: [--bal.sequential]
+      ref: b37c9aafe91c0d2eceeba01e550fc2b5f7914d27
+    runner_flags: [--bal-report]
+    contrast_flags: [--bal.sequential, --bal-report]
   # The engine lane: the same fork's enginetest, which drives the node's
   # Engine API handler in process.
   - name: geth-eng-main
     build:
       recipe: geth
       repo: fselmo/go-ethereum
-      ref: d488246aac973ed3bda5a9ecaff1ac3c4178f3d8
+      ref: b37c9aafe91c0d2eceeba01e550fc2b5f7914d27
     # enginetest defaults --workers to every core, and the campaign already
     # judges several batches at once. A contrast replaces runner_flags, so
     # the cap is repeated there.
-    runner_flags: [--workers, "2"]
-    contrast_flags: [--bal.sequential, --workers, "2"]
+    runner_flags: [--workers, "2", --bal-report]
+    contrast_flags: [--bal.sequential, --workers, "2", --bal-report]
   # ethrex main by full SHA. The series (patches/ethrex-main) adds its two
   # runners, ethrex-blocktest on each fixture's delivered access list and
   # ethrex-enginetest through the engine API, both parallel by default with
