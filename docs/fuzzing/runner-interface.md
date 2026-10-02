@@ -8,6 +8,8 @@ The end goal is full standardization of these runners across clients: the same c
 
 Every client exposes its runners as `blocktest`, `enginetest` and `statetest`, as a subcommand or the client's nearest equivalent. Where a client uses another name today, the standard name is added as an alias and the old one keeps working. `statetest` is naming only in this round; nothing else about it changes.
 
+Every runner binary answers `--version` with one line on stdout that names the client and the tool, and exits 0. Tools that already have one keep it (`evm version …`, `Besu evm …`, nethtest's). A new binary names itself `<client>-<runner>`: ethrex's are `ethrex-blocktest`, `ethrex-enginetest` and `ethrex-statetest`, and reth's runner stays `ef-test-runner`. Harnesses identify a runner by that line.
+
 ## 0. Engine-test drives the real Engine API handler, and nothing else
 
 Engine-test calls the client's own Engine API handler: the code that serves `engine_newPayloadV<n>` and `engine_forkchoiceUpdatedV<n>`, at the versions the fixture names (`newPayloadVersion`, `forkchoiceUpdatedVersion`). The fixture's params are decoded with the client's own decoder, so the access list reaches the validator as it would from the wire.
@@ -91,6 +93,10 @@ A block that falls back prints exactly two lines: its `balExecution` line with `
 - Optional, low priority: an output-format flag offering JSONL (one result object per line) beside the default JSON array. A client adds it only where it takes a few lines.
 - **`--bal-report`**, spelled the same in every client, turns both events on, on both runners. Off by default: without it the runners print neither event and their stderr is as before. A node never prints these lines; with the flag, the runner turns them on by a callback it installs or a logger it enables, whichever fits the client.
 - Under `--workers`, lines from different fixtures interleave; `hash` ties each line to its block.
+
+## Future work: expected exceptions
+
+When a fixture names an expected exception, the runner checks that the client rejected the block for that reason, not just that it rejected it. nethermind's and geth's runners already do; besu's, erigon's and reth's do not, so a client that rejects for the wrong reason passes there. This needs each client's mapping from its errors to the fixture's exception names, as `consume` has, and is a follow-up to these PRs.
 
 ## Future work: decisions in execution traces
 
