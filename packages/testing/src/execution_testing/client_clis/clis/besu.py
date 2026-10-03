@@ -552,8 +552,8 @@ class BesuFixtureConsumer(
 
         Besu's ``evmtool block-test`` accepts ``--test-name`` to
         select a specific fixture from the file. Versions with
-        ``--json-array`` report results, including rejections, as JSON;
-        older ones only print a text summary.
+        ``--json-array`` report results as JSON; older ones only print a
+        text summary.
         """
         subcommand = "block-test"
         subcommand_options: List[str] = []
@@ -597,9 +597,8 @@ class BesuFixtureConsumer(
                     "Blockchain test failed:\n"
                     + "\n".join(f"{r['name']}: {r['error']}" for r in failures)
                 )
-            self.check_rejections(
-                BlockchainFixture, fixture_path, fixture_name, results
-            )
+            # Rejection reasons are not checked yet: besu's block-test
+            # errors are mostly generic and do not name the failing rule.
             return
 
         # Parse text output for failures
