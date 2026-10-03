@@ -767,6 +767,44 @@ def insert_storage_read(
     return transform
 
 
+def remove_storage_read(
+    address: Address, slot: int
+) -> Callable[[BlockAccessList], BlockAccessList]:
+    """
+    Remove one storage read, keeping the account's other reads.
+
+    Useful for testing that every read slot is checked, not only that some
+    reads are present, which is all `remove_storage_reads` can show.
+    """
+
+    def transform(bal: BlockAccessList) -> BlockAccessList:
+        found_address = False
+        new_root = []
+        for account_change in bal.root:
+            if account_change.address == address:
+                found_address = True
+                new_account = account_change.model_copy(deep=True)
+                reads = [r for r in new_account.storage_reads if r != slot]
+                if len(reads) == len(new_account.storage_reads):
+                    raise ValueError(
+                        f"Storage slot {slot} not found in storage_reads "
+                        f"of account {address}"
+                    )
+                new_account.storage_reads = reads
+                new_root.append(new_account)
+            else:
+                new_root.append(account_change)
+
+        if not found_address:
+            raise ValueError(
+                f"Address {address} not found in BAL to remove storage read"
+            )
+
+        return BlockAccessList(root=new_root)
+
+    return transform
+
+
 def remove_slot_change(
     address: Address, slot: int, block_access_index: int
 ) -> Callable[[BlockAccessList], BlockAccessList]:
@@ -1084,6 +1122,7 @@ __all__ = [
     "remove_balances",
     "remove_storage",
     "remove_storage_reads",
+    "remove_storage_read",
     "remove_code",
     # Value modifiers
     "modify_nonce",
