@@ -492,6 +492,10 @@ class NethermindExceptionMapper(ExceptionMapper):
             r"|Error decoding block access list:"
         ),
         BlockException.INCORRECT_BLOCK_FORMAT: (
+            # On block import the header hash is taken from the delivered
+            # bytes, so a mismatch means the header did not re-encode to
+            # them, as when an Amsterdam header is missing its BAL hash.
+            r"InvalidHeaderHash: Header hash does not match\.|"
             r"could not be parsed as a block: "
             r"Error decoding block access list:"
             r"|Error decoding block access list:"
