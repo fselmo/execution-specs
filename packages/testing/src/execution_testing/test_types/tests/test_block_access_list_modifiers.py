@@ -34,6 +34,7 @@ from execution_testing.test_types.block_access_list.modifiers import (
     modify_storage,
     override_rlp,
     remove_nonces,
+    remove_storage_read,
     reorder_accounts,
     reverse_balance_changes,
     reverse_code_changes,
@@ -240,6 +241,28 @@ def test_insert_storage_read_missing_address_raises() -> None:
         insert_storage_read(CONTRACT, 1)(bal)
 
 
+def test_remove_storage_read(sample_bal: BlockAccessList) -> None:
+    """Remove one storage read and keep the others."""
+    result = remove_storage_read(CONTRACT, 5)(sample_bal)
+    contract = [a for a in result.root if a.address == CONTRACT][0]
+    assert list(contract.storage_reads) == [2]
+
+
+def test_remove_storage_read_missing_slot_raises(
+    sample_bal: BlockAccessList,
+) -> None:
+    """Raise when the slot is not among the account's reads."""
+    with pytest.raises(ValueError, match="not found"):
+        remove_storage_read(CONTRACT, 3)(sample_bal)
+
+
+def test_remove_storage_read_missing_address_raises() -> None:
+    """Raise when the address is absent."""
+    bal = BlockAccessList([BalAccountChange(address=ALICE, nonce_changes=[])])
+    with pytest.raises(ValueError, match="not found"):
+        remove_storage_read(CONTRACT, 2)(bal)
+
+
 def test_modify_nonce_missing_index_raises(
     sample_bal: BlockAccessList,
 ) -> None:
@@ -363,6 +386,11 @@ _ALICE_ONLY_BAL = BlockAccessList(
             lambda: insert_storage_read(CONTRACT, 99),
             _EMPTY_BAL,
             id="insert_storage_read",
+        ),
+        pytest.param(
+            lambda: remove_storage_read(CONTRACT, 2),
+            _EMPTY_BAL,
+            id="remove_storage_read",
         ),
     ],
 )
