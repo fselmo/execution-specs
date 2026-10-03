@@ -123,6 +123,9 @@ class GethExceptionMapper(ExceptionMapper):
         ),
         BlockException.INVALID_GASLIMIT: "invalid gas limit",
         BlockException.INVALID_BLOCK_NUMBER: "invalid block number",
+        # geth does not tell a zero parent hash from any other unknown one.
+        BlockException.UNKNOWN_PARENT: "unknown ancestor",
+        BlockException.UNKNOWN_PARENT_ZERO: "unknown ancestor",
         BlockException.EXTRA_DATA_TOO_BIG: "invalid extradata length",
         BlockException.INVALID_RECEIPTS_ROOT: "invalid receipt root hash",
         BlockException.INVALID_WITHDRAWALS_ROOT: (
