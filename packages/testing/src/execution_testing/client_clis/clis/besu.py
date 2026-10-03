@@ -532,6 +532,15 @@ class BesuFixtureConsumer(
 ):
     """Besu's implementation of the fixture consumer."""
 
+    exception_mapper = BesuExceptionMapper()
+
+    @cache  # noqa
+    def block_test_help(self) -> str:
+        """Return the help string of the `block-test` subcommand."""
+        return self._run_command(
+            [str(self.binary), "block-test", "--help"]
+        ).stdout
+
     def consume_blockchain_test(
         self,
         fixture_path: Path,
@@ -542,10 +551,15 @@ class BesuFixtureConsumer(
         Consume a single blockchain test.
 
         Besu's ``evmtool block-test`` accepts ``--test-name`` to
-        select a specific fixture from the file.
+        select a specific fixture from the file. Versions with
+        ``--json-array`` report results, including rejections, as JSON;
+        older ones only print a text summary.
         """
         subcommand = "block-test"
         subcommand_options: List[str] = []
+        json_array = "--json-array" in self.block_test_help()
+        if json_array:
+            subcommand_options += ["--json-array"]
         if debug_output_path:
             subcommand_options += ["--json"]
 
@@ -574,6 +588,19 @@ class BesuFixtureConsumer(
                 f"Unexpected exit code:\n{' '.join(command)}\n\n"
                 f"Error:\n{result.stderr}"
             )
+
+        if json_array:
+            results = json.loads(result.stdout)
+            failures = [r for r in results if not r["pass"]]
+            if failures:
+                raise Exception(
+                    "Blockchain test failed:\n"
+                    + "\n".join(f"{r['name']}: {r['error']}" for r in failures)
+                )
+            self.check_rejections(
+                BlockchainFixture, fixture_path, fixture_name, results
+            )
+            return
 
         # Parse text output for failures
         stdout = result.stdout

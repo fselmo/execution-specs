@@ -45,8 +45,11 @@ class Nethtest(EthereumCLI):
         """Initialize the Nethtest class."""
         self.binary = binary
         self.trace = trace
-        # TODO: Implement NethermindExceptionMapper
-        self.exception_mapper = exception_mapper if exception_mapper else None
+        self.exception_mapper: ExceptionMapper | None = (
+            exception_mapper
+            if exception_mapper
+            else NethermindExceptionMapper()
+        )
 
     def _run_command(self, command: List[str]) -> subprocess.CompletedProcess:
         try:
@@ -245,7 +248,6 @@ class NethtestFixtureConsumer(
         debug_output_path: Optional[Path] = None,
     ) -> None:
         """Execute the the fixture at `fixture_path` via `nethtest`."""
-        del fixture_path
         result = subprocess.run(
             command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
@@ -282,6 +284,9 @@ class NethtestFixtureConsumer(
                 "Blockchain test failed:\n"
                 + "\n".join(f"{r['name']}: {r.get('error')}" for r in failures)
             )
+        self.check_rejections(
+            BlockchainFixture, fixture_path, fixture_name, results
+        )
 
     def consume_fixture(
         self,

@@ -332,6 +332,8 @@ class ErigonFixtureConsumer(
     ``json.loads`` fails on the first non-JSON line.
     """
 
+    exception_mapper = ErigonExceptionMapper()
+
     def consume_blockchain_test(
         self,
         fixture_path: Path,
@@ -380,6 +382,9 @@ class ErigonFixtureConsumer(
                 if not test_result["pass"]
             )
             raise Exception(exception_text)
+        self.check_rejections(
+            BlockchainFixture, fixture_path, fixture_name, result_json
+        )
 
     @cache  # noqa
     def consume_state_test_file(
