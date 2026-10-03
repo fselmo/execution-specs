@@ -201,6 +201,10 @@ class EthrexExceptionMapper(ExceptionMapper):
             r"Failed to RLP decode BAL|"
             r"Block access list accounts not in strictly ascending order.*|"
             # A pre-Amsterdam header carrying the field.
-            r"Block access list hash is present"
+            r"Block access list hash is present|"
+            # A blob field or slot number present before its fork, or a blob
+            # field missing after it.
+            r"(Excess blob gas|Blob gas used) is (not )?present|"
+            r"Slot number is present"
         ),
     }
