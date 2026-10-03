@@ -491,6 +491,9 @@ class BesuExceptionMapper(ExceptionMapper):
             # as an Amsterdam header missing its BAL hash.
             r"Cannot read a \d+ bytes value, expecting \d+ bytes but current "
             r"element is \d+ bytes long|"
+            # A non-canonical integer, such as a Cancun header missing a blob
+            # field so the zero parent beacon block root lands in it.
+            r"Invalid scalar, has leading zeros bytes|"
             # A header field its fork requires is missing; the runner appends
             # the failing rule's reason in brackets.
             r"\w+ field is required from \w+ onwards but is missing|"
