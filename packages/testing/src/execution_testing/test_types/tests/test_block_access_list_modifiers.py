@@ -432,6 +432,13 @@ def test_reused_callable_does_not_carry_found_state(
             b"\x01",
             id="block_access_index",
         ),
+        pytest.param(
+            "storage_block_access_index",
+            CONTRACT,
+            (1, 1, 0, 1, 0, 0),
+            b"\x01",
+            id="storage_block_access_index",
+        ),
         pytest.param("nonce", ALICE, (0, 4, 0, 1), b"\x01", id="nonce"),
     ],
 )
@@ -454,6 +461,31 @@ def test_encode_scalar_non_minimally(
     assert leaf == b"\x00" + canonical_leaf
 
 
+def test_encode_scalar_non_minimally_zero_is_single_zero_byte() -> None:
+    """A zero scalar, canonically `0x80`, is re-encoded as `0x00`."""
+    bal = BlockAccessList(
+        [
+            BalAccountChange(
+                address=CONTRACT,
+                storage_changes=[
+                    BalStorageSlot(
+                        slot=0,
+                        slot_changes=[
+                            BalStorageChange(
+                                block_access_index=1, post_value=1
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ]
+    )
+    encoded = encode_scalar_non_minimally(CONTRACT, "storage_slot")(bal)
+
+    leaf: Any = eth_rlp.decode(encoded)
+    assert leaf[0][1][0][0] == b"\x00"
+
+
 @pytest.mark.parametrize(
     "field",
     [
@@ -462,6 +494,7 @@ def test_encode_scalar_non_minimally(
         "storage_read",
         "balance",
         "block_access_index",
+        "storage_block_access_index",
         "nonce",
     ],
 )

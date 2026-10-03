@@ -32,12 +32,15 @@ BalScalarField = Literal[
     "storage_read",
     "balance",
     "block_access_index",
+    "storage_block_access_index",
     "nonce",
 ]
 """
 EIP-7928 integer fields, each RLP-encoded as a minimal scalar.
 
-``block_access_index`` is read from the account's first balance change.
+``block_access_index`` is read from the account's first balance change,
+``storage_block_access_index`` from its first storage change, the only
+place a pre-execution system call's index 0 appears.
 """
 
 _STORAGE_CHANGES_INDEX = BalAccountChange.rlp_fields.index("storage_changes")
@@ -47,6 +50,9 @@ _NONCE_CHANGES_INDEX = BalAccountChange.rlp_fields.index("nonce_changes")
 _SLOT_INDEX = BalStorageSlot.rlp_fields.index("slot")
 _SLOT_CHANGES_INDEX = BalStorageSlot.rlp_fields.index("slot_changes")
 _POST_VALUE_INDEX = BalStorageChange.rlp_fields.index("post_value")
+_STORAGE_BLOCK_ACCESS_INDEX_INDEX = BalStorageChange.rlp_fields.index(
+    "block_access_index"
+)
 _POST_BALANCE_INDEX = BalBalanceChange.rlp_fields.index("post_balance")
 _BLOCK_ACCESS_INDEX_INDEX = BalBalanceChange.rlp_fields.index(
     "block_access_index"
@@ -1057,6 +1063,12 @@ def _scalar_leaf(
         return element[_BALANCE_CHANGES_INDEX][0], _POST_BALANCE_INDEX
     elif field == "block_access_index":
         return element[_BALANCE_CHANGES_INDEX][0], _BLOCK_ACCESS_INDEX_INDEX
+    elif field == "storage_block_access_index":
+        slot = element[_STORAGE_CHANGES_INDEX][0]
+        return (
+            slot[_SLOT_CHANGES_INDEX][0],
+            _STORAGE_BLOCK_ACCESS_INDEX_INDEX,
+        )
     elif field == "nonce":
         return element[_NONCE_CHANGES_INDEX][0], _POST_NONCE_INDEX
     else:
