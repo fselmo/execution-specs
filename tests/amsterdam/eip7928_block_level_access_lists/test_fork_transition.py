@@ -181,8 +181,9 @@ def test_invalid_post_fork_block_without_bal_hash_field(
     Reject an Amsterdam activation block whose header is missing
     `block_access_list_hash`.
 
-    The engine fixture sends `newPayloadV5` with the `blockAccessList`
-    param omitted, which must return `-32602: Invalid params`.
+    From the fork activation onward the field is mandatory: a header
+    without it is malformed and the engine payload is missing a
+    parameter required by its version.
     """
     sender = pre.fund_eoa()
     receiver = pre.fund_eoa(amount=0)
@@ -199,7 +200,7 @@ def test_invalid_post_fork_block_without_bal_hash_field(
                 rlp_modifier=Header(
                     block_access_list_hash=Header.REMOVE_FIELD,
                 ),
-                exception=BlockException.INVALID_BAL_HASH,
+                exception=BlockException.INCORRECT_BLOCK_FORMAT,
                 engine_api_error_code=EngineAPIError.InvalidParams,
             ),
         ],
