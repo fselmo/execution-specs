@@ -392,6 +392,12 @@ class BesuExceptionMapper(ExceptionMapper):
             "World State Root does not match expected value"
         ),
         BlockException.INVALID_GAS_USED: "gas used mismatch (header=",
+        # Besu logs a withdrawals root mismatch as a "transaction root
+        # mismatch" without a block id; a real transactions root mismatch
+        # reads "Invalid block 1 (0x...): transaction root mismatch".
+        BlockException.INVALID_WITHDRAWALS_ROOT: (
+            "Invalid block: transaction root mismatch"
+        ),
     }
     mapping_regex = {
         BlockException.INVALID_REQUESTS: (
