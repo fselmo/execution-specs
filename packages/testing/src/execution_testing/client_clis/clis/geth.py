@@ -191,7 +191,12 @@ class GethExceptionMapper(ExceptionMapper):
             # Amsterdam header missing the hash, or an earlier one carrying a
             # slot number.
             r"rlp: input string too short for common\.Hash, decoding into "
-            r"\(types\.Block\)\(types\.extblock\)\.Header\.BlockAccessListHash"
+            r"\(types\.Block\)\(types\.extblock\)\.Header\.BlockAccessListHash|"
+            # A Cancun header missing a blob field, so the parent beacon
+            # block root lands in a uint64 field.
+            r"rlp: input string too long for uint64, decoding into "
+            r"\(types\.Block\)\(types\.extblock\)\.Header\."
+            r"(BlobGasUsed|ExcessBlobGas)"
         ),
         BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
             r"block access list exceeds gas limit|"
