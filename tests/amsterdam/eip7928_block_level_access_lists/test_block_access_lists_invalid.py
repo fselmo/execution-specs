@@ -20,6 +20,7 @@ from execution_testing import (
     BalStorageChange,
     BalStorageSlot,
     Block,
+    BlockAccessList,
     BlockAccessListExpectation,
     BlockchainTestFiller,
     BlockException,
@@ -64,6 +65,7 @@ from execution_testing.test_types.block_access_list.modifiers import (
     remove_nonces,
     remove_slot_change,
     remove_storage,
+    remove_storage_read,
     remove_storage_reads,
     reverse_accounts,
     reverse_balance_changes,
@@ -2531,10 +2533,11 @@ def test_bal_invalid_phantom_read_on_selfdestruct(
 @pytest.mark.valid_from("Amsterdam")
 @pytest.mark.exception_test
 @pytest.mark.parametrize(
-    "modifier",
+    "corruption",
     [
-        pytest.param(remove_accounts, id="missing_entry"),
-        pytest.param(remove_storage_reads, id="missing_reads"),
+        pytest.param("entry", id="missing_entry"),
+        pytest.param("reads", id="missing_reads"),
+        pytest.param("one_read", id="missing_one_read"),
     ],
 )
 # The deposit contract keeps no queue, so it has no slots to read.
@@ -2545,12 +2548,12 @@ def test_bal_invalid_missing_request_predeploy_accesses(
     blockchain_test: BlockchainTestFiller,
     pre: Alloc,
     request_class: Type[FeeSystemContractRequest],
-    modifier: Callable,
+    corruption: str,
 ) -> None:
     """
-    Reject a BAL that hides the queue slots the post-execution system call
-    read from a request predeploy, either by dropping the predeploy's entry
-    outright or by clearing only its storage reads.
+    Reject a BAL that hides queue slots the post-execution system call
+    read from a request predeploy: by dropping the predeploy's entry, by
+    clearing its storage reads, or by dropping just one of them.
 
     Nothing but the BAL records those reads, so the block stays
     self-consistent on state root and gas.
@@ -2562,6 +2565,15 @@ def test_bal_invalid_missing_request_predeploy_accesses(
         request_class.queue_head_slot,
         request_class.queue_tail_slot,
     ]
+    modifier: Callable[[BlockAccessList], BlockAccessList]
+    if corruption == "entry":
+        modifier = remove_accounts(predeploy)
+    elif corruption == "reads":
+        modifier = remove_storage_reads(predeploy)
+    elif corruption == "one_read":
+        modifier = remove_storage_read(predeploy, request_class.count_slot)
+    else:
+        raise ValueError(f"Unhandled corruption: {corruption}")
     blockchain_test(
         pre=pre,
         post={},
@@ -2577,7 +2589,85 @@ def test_bal_invalid_missing_request_predeploy_accesses(
                         ),
                         SYSTEM_ADDRESS: None,
                     }
-                ).modify(modifier(predeploy)),
+                ).modify(modifier),
+            )
+        ],
+    )
+
+
+@pytest.mark.valid_from("Amsterdam")
+@pytest.mark.exception_test
+# The deposit contract keeps no queue, so its system call writes nothing.
+@pytest.mark.with_all_system_contract_request_types(
+    selector=lambda cls: issubclass(cls, FeeSystemContractRequest)
+)
+def test_bal_invalid_dropped_request_predeploy_sweep_change(
+    blockchain_test: BlockchainTestFiller,
+    pre: Alloc,
+    request_class: Type[FeeSystemContractRequest],
+) -> None:
+    """
+    Reject a BAL that drops the post-execution sweep's reset of a request
+    predeploy's count, keeping the transaction's increment of that slot.
+    """
+    predeploy = request_class.system_contract_address
+    request = request_class.from_index(0).copy(
+        fee=request_class.get_enqueue_fees(1)[0]
+    )
+    sender = pre.fund_eoa()
+    txs = [
+        Transaction(
+            sender=sender,
+            to=predeploy,
+            value=request.value,
+            data=request.calldata,
+        )
+    ]
+    system_call_index = len(txs) + 1
+
+    blockchain_test(
+        pre=pre,
+        # The block is rejected, so the request is never queued.
+        post={sender: Account(nonce=0), predeploy: Account(storage={})},
+        blocks=[
+            Block(
+                txs=txs,
+                exception=BlockException.INVALID_BLOCK_ACCESS_LIST,
+                expected_block_access_list=BlockAccessListExpectation(
+                    account_expectations={
+                        predeploy: BalAccountExpectation(
+                            balance_changes=[
+                                BalBalanceChange(
+                                    block_access_index=1,
+                                    post_balance=request.value,
+                                )
+                            ],
+                            storage_changes=[
+                                BalStorageSlot(
+                                    slot=request_class.count_slot,
+                                    slot_changes=[
+                                        BalStorageChange(
+                                            block_access_index=1,
+                                            post_value=1,
+                                        ),
+                                        BalStorageChange(
+                                            block_access_index=(
+                                                system_call_index
+                                            ),
+                                            post_value=0,
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    }
+                ).modify(
+                    remove_slot_change(
+                        predeploy,
+                        slot=request_class.count_slot,
+                        block_access_index=system_call_index,
+                    )
+                ),
             )
         ],
     )
