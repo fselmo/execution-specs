@@ -135,7 +135,12 @@ class ErigonExceptionMapper(ExceptionMapper):
             r"unexpected bal hash|"
             # A pre-Cancun header carrying the field.
             r"invalid (excessBlobGas|blobGasUsed) before fork: "
-            r"have \S+, expected 'nil'"
+            r"have \S+, expected 'nil'|"
+            # The BAL hash position holds the slot number's empty string: an
+            # Amsterdam header missing the hash, or an earlier one carrying a
+            # slot number.
+            r"read BlockAccessListHash: "
+            r"input value has wrong size \d+, want 32"
         ),
         BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
             r"block access list too large"
