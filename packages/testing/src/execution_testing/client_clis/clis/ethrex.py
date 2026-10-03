@@ -191,6 +191,9 @@ class EthrexExceptionMapper(ExceptionMapper):
             r"Invalid block hash"
         ),
         BlockException.INCORRECT_BLOCK_FORMAT: (
+            # An Amsterdam header missing the field.
+            r"Block access list hash is not present|"
+            r"Slot number is not present|"
             r"Block access list hash does not match "
             r"the one in the header after executing|"
             r"Block access list contains index \d+ "
