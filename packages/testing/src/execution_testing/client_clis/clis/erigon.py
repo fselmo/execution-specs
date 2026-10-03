@@ -140,7 +140,10 @@ class ErigonExceptionMapper(ExceptionMapper):
             # Amsterdam header missing the hash, or an earlier one carrying a
             # slot number.
             r"read BlockAccessListHash: "
-            r"input value has wrong size \d+, want 32"
+            r"input value has wrong size \d+, want 32|"
+            # A Cancun header missing a blob field, so the parent beacon
+            # block root lands in a uint64 field.
+            r"read (BlobGasUsed|ExcessBlobGas): rlp: uint overflow"
         ),
         BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
             r"block access list too large"
