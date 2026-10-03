@@ -487,6 +487,13 @@ class BesuExceptionMapper(ExceptionMapper):
             r"Failed to decode block access list payload parameter"
         ),
         BlockException.INCORRECT_BLOCK_FORMAT: (
+            # A fixed-size header field decoded from the wrong length, such
+            # as an Amsterdam header missing its BAL hash.
+            r"Cannot read a \d+ bytes value, expecting \d+ bytes but current "
+            r"element is \d+ bytes long|"
+            # A header field its fork requires is missing; the runner appends
+            # the failing rule's reason in brackets.
+            r"\w+ field is required from \w+ onwards but is missing|"
             r"Block access list hash mismatch, "
             r"calculated:\s*(0x[a-f0-9]+)\s+header:\s*(0x[a-f0-9]+)|"
             r"Block access list validation failed for block 0x[a-f0-9]+"
