@@ -2142,6 +2142,125 @@ def test_bal_invalid_non_minimal_scalar_encoding(
 
 
 @pytest.mark.valid_from("Amsterdam")
+@pytest.mark.blockchain_test_engine_only
+@pytest.mark.exception_test
+@pytest.mark.parametrize(
+    "field",
+    [
+        "storage_slot",
+        "storage_value",
+        "storage_read",
+        "balance",
+        "storage_block_access_index",
+    ],
+)
+@pytest.mark.parametrize("header_commits_to", ["canonical_rlp", "payload_rlp"])
+def test_bal_invalid_zero_scalar_encoding(
+    blockchain_test: BlockchainTestFiller,
+    pre: Alloc,
+    field: BalScalarField,
+    header_commits_to: str,
+) -> None:
+    """
+    Reject a `newPayload` whose BAL encodes a zero integer scalar as `0x00`
+    instead of `0x80`.
+
+    A decoder that checks for leading zeros only in strings longer than
+    one byte accepts `0x00`. Nonces are excluded: a recorded nonce is
+    always at least 1.
+    """
+    block_timestamp = 12
+    beacon_root = Hash(0xABCDEF)
+    alice = pre.fund_eoa()
+
+    target: Address
+    txs: list[Transaction]
+    account_expectation: BalAccountExpectation
+    if field == "storage_slot":
+        target = pre.deploy_contract(code=Op.SSTORE(0, 1))
+        txs = [Transaction(sender=alice, to=target)]
+        account_expectation = BalAccountExpectation(
+            storage_changes=[
+                BalStorageSlot(
+                    slot=0,
+                    slot_changes=[
+                        BalStorageChange(block_access_index=1, post_value=1)
+                    ],
+                )
+            ],
+        )
+    elif field == "storage_value":
+        target = pre.deploy_contract(code=Op.SSTORE(1, 0), storage={1: 1})
+        txs = [Transaction(sender=alice, to=target)]
+        account_expectation = BalAccountExpectation(
+            storage_changes=[
+                BalStorageSlot(
+                    slot=1,
+                    slot_changes=[
+                        BalStorageChange(block_access_index=1, post_value=0)
+                    ],
+                )
+            ],
+        )
+    elif field == "storage_read":
+        target = pre.deploy_contract(code=Op.SLOAD(0))
+        txs = [Transaction(sender=alice, to=target)]
+        account_expectation = BalAccountExpectation(
+            storage_changes=[], storage_reads=[0]
+        )
+    elif field == "balance":
+        sink = pre.fund_eoa()
+        target = pre.deploy_contract(
+            code=Op.CALL(gas=Op.GAS, address=sink, value=Op.SELFBALANCE),
+            balance=1,
+        )
+        txs = [Transaction(sender=alice, to=target)]
+        account_expectation = BalAccountExpectation(
+            balance_changes=[
+                BalBalanceChange(block_access_index=1, post_balance=0)
+            ],
+        )
+    elif field == "storage_block_access_index":
+        # Only a pre-execution system call records changes at index 0.
+        target = BEACON_ROOTS_ADDRESS
+        txs = []
+        account_expectation = beacon_root_system_call_expectations(
+            block_timestamp, beacon_root
+        )[BEACON_ROOTS_ADDRESS]
+    else:
+        raise ValueError(f"Unhandled field: {field}")
+
+    encoder = encode_scalar_non_minimally(target, field)
+    expectation = BlockAccessListExpectation(
+        account_expectations={target: account_expectation}
+    )
+    exceptions = [BlockException.INVALID_BLOCK_ACCESS_LIST]
+    if header_commits_to == "canonical_rlp":
+        expectation = expectation.modify_rlp(encoder)
+        # The header commits to other bytes than the payload delivers.
+        exceptions.append(BlockException.INVALID_BLOCK_HASH)
+    elif header_commits_to == "payload_rlp":
+        expectation = expectation.modify(override_rlp(encoder))
+    else:
+        raise ValueError(f"Unhandled header commitment: {header_commits_to}")
+
+    blockchain_test(
+        pre=pre,
+        # The block is rejected and the post state remains unchanged.
+        post=pre,
+        blocks=[
+            Block(
+                txs=txs,
+                timestamp=block_timestamp,
+                parent_beacon_block_root=beacon_root,
+                exception=exceptions,
+                expected_block_access_list=expectation,
+            )
+        ],
+    )
+
+
+@pytest.mark.valid_from("Amsterdam")
 @pytest.mark.exception_test
 def test_bal_invalid_noop_storage_change(
     blockchain_test: BlockchainTestFiller,
