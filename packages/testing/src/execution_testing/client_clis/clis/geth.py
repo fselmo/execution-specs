@@ -147,6 +147,9 @@ class GethExceptionMapper(ExceptionMapper):
         TransactionException.TYPE_3_TX_PRE_FORK: (
             r"data blobs present in block body"
         ),
+        # geth reports a wrong block number as an unknown ancestor whenever
+        # the parent header is not cached.
+        BlockException.INVALID_BLOCK_NUMBER: r"unknown ancestor",
         BlockException.BLOB_GAS_USED_ABOVE_LIMIT: (
             r"blob gas used \d+ exceeds maximum allowance \d+"
         ),
