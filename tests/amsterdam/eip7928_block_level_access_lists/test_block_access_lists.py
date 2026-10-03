@@ -26,6 +26,7 @@ from execution_testing import (
     Conditional,
     EIPChecklist,
     Environment,
+    FeeSystemContractRequest,
     Fork,
     GasConsumer,
     Hash,
@@ -34,6 +35,7 @@ from execution_testing import (
     Op,
     RecipientType,
     StateTestFiller,
+    SystemCallPhase,
     Transaction,
     TransactionException,
     TransactionReceipt,
@@ -48,6 +50,11 @@ from execution_testing import Macros as Om
 
 from ...prague.eip7702_set_code_tx.spec import Spec as Spec7702
 from .spec import ref_spec_7928
+from .test_block_access_lists_eip2935 import HISTORY_STORAGE_ADDRESS
+from .test_block_access_lists_eip4788 import (
+    BEACON_ROOTS_ADDRESS,
+    beacon_root_system_call_expectations,
+)
 
 REFERENCE_SPEC_GIT_PATH = ref_spec_7928.git_path
 REFERENCE_SPEC_VERSION = ref_spec_7928.version
@@ -1931,6 +1938,108 @@ def test_bal_system_address_coinbase_zero_tip(
             bob: Account(balance=5),
             SYSTEM_ADDRESS: Account.NONEXISTENT,
         },
+        genesis_environment=genesis_env,
+    )
+
+
+@pytest.mark.with_all_system_contracts
+def test_bal_system_contract_as_fee_recipient(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+    fork: Fork,
+    system_contract: Address,
+) -> None:
+    """
+    Ensure BAL records a system contract acting as fee recipient once, its
+    priority fee merged into the entry that holds its system-call accesses.
+    """
+    block_timestamp = 12
+    beacon_root = Hash(0xABCDEF)
+    queue_requests = {
+        request_class.system_contract_address: request_class
+        for request_class in fork.system_contract_request_types()
+        if issubclass(request_class, FeeSystemContractRequest)
+    }
+
+    storage_changes: list[BalStorageSlot]
+    storage_reads: list[int]
+    if system_contract == BEACON_ROOTS_ADDRESS:
+        storage_changes = beacon_root_system_call_expectations(
+            block_timestamp, beacon_root
+        )[BEACON_ROOTS_ADDRESS].storage_changes
+        storage_reads = []
+    elif system_contract == HISTORY_STORAGE_ADDRESS:
+        # Block 1 stores its parent's (genesis) hash in slot 0.
+        storage_changes = [BalStorageSlot(slot=0, validate_any_change=True)]
+        storage_reads = []
+    elif system_contract in queue_requests:
+        request_class = queue_requests[system_contract]
+        # The sweep of an empty queue reads its counters and writes nothing.
+        storage_changes = []
+        storage_reads = [
+            request_class.excess_slot,
+            request_class.count_slot,
+            request_class.queue_head_slot,
+            request_class.queue_tail_slot,
+        ]
+    elif (
+        fork.system_contract_call_phases()[system_contract]
+        is SystemCallPhase.NONE
+    ):
+        storage_changes = []
+        storage_reads = []
+    else:
+        raise ValueError(f"Unhandled system contract {system_contract}")
+
+    genesis_env = Environment(base_fee_per_gas=7)
+    base_fee_per_gas = fork.base_fee_per_gas_calculator()(
+        parent_base_fee_per_gas=int(genesis_env.base_fee_per_gas or 0),
+        parent_gas_used=0,
+        parent_gas_limit=genesis_env.gas_limit,
+    )
+    tip = 2
+    gas_used = fork.transaction_intrinsic_cost_calculator()(
+        recipient_type=RecipientType.EOA
+    )
+    fee = gas_used * tip
+
+    sender = pre.fund_eoa()
+    recipient = pre.fund_eoa()
+    tx = Transaction(
+        sender=sender,
+        to=recipient,
+        max_fee_per_gas=base_fee_per_gas + tip,
+        max_priority_fee_per_gas=tip,
+        expected_receipt=TransactionReceipt(gas_used=gas_used),
+    )
+
+    block = Block(
+        txs=[tx],
+        fee_recipient=system_contract,
+        timestamp=block_timestamp,
+        parent_beacon_block_root=beacon_root,
+        header_verify=Header(base_fee_per_gas=base_fee_per_gas),
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                system_contract: BalAccountExpectation(
+                    nonce_changes=[],
+                    balance_changes=[
+                        BalBalanceChange(
+                            block_access_index=1, post_balance=fee
+                        )
+                    ],
+                    code_changes=[],
+                    storage_changes=storage_changes,
+                    storage_reads=storage_reads,
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={system_contract: Account(balance=fee)},
         genesis_environment=genesis_env,
     )
 
