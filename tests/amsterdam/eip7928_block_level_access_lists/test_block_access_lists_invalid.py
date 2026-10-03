@@ -2067,10 +2067,6 @@ def test_bal_invalid_non_minimal_scalar_encoding(
     a matching hash and accepts. With the header committing to the
     payload RLP, a client that decodes leniently and hashes the bytes as
     received accepts instead.
-
-    A strict client may notice the bad scalar while decoding, or only
-    once the hash it derives from the payload disagrees with the header;
-    both verdicts reject the block, so both are accepted.
     """
     alice = pre.fund_eoa()
     oracle = pre.deploy_contract(code=Op.SSTORE(1, 1) + Op.SLOAD(2))
@@ -2117,8 +2113,11 @@ def test_bal_invalid_non_minimal_scalar_encoding(
             ),
         }
     )
+    exceptions = [BlockException.INVALID_BLOCK_ACCESS_LIST]
     if header_commits_to == "canonical_rlp":
         expectation = expectation.modify_rlp(encoder)
+        # The header commits to other bytes than the payload delivers.
+        exceptions.append(BlockException.INVALID_BLOCK_HASH)
     elif header_commits_to == "payload_rlp":
         expectation = expectation.modify(override_rlp(encoder))
     else:
@@ -2131,10 +2130,7 @@ def test_bal_invalid_non_minimal_scalar_encoding(
         blocks=[
             Block(
                 txs=[tx],
-                exception=[
-                    BlockException.INVALID_BLOCK_ACCESS_LIST,
-                    BlockException.INVALID_BLOCK_HASH,
-                ],
+                exception=exceptions,
                 expected_block_access_list=expectation,
             )
         ],
