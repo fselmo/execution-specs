@@ -53,6 +53,7 @@ from execution_testing import (
 from execution_testing import Macros as Om
 from execution_testing.base_types import HexNumber
 
+from ...amsterdam.eip7708_eth_transfer_logs.spec import transfer_log
 from ...cancun.eip4844_blobs.spec import Spec as Spec4844
 from ..eip7685_general_purpose_el_requests.test_multi_type_requests import (
     REQUEST_TYPE_BY_ADDRESS,
@@ -487,10 +488,7 @@ def test_set_code_to_tstore_available_at_correct_address(
     )
 
 
-@pytest.mark.parametrize(
-    "external_sendall_recipient",
-    [False, True],
-)
+@pytest.mark.parametrize("beneficiary", ["self", "external", "delegate"])
 @pytest.mark.parametrize(
     "balance",
     [0, 1],
@@ -498,23 +496,46 @@ def test_set_code_to_tstore_available_at_correct_address(
 def test_set_code_to_self_destruct(
     state_test: StateTestFiller,
     pre: Alloc,
-    external_sendall_recipient: bool,
+    fork: Fork,
+    beneficiary: str,
     balance: int,
 ) -> None:
-    """Test the executing self-destruct opcode in a set-code transaction."""
+    """
+    Test a delegated EOA running SELFDESTRUCT, which moves its balance to the
+    beneficiary but never deletes the EOA.
+    """
     auth_signer = pre.fund_eoa(balance)
-    if external_sendall_recipient:
-        recipient = pre.fund_eoa(0)
-    else:
+    recipient: Address
+    tx_data = b""
+    if beneficiary == "self":
         recipient = auth_signer
+        selfdestruct_code = Op.SELFDESTRUCT(recipient)
+    elif beneficiary == "external":
+        recipient = pre.fund_eoa(0)
+        selfdestruct_code = Op.SELFDESTRUCT(recipient)
+    elif beneficiary == "delegate":
+        # The delegate cannot embed its own address, so the tx passes it in.
+        selfdestruct_code = Op.SELFDESTRUCT(Op.CALLDATALOAD(0))
+    else:
+        raise ValueError(f"Unknown beneficiary: {beneficiary}")
 
     set_code_to_address = pre.deploy_contract(
-        Op.SSTORE(1, 1) + Op.SELFDESTRUCT(recipient)
+        Op.SSTORE(1, 1) + selfdestruct_code
     )
+    if beneficiary == "delegate":
+        recipient = set_code_to_address
+        tx_data = Hash(recipient, left_padding=True)
+
+    expected_logs = []
+    # EIP-7708: a nonzero SELFDESTRUCT transfer to another account logs a
+    # Transfer from the account running the code, here the EOA.
+    if fork.is_eip_enabled(7708) and recipient != auth_signer and balance > 0:
+        expected_logs.append(transfer_log(auth_signer, recipient, balance))
 
     tx = Transaction(
         to=auth_signer,
         value=0,
+        data=tx_data,
         authorization_list=[
             AuthorizationTuple(
                 address=set_code_to_address,
@@ -523,18 +544,22 @@ def test_set_code_to_self_destruct(
             ),
         ],
         sender=pre.fund_eoa(),
+        expected_receipt=TransactionReceipt(logs=expected_logs),
     )
 
-    post = {
+    post: dict[Address, Account] = {
         auth_signer: Account(
             nonce=1,
             code=Spec.delegation_designation(set_code_to_address),
             storage={1: 1},
-            balance=balance if not external_sendall_recipient else 0,
+            balance=balance if beneficiary == "self" else 0,
         ),
     }
 
-    if external_sendall_recipient and balance > 0:
+    if beneficiary == "delegate":
+        # The SSTORE ran in the EOA's storage, not the delegate's.
+        post[set_code_to_address] = Account(balance=balance, storage={})
+    elif beneficiary == "external" and balance > 0:
         post[recipient] = Account(balance=balance)
 
     state_test(
