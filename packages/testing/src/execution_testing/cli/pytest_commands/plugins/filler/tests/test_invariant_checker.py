@@ -76,9 +76,10 @@ def fill(pytester: pytest.Pytester, *args: str) -> pytest.RunResult:
     pytester.copy_example(
         name="src/execution_testing/cli/pytest_commands/pytest_ini_files/pytest-fill.ini"
     )
-    # In a second fill session in the same process, storage accesses made
-    # by system calls do not reach the tracer (cause unknown), which breaks
-    # the witness bounds, so each fill gets its own process.
+    # An in-process run restores `sys.modules` but not the `ethereum`
+    # package's `trace` attribute, so a second run's t8n installs its tracer
+    # on the first run's `ethereum.trace` while the EVM emits to a new one.
+    # Each fill gets its own process instead.
     return pytester.runpytest_subprocess(
         "-c",
         "pytest-fill.ini",
