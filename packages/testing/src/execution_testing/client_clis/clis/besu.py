@@ -391,6 +391,7 @@ class BesuExceptionMapper(ExceptionMapper):
         BlockException.INVALID_STATE_ROOT: (
             "World State Root does not match expected value"
         ),
+        BlockException.INVALID_GAS_USED: "gas used mismatch (header=",
     }
     mapping_regex = {
         BlockException.INVALID_REQUESTS: (
@@ -427,6 +428,13 @@ class BesuExceptionMapper(ExceptionMapper):
             r"blob gas used must be multiple of GAS_PER_BLOB|"
             r"block did not consume expected blob gas: header \d+, "
             r"transactions \d+"
+        ),
+        BlockException.INVALID_GASLIMIT: (
+            r"Invalid block header: gasLimit = \d+ is outside range"
+        ),
+        BlockException.INVALID_BASEFEE_PER_GAS: (
+            r"Invalid block header: basefee 0x[0-9a-f]+ does not equal "
+            r"expected basefee"
         ),
         TransactionException.INITCODE_SIZE_EXCEEDED: (
             r"transaction invalid Initcode size of \d+ exceeds "
