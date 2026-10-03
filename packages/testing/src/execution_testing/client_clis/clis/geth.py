@@ -184,7 +184,14 @@ class GethExceptionMapper(ExceptionMapper):
             # A pre-Amsterdam header carrying the field.
             r"invalid block access list hash: have [0-9a-f]+, expected nil|"
             # A pre-Cancun header carrying the field.
-            r"invalid (excessBlobGas|blobGasUsed): have \d+, expected nil"
+            r"invalid (excessBlobGas|blobGasUsed): have \d+, expected nil|"
+            # An Amsterdam header missing the field.
+            r"header is missing slotNumber|"
+            # The BAL hash position holds the slot number's empty string: an
+            # Amsterdam header missing the hash, or an earlier one carrying a
+            # slot number.
+            r"rlp: input string too short for common\.Hash, decoding into "
+            r"\(types\.Block\)\(types\.extblock\)\.Header\.BlockAccessListHash"
         ),
         BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
             r"block access list exceeds gas limit|"
