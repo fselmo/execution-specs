@@ -136,6 +136,10 @@ class RethExceptionMapper(ExceptionMapper):
             r"system contract .* has no code"
         ),
         BlockException.INCORRECT_BLOCK_FORMAT: (
+            # A fixed-size field decoded from the wrong length, such as an
+            # Amsterdam header missing its BAL hash.
+            r"unexpected length|"
+            r"missing slot number|"
             r"block access list hash mismatch|"
             r"BAL rejection: FinalHashMismatch"
         ),
