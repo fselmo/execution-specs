@@ -315,15 +315,6 @@ test-spec-properties *args: (_tmp "test-spec-properties")
         "$@" \
         tests_property
 
-# Run the Hypothesis property tests over spec components (with PyPy)
-[group('unit tests')]
-test-spec-properties-pypy *args: (_tmp "test-spec-properties-pypy")
-    uv run --python pypy3.11 --no-dev --group test pytest \
-        -n {{ xdist_workers }} \
-        --basetemp="{{ output_dir }}/test-spec-properties-pypy/tmp" \
-        "$@" \
-        tests_property
-
 # Run the testing package unit tests (with Python)
 [group('unit tests')]
 test-tests *args: (_tmp "test-tests")
