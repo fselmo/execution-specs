@@ -418,6 +418,16 @@ class BesuExceptionMapper(ExceptionMapper):
         BlockException.RLP_BLOCK_LIMIT_EXCEEDED: (
             r"Block size of \d+ bytes exceeds limit of \d+ bytes"
         ),
+        BlockException.INCORRECT_EXCESS_BLOB_GAS: (
+            # A header value above 2**63 - 1 prints as negative.
+            r"header excessBlobGas -?\d+ and calculated excessBlobGas \d+ "
+            r"do not match"
+        ),
+        BlockException.INCORRECT_BLOB_GAS_USED: (
+            r"blob gas used must be multiple of GAS_PER_BLOB|"
+            r"block did not consume expected blob gas: header \d+, "
+            r"transactions \d+"
+        ),
         TransactionException.INITCODE_SIZE_EXCEEDED: (
             r"transaction invalid Initcode size of \d+ exceeds "
             r"maximum size of \d+"
@@ -466,7 +476,10 @@ class BesuExceptionMapper(ExceptionMapper):
         ),
         TransactionException.TYPE_3_TX_MAX_BLOB_GAS_ALLOWANCE_EXCEEDED: (
             r"Blob transaction 0x[0-9a-f]+ exceeds "
-            r"block blob gas limit: \d+ > \d+"
+            r"block blob gas limit: \d+ > \d+|"
+            # Block import rejects the header's blob gas used, which counts
+            # the transaction's blobs, before it reaches the transaction.
+            r"blob gas used \d+ exceeds max \d+"
         ),
         TransactionException.TYPE_3_TX_BLOB_COUNT_EXCEEDED: (
             r"Blob transaction has too many blobs: \d+|"
