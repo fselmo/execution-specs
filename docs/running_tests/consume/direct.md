@@ -26,7 +26,7 @@ uv run consume direct --bin=<evm-binary> [OPTIONS]
 
 ## Rejection Reasons
 
-For block tests, `consume direct` also checks why the client rejected each invalid block: each error is mapped through the client's exception mapper and must match the fixture's `expectException`, as `consume engine` does for `validationError`. This needs a runner that lists its rejections in a `rejections` field of each JSON result (`[{"index", "hash", "error"}]`, with `index` the block's position in the fixture's `blocks`); with an older runner only the outcome is checked, and a warning says so. An error the mapper does not recognize fails the test with the raw message, which usually means the mapper needs a new entry. Besu is not checked yet, because its block-test errors do not name the failing rule.
+For block tests, `consume direct` also checks why the client rejected each invalid block: each error is mapped through the client's exception mapper and must match the fixture's `expectException`, as `consume engine` does for `validationError`. This needs a runner that lists its rejections in a `rejections` field of each JSON result (`[{"index", "hash", "error"}]`, with `index` the block's position in the fixture's `blocks`); with an older runner only the outcome is checked, and a warning says so. An error the mapper does not recognize fails the test with the raw message, which usually means the mapper needs a new entry. Besu's `evmtool` reports `rejections`, with the failing rule named in each error, from its runner branch [`lcc2/bal-runner-interface-v2`](https://github.com/fselmo/besu/tree/lcc2/bal-runner-interface-v2) on; with an earlier `evmtool` only the outcome is checked.
 
 ## Advantages
 
