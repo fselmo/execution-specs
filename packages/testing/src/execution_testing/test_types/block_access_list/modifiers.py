@@ -6,6 +6,7 @@ Lists in various ways for testing invalid block scenarios. They are composable
 and can be combined to create complex modifications.
 """
 
+from bisect import insort
 from typing import Any, Callable, List, Literal, Optional
 
 import ethereum_rlp as eth_rlp
@@ -433,7 +434,7 @@ def append_change(
     change: BalNonceChange | BalBalanceChange | BalCodeChange,
 ) -> Callable[[BlockAccessList], BlockAccessList]:
     """
-    Append a change to an account's field list.
+    Insert a change into an account's field list in block access index order.
 
     Generic function to add extraneous entries to nonce_changes,
     balance_changes, or code_changes fields. The field is inferred from the
@@ -456,9 +457,11 @@ def append_change(
             if account_change.address == account:
                 found_address = True
                 new_account = account_change.model_copy(deep=True)
-                # Get the field list and append the change
-                field_list = getattr(new_account, field)
-                field_list.append(change)
+                insort(
+                    getattr(new_account, field),
+                    change,
+                    key=lambda c: c.block_access_index,
+                )
                 new_root.append(new_account)
             else:
                 new_root.append(account_change)
@@ -481,13 +484,13 @@ def append_storage(
     read: bool = False,
 ) -> Callable[[BlockAccessList], BlockAccessList]:
     """
-    Append storage-related entries to an account.
+    Insert storage-related entries into an account in sorted order.
 
     Generic function for all storage operations:
-    - If read=True: appends to storage_reads
-    - If change provided and slot exists: appends to existing slot's
-      slot_changes
-    - If change provided and slot new: creates new BalStorageSlot
+    - If read=True: inserts into storage_reads by slot
+    - If change provided and slot exists: inserts into the slot's
+      slot_changes by block access index
+    - If change provided and slot new: inserts a new BalStorageSlot by slot
     """
 
     def transform(bal: BlockAccessList) -> BlockAccessList:
@@ -499,26 +502,27 @@ def append_storage(
                 new_account = account_change.model_copy(deep=True)
 
                 if read:
-                    # Append to storage_reads
-                    new_account.storage_reads.append(ZeroPaddedHexNumber(slot))
+                    insort(
+                        new_account.storage_reads, ZeroPaddedHexNumber(slot)
+                    )
                 elif change is not None:
-                    # Find if slot already exists
                     slot_found = False
                     for storage_slot in new_account.storage_changes:
                         if storage_slot.slot == slot:
-                            # Append to existing slot's slot_changes
-                            storage_slot.slot_changes.append(change)
+                            insort(
+                                storage_slot.slot_changes,
+                                change,
+                                key=lambda c: c.block_access_index,
+                            )
                             slot_found = True
                             break
 
                     if not slot_found:
-                        # Create new BalStorageSlot
-                        from . import BalStorageSlot
-
-                        new_storage_slot = BalStorageSlot(
-                            slot=slot, slot_changes=[change]
+                        insort(
+                            new_account.storage_changes,
+                            BalStorageSlot(slot=slot, slot_changes=[change]),
+                            key=lambda s: s.slot,
                         )
-                        new_account.storage_changes.append(new_storage_slot)
 
                 new_root.append(new_account)
             else:
@@ -538,22 +542,22 @@ def append_empty_slot(
     address: Address, slot: int
 ) -> Callable[[BlockAccessList], BlockAccessList]:
     """
-    Append an empty BalStorageSlot (no changes) to an account's
+    Insert an empty BalStorageSlot (no changes) by slot into an account's
     storage_changes. Used by invalid-BAL tests to simulate a malformed
     entry where a slot is recorded as changed but carries no actual change.
     """
 
     def transform(bal: BlockAccessList) -> BlockAccessList:
-        from . import BalStorageSlot
-
         found_address = False
         new_root = []
         for account_change in bal.root:
             if account_change.address == address:
                 found_address = True
                 new_account = account_change.model_copy(deep=True)
-                new_account.storage_changes.append(
-                    BalStorageSlot(slot=slot, slot_changes=[])
+                insort(
+                    new_account.storage_changes,
+                    BalStorageSlot(slot=slot, slot_changes=[]),
+                    key=lambda s: s.slot,
                 )
                 new_root.append(new_account)
             else:
