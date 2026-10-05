@@ -403,7 +403,7 @@ def append_account(
     account_change: BalAccountChange,
 ) -> Callable[[BlockAccessList], BlockAccessList]:
     """
-    Add an extraneous account at its sorted position by address.
+    Insert an extraneous account in address order, not at the end.
 
     Keeping the order leaves the extra account as the BAL's only defect;
     use `duplicate_account` or the reordering modifiers for those defects.
