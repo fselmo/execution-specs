@@ -510,7 +510,10 @@ class NethermindExceptionMapper(ExceptionMapper):
             r"Error decoding block access list:"
             r"|Error decoding block access list:"
             r"|Account changes were in incorrect order\."
-            r"|Unexpected length of integer value"
+            # Block import names no field, so a header that ends early reads
+            # like any RLP integer error; on the engine path that error is a
+            # transaction's, and has its own prefix.
+            r"|(?<!is not valid: )Unexpected length of integer value"
             # A header field present before its fork or missing after it.
             r"|NotAllowedBlobGasUsed: Cannot be set\."
             r"|BlockLevelAccessListHashNotEnabled:"
