@@ -205,7 +205,11 @@ def tx_data(
     )
 
     def transaction_data_floor_cost_calculator(tokens: int) -> int:
-        return fork_data_floor_cost_calculator(data=tokens_to_data(tokens))
+        return fork_data_floor_cost_calculator(
+            data=tokens_to_data(tokens),
+            contract_creation=contract_creating_tx,
+            access_list=access_list,
+        )
 
     # Start with zero data and check the difference in the gas calculator
     # between the intrinsic gas cost and the floor gas cost.
@@ -310,12 +314,18 @@ def tx_intrinsic_gas_cost_including_floor_data_cost(
 def tx_floor_data_cost(
     fork: Fork,
     tx_data: Bytes,
+    access_list: List[AccessList] | None,
+    contract_creating_tx: bool,
 ) -> int:
-    """Floor data cost for the given transaction data."""
+    """Floor data cost for the given transaction."""
     fork_data_floor_cost_calculator = (
         fork.transaction_data_floor_cost_calculator()
     )
-    return fork_data_floor_cost_calculator(data=tx_data)
+    return fork_data_floor_cost_calculator(
+        data=tx_data,
+        contract_creation=contract_creating_tx,
+        access_list=access_list,
+    )
 
 
 @pytest.fixture
@@ -334,32 +344,30 @@ def tx_gas_limit(
 
 @pytest.fixture
 def tx_error(
-    fork: Fork,
-    tx_data: Bytes,
-    access_list: List[AccessList] | None,
-    contract_creating_tx: bool,
+    data_test_type: DataTestType,
     tx_intrinsic_gas_cost_before_execution: int,
     tx_gas_limit: int,
     tx_gas_delta: int,
 ) -> TransactionException | None:
-    """
-    Transaction error, only expected if the gas delta is negative.
-
-    The exception names whichever threshold the gas limit misses: on some
-    forks the floor exceeds the intrinsic gas even for the data sized to
-    stay under it.
-    """
+    """Transaction error, only expected if the gas delta is negative."""
     if tx_gas_delta >= 0:
         return None
-    if tx_gas_limit < tx_intrinsic_gas_cost_before_execution:
+    # The data type names the threshold the gas limit misses; check it.
+    below_standard_cost = tx_gas_limit < tx_intrinsic_gas_cost_before_execution
+    if (
+        data_test_type
+        == DataTestType.FLOOR_GAS_COST_LESS_THAN_OR_EQUAL_TO_INTRINSIC_GAS
+    ):
+        assert below_standard_cost
         return TransactionException.INTRINSIC_GAS_TOO_LOW
-    tx_floor_cost = fork.transaction_data_floor_cost_calculator()(
-        data=tx_data,
-        access_list=access_list,
-        contract_creation=contract_creating_tx,
-    )
-    assert tx_gas_limit < tx_floor_cost
-    return TransactionException.INTRINSIC_GAS_BELOW_FLOOR_GAS_COST
+    elif (
+        data_test_type
+        == DataTestType.FLOOR_GAS_COST_GREATER_THAN_INTRINSIC_GAS
+    ):
+        assert not below_standard_cost
+        return TransactionException.INTRINSIC_GAS_BELOW_FLOOR_GAS_COST
+    else:
+        raise ValueError(f"Unknown data test type: {data_test_type}")
 
 
 @pytest.fixture
