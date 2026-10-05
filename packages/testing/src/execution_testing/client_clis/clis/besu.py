@@ -382,12 +382,6 @@ class BesuExceptionMapper(ExceptionMapper):
         BlockException.INVALID_BLOCK_TIMESTAMP_OLDER_THAN_PARENT: (
             "block timestamp not greater than parent"
         ),
-        BlockException.INVALID_LOG_BLOOM: (
-            "failed to validate output of imported block"
-        ),
-        BlockException.INVALID_RECEIPTS_ROOT: (
-            "failed to validate output of imported block"
-        ),
         BlockException.INVALID_STATE_ROOT: (
             "World State Root does not match expected value"
         ),
@@ -400,6 +394,16 @@ class BesuExceptionMapper(ExceptionMapper):
         ),
     }
     mapping_regex = {
+        # Besu's runner appends the failing rule in brackets; when that
+        # rule is the gas used, the output is not the bloom or receipts.
+        BlockException.INVALID_LOG_BLOOM: (
+            r"failed to validate output of imported block"
+            r"(?!.*gas used mismatch)"
+        ),
+        BlockException.INVALID_RECEIPTS_ROOT: (
+            r"failed to validate output of imported block"
+            r"(?!.*gas used mismatch)"
+        ),
         BlockException.INVALID_REQUESTS: (
             r"Invalid execution requests|Requests hash mismatch, "
             r"calculated: 0x[0-9a-f]+ header: 0x[0-9a-f]+"
