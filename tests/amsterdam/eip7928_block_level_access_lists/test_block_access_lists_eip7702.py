@@ -1858,9 +1858,8 @@ def test_bal_7702_delegation_to_coinbase(
     fork: Fork,
 ) -> None:
     """
-    Ensure BAL records the coinbase once when a called EOA delegates to it:
-    the delegation-target load, pinned by the gas used, and the priority fee
-    share one entry.
+    Loading the delegation target and receiving the priority fee both touch
+    the coinbase, and both land in one entry.
     """
     coinbase = pre.fund_eoa(amount=0)
     sender = pre.fund_eoa()

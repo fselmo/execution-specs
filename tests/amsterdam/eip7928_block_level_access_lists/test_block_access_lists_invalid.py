@@ -2166,11 +2166,9 @@ def test_bal_invalid_zero_scalar_encoding(
     alice = pre.fund_eoa()
 
     target: Address
-    txs: list[Transaction]
     account_expectation: BalAccountExpectation
     if field == "storage_slot":
         target = pre.deploy_contract(code=Op.SSTORE(0, 1))
-        txs = [Transaction(sender=alice, to=target)]
         account_expectation = BalAccountExpectation(
             storage_changes=[
                 BalStorageSlot(
@@ -2183,7 +2181,6 @@ def test_bal_invalid_zero_scalar_encoding(
         )
     elif field == "storage_value":
         target = pre.deploy_contract(code=Op.SSTORE(1, 0), storage={1: 1})
-        txs = [Transaction(sender=alice, to=target)]
         account_expectation = BalAccountExpectation(
             storage_changes=[
                 BalStorageSlot(
@@ -2196,7 +2193,6 @@ def test_bal_invalid_zero_scalar_encoding(
         )
     elif field == "storage_read":
         target = pre.deploy_contract(code=Op.SLOAD(0))
-        txs = [Transaction(sender=alice, to=target)]
         account_expectation = BalAccountExpectation(
             storage_changes=[], storage_reads=[0]
         )
@@ -2206,7 +2202,6 @@ def test_bal_invalid_zero_scalar_encoding(
             code=Op.CALL(gas=Op.GAS, address=sink, value=Op.SELFBALANCE),
             balance=1,
         )
-        txs = [Transaction(sender=alice, to=target)]
         account_expectation = BalAccountExpectation(
             balance_changes=[
                 BalBalanceChange(block_access_index=1, post_balance=0)
@@ -2215,12 +2210,15 @@ def test_bal_invalid_zero_scalar_encoding(
     elif field == "storage_block_access_index":
         # Only a pre-execution system call records changes at index 0.
         target = BEACON_ROOTS_ADDRESS
-        txs = []
         account_expectation = beacon_root_system_call_expectations(
             block_timestamp, beacon_root
         )[BEACON_ROOTS_ADDRESS]
     else:
         raise ValueError(f"Unhandled field: {field}")
+
+    txs: list[Transaction] = []
+    if target != BEACON_ROOTS_ADDRESS:
+        txs.append(Transaction(sender=alice, to=target))
 
     encoder = encode_scalar_non_minimally(target, field)
     expectation = BlockAccessListExpectation(
