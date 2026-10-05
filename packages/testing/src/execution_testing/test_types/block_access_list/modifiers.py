@@ -6,7 +6,6 @@ Lists in various ways for testing invalid block scenarios. They are composable
 and can be combined to create complex modifications.
 """
 
-from bisect import insort
 from typing import Any, Callable, List, Literal, Optional
 
 import ethereum_rlp as eth_rlp
@@ -26,6 +25,7 @@ from . import (
     BalStorageSlot,
     BlockAccessList,
 )
+from .expectations import apply_after_sort
 
 BalScalarField = Literal[
     "storage_slot",
@@ -397,17 +397,16 @@ def swap_bal_indices(
 
         return BlockAccessList(root=new_root)
 
-    return transform
+    return apply_after_sort(transform)
 
 
 def append_account(
     account_change: BalAccountChange,
 ) -> Callable[[BlockAccessList], BlockAccessList]:
     """
-    Insert an extraneous account in address order, not at the end.
+    Add an extraneous account; `modify` puts it in address order.
 
-    Keeping the order leaves the extra account as the BAL's only defect;
-    use `duplicate_account` or the reordering modifiers for those defects.
+    Use `duplicate_account` to add an account that is already listed.
     """
 
     def transform(bal: BlockAccessList) -> BlockAccessList:
@@ -417,14 +416,7 @@ def append_account(
                 f"Address {new_address} is already in the BAL; use "
                 "duplicate_account to add a duplicate"
             )
-        new_root = list(bal.root)
-        insert_idx = len(new_root)
-        for i, existing in enumerate(new_root):
-            if existing.address > new_address:
-                insert_idx = i
-                break
-        new_root.insert(insert_idx, account_change)
-        return BlockAccessList(root=new_root)
+        return BlockAccessList(root=[*bal.root, account_change])
 
     return transform
 
@@ -434,7 +426,7 @@ def append_change(
     change: BalNonceChange | BalBalanceChange | BalCodeChange,
 ) -> Callable[[BlockAccessList], BlockAccessList]:
     """
-    Insert a change into an account's field list in block access index order.
+    Append a change to an account's field list.
 
     Generic function to add extraneous entries to nonce_changes,
     balance_changes, or code_changes fields. The field is inferred from the
@@ -457,11 +449,7 @@ def append_change(
             if account_change.address == account:
                 found_address = True
                 new_account = account_change.model_copy(deep=True)
-                insort(
-                    getattr(new_account, field),
-                    change,
-                    key=lambda c: c.block_access_index,
-                )
+                getattr(new_account, field).append(change)
                 new_root.append(new_account)
             else:
                 new_root.append(account_change)
@@ -484,13 +472,13 @@ def append_storage(
     read: bool = False,
 ) -> Callable[[BlockAccessList], BlockAccessList]:
     """
-    Insert storage-related entries into an account in sorted order.
+    Append storage-related entries to an account.
 
     Generic function for all storage operations:
-    - If read=True: inserts into storage_reads by slot
-    - If change provided and slot exists: inserts into the slot's
-      slot_changes by block access index
-    - If change provided and slot new: inserts a new BalStorageSlot by slot
+    - If read=True: appends to storage_reads
+    - If change provided and slot exists: appends to existing slot's
+      slot_changes
+    - If change provided and slot new: creates new BalStorageSlot
     """
 
     def transform(bal: BlockAccessList) -> BlockAccessList:
@@ -502,26 +490,18 @@ def append_storage(
                 new_account = account_change.model_copy(deep=True)
 
                 if read:
-                    insort(
-                        new_account.storage_reads, ZeroPaddedHexNumber(slot)
-                    )
+                    new_account.storage_reads.append(ZeroPaddedHexNumber(slot))
                 elif change is not None:
                     slot_found = False
                     for storage_slot in new_account.storage_changes:
                         if storage_slot.slot == slot:
-                            insort(
-                                storage_slot.slot_changes,
-                                change,
-                                key=lambda c: c.block_access_index,
-                            )
+                            storage_slot.slot_changes.append(change)
                             slot_found = True
                             break
 
                     if not slot_found:
-                        insort(
-                            new_account.storage_changes,
-                            BalStorageSlot(slot=slot, slot_changes=[change]),
-                            key=lambda s: s.slot,
+                        new_account.storage_changes.append(
+                            BalStorageSlot(slot=slot, slot_changes=[change])
                         )
 
                 new_root.append(new_account)
@@ -542,7 +522,7 @@ def append_empty_slot(
     address: Address, slot: int
 ) -> Callable[[BlockAccessList], BlockAccessList]:
     """
-    Insert an empty BalStorageSlot (no changes) by slot into an account's
+    Append an empty BalStorageSlot (no changes) to an account's
     storage_changes. Used by invalid-BAL tests to simulate a malformed
     entry where a slot is recorded as changed but carries no actual change.
     """
@@ -554,10 +534,8 @@ def append_empty_slot(
             if account_change.address == address:
                 found_address = True
                 new_account = account_change.model_copy(deep=True)
-                insort(
-                    new_account.storage_changes,
-                    BalStorageSlot(slot=slot, slot_changes=[]),
-                    key=lambda s: s.slot,
+                new_account.storage_changes.append(
+                    BalStorageSlot(slot=slot, slot_changes=[])
                 )
                 new_root.append(new_account)
             else:
@@ -899,7 +877,7 @@ def reverse_accounts() -> Callable[[BlockAccessList], BlockAccessList]:
     def transform(bal: BlockAccessList) -> BlockAccessList:
         return BlockAccessList(root=list(reversed(bal.root)))
 
-    return transform
+    return apply_after_sort(transform)
 
 
 def sort_accounts_by_address() -> Callable[[BlockAccessList], BlockAccessList]:
@@ -929,7 +907,7 @@ def reorder_accounts(
         new_root = [bal.root[i] for i in indices]
         return BlockAccessList(root=new_root)
 
-    return transform
+    return apply_after_sort(transform)
 
 
 def _reverse_account_field(
@@ -960,7 +938,7 @@ def _reverse_account_field(
 
         return BlockAccessList(root=new_root)
 
-    return transform
+    return apply_after_sort(transform)
 
 
 def reverse_storage_slots(
@@ -1032,7 +1010,7 @@ def reverse_slot_changes(
 
         return BlockAccessList(root=new_root)
 
-    return transform
+    return apply_after_sort(transform)
 
 
 def clear_all() -> Callable[[BlockAccessList], BlockAccessList]:
@@ -1136,7 +1114,7 @@ def override_rlp(
     def transform(bal: BlockAccessList) -> BlockAccessList:
         return bal.with_rlp_override(encoder(bal))
 
-    return transform
+    return apply_after_sort(transform)
 
 
 __all__ = [

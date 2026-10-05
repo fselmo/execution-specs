@@ -14,6 +14,7 @@ from execution_testing.test_types.block_access_list import (
     BalStorageChange,
     BalStorageSlot,
     BlockAccessList,
+    BlockAccessListExpectation,
 )
 from execution_testing.test_types.block_access_list.modifiers import (
     BalScalarField,
@@ -38,6 +39,7 @@ from execution_testing.test_types.block_access_list.modifiers import (
     remove_nonces,
     remove_storage_read,
     reorder_accounts,
+    reverse_accounts,
     reverse_balance_changes,
     reverse_code_changes,
     reverse_nonce_changes,
@@ -100,6 +102,18 @@ def test_duplicate_account_missing_raises() -> None:
         duplicate_account(CONTRACT)(bal)
 
 
+def modified(
+    bal: BlockAccessList,
+    *modifiers: Callable[[BlockAccessList], BlockAccessList],
+) -> BlockAccessList:
+    """Apply modifiers the way a test's `modify` call does."""
+    return (
+        BlockAccessListExpectation()
+        .modify(*modifiers)
+        .modify_if_invalid_test(bal)
+    )
+
+
 @pytest.mark.parametrize(
     "new_address,expected_order",
     [
@@ -113,8 +127,10 @@ def test_append_account_keeps_address_order(
     new_address: Address,
     expected_order: list[int],
 ) -> None:
-    """Insert the new account where address order puts it."""
-    result = append_account(BalAccountChange(address=new_address))(sample_bal)
+    """Put the new account where address order puts it."""
+    result = modified(
+        sample_bal, append_account(BalAccountChange(address=new_address))
+    )
     assert [a.address for a in result.root] == [
         Address(a) for a in expected_order
     ]
@@ -153,8 +169,8 @@ def test_append_change_keeps_index_order(
     change: BalNonceChange | BalBalanceChange | BalCodeChange,
     field: str,
 ) -> None:
-    """Insert the change before ALICE's existing change at index 1."""
-    result = append_change(ALICE, change)(sample_bal)
+    """Put the change before ALICE's existing change at index 1."""
+    result = modified(sample_bal, append_change(ALICE, change))
     alice = [a for a in result.root if a.address == ALICE][0]
     indices = [c.block_access_index for c in getattr(alice, field)]
     assert indices == [0, 1]
@@ -200,8 +216,8 @@ def test_append_storage_keeps_order(
     listed: Callable[[BalAccountChange], list[int]],
     expected: list[int],
 ) -> None:
-    """Insert into CONTRACT's slots, slot changes or reads in sort order."""
-    result = modifier(sample_bal)
+    """Put CONTRACT's new slot, slot change or read in sort order."""
+    result = modified(sample_bal, modifier)
     contract = [a for a in result.root if a.address == CONTRACT][0]
     assert listed(contract) == expected
 
@@ -209,11 +225,21 @@ def test_append_storage_keeps_order(
 def test_append_empty_slot_keeps_slot_order(
     sample_bal: BlockAccessList,
 ) -> None:
-    """Insert the empty slot before CONTRACT's existing slot 1."""
-    result = append_empty_slot(CONTRACT, slot=0)(sample_bal)
+    """Put the empty slot before CONTRACT's existing slot 1."""
+    result = modified(sample_bal, append_empty_slot(CONTRACT, slot=0))
     contract = [a for a in result.root if a.address == CONTRACT][0]
     assert [s.slot for s in contract.storage_changes] == [0, 1]
     assert contract.storage_changes[0].slot_changes == []
+
+
+def test_order_defect_survives_the_sort(sample_bal: BlockAccessList) -> None:
+    """Apply an order defect after the sort, whatever its position."""
+    result = modified(
+        sample_bal,
+        reverse_accounts(),
+        append_account(BalAccountChange(address=Address(0xB))),
+    )
+    assert [a.address for a in result.root] == [CONTRACT, Address(0xB), ALICE]
 
 
 def test_duplicate_nonce_change(sample_bal: BlockAccessList) -> None:
