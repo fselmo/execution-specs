@@ -352,15 +352,6 @@ class NethermindExceptionMapper(ExceptionMapper):
         TransactionException.INVALID_SIGNATURE_VRS: (
             "InvalidTxSignature: Signature is invalid."
         ),
-        TransactionException.TYPE_1_TX_PRE_FORK: (
-            "InvalidTxType: Transaction type in Custom is not supported"
-        ),
-        TransactionException.TYPE_2_TX_PRE_FORK: (
-            "InvalidTxType: Transaction type in Custom is not supported"
-        ),
-        TransactionException.TYPE_3_TX_PRE_FORK: (
-            "InvalidTxType: Transaction type in Custom is not supported"
-        ),
         TransactionException.TYPE_3_TX_ZERO_BLOBS: (
             "blob transaction must have at least 1 blob"
         ),
@@ -376,15 +367,16 @@ class NethermindExceptionMapper(ExceptionMapper):
         TransactionException.TYPE_4_TX_CONTRACT_CREATION: (
             "EIP-7702 transaction cannot be used to create contract"
         ),
-        TransactionException.TYPE_4_TX_PRE_FORK: (
-            "InvalidTxType: Transaction type in Custom is not supported"
-        ),
         BlockException.INCORRECT_BLOB_GAS_USED: (
             "HeaderBlobGasMismatch: "
             "Blob gas in header does not match calculated"
         ),
         BlockException.INVALID_REQUESTS: (
             "InvalidRequestsHash: Requests hash mismatch in block"
+        ),
+        BlockException.INVALID_GAS_USED: (
+            "HeaderGasUsedMismatch: "
+            "Gas used in header does not match calculated"
         ),
         BlockException.INVALID_GAS_USED_ABOVE_LIMIT: (
             "ExceededGasLimit: Gas used exceeds gas limit."
@@ -420,12 +412,29 @@ class NethermindExceptionMapper(ExceptionMapper):
         BlockException.INVALID_STATE_ROOT: (
             "InvalidStateRoot: State root in header does not match"
         ),
+        BlockException.INVALID_WITHDRAWALS_ROOT: "InvalidWithdrawalsRoot:",
+        BlockException.RLP_STRUCTURES_ENCODING: (
+            "Unexpected length of integer value"
+        ),
         BlockException.GAS_USED_OVERFLOW: ("Block gas limit exceeded"),
         BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
             "BlockAccessListGasLimitExceeded:"
         ),
     }
     mapping_regex = {
+        # The message names the fork the block was validated under.
+        TransactionException.TYPE_1_TX_PRE_FORK: (
+            r"InvalidTxType: Transaction type in [\w ]+ is not supported"
+        ),
+        TransactionException.TYPE_2_TX_PRE_FORK: (
+            r"InvalidTxType: Transaction type in [\w ]+ is not supported"
+        ),
+        TransactionException.TYPE_3_TX_PRE_FORK: (
+            r"InvalidTxType: Transaction type in [\w ]+ is not supported"
+        ),
+        TransactionException.TYPE_4_TX_PRE_FORK: (
+            r"InvalidTxType: Transaction type in [\w ]+ is not supported"
+        ),
         # In-range r that is not an x-coordinate on the curve leaves the
         # transaction without a recovered sender.
         TransactionException.INVALID_SIGNATURE_VRS: (
@@ -490,11 +499,25 @@ class NethermindExceptionMapper(ExceptionMapper):
             r"|could not be parsed as a block: "
             r"Error decoding block access list:"
             r"|Error decoding block access list:"
+            # Block import reports the BAL decoder's message bare.
+            r"|(Balance|Nonce|Code|Storage) changes were in incorrect order\."
+            r"|Storage reads were in incorrect order\."
+            r"|Invalid storage read, already in storage changes\."
+            r"|Empty storage_changes for slot;"
         ),
         BlockException.INCORRECT_BLOCK_FORMAT: (
             r"could not be parsed as a block: "
             r"Error decoding block access list:"
             r"|Error decoding block access list:"
+            r"|Account changes were in incorrect order\."
+            # Block import names no field, so a header that ends early reads
+            # like any RLP integer error; on the engine path that error is a
+            # transaction's, and has its own prefix.
+            r"|(?<!is not valid: )Unexpected length of integer value"
+            # A header field present before its fork or missing after it.
+            r"|NotAllowedBlobGasUsed: Cannot be set\."
+            r"|BlockLevelAccessListHashNotEnabled:"
+            r"|MissingSlotNumber: Must be present in block header\."
         ),
         TransactionException.GAS_ALLOWANCE_EXCEEDED: (
             r"TxGasLimitCapExceeded:"

@@ -382,17 +382,28 @@ class BesuExceptionMapper(ExceptionMapper):
         BlockException.INVALID_BLOCK_TIMESTAMP_OLDER_THAN_PARENT: (
             "block timestamp not greater than parent"
         ),
-        BlockException.INVALID_LOG_BLOOM: (
-            "failed to validate output of imported block"
-        ),
-        BlockException.INVALID_RECEIPTS_ROOT: (
-            "failed to validate output of imported block"
-        ),
         BlockException.INVALID_STATE_ROOT: (
             "World State Root does not match expected value"
         ),
+        BlockException.INVALID_GAS_USED: "gas used mismatch (header=",
+        # Besu logs a withdrawals root mismatch as a "transaction root
+        # mismatch" without a block id; a real transactions root mismatch
+        # reads "Invalid block 1 (0x...): transaction root mismatch".
+        BlockException.INVALID_WITHDRAWALS_ROOT: (
+            "Invalid block: transaction root mismatch"
+        ),
     }
     mapping_regex = {
+        # Besu's runner appends the failing rule in brackets; when that
+        # rule is the gas used, the output is not the bloom or receipts.
+        BlockException.INVALID_LOG_BLOOM: (
+            r"failed to validate output of imported block"
+            r"(?!.*gas used mismatch)"
+        ),
+        BlockException.INVALID_RECEIPTS_ROOT: (
+            r"failed to validate output of imported block"
+            r"(?!.*gas used mismatch)"
+        ),
         BlockException.INVALID_REQUESTS: (
             r"Invalid execution requests|Requests hash mismatch, "
             r"calculated: 0x[0-9a-f]+ header: 0x[0-9a-f]+"
@@ -417,6 +428,23 @@ class BesuExceptionMapper(ExceptionMapper):
         ),
         BlockException.RLP_BLOCK_LIMIT_EXCEEDED: (
             r"Block size of \d+ bytes exceeds limit of \d+ bytes"
+        ),
+        BlockException.INCORRECT_EXCESS_BLOB_GAS: (
+            # A header value above 2**63 - 1 prints as negative.
+            r"header excessBlobGas -?\d+ and calculated excessBlobGas \d+ "
+            r"do not match"
+        ),
+        BlockException.INCORRECT_BLOB_GAS_USED: (
+            r"blob gas used must be multiple of GAS_PER_BLOB|"
+            r"block did not consume expected blob gas: header \d+, "
+            r"transactions \d+"
+        ),
+        BlockException.INVALID_GASLIMIT: (
+            r"Invalid block header: gasLimit = \d+ is outside range"
+        ),
+        BlockException.INVALID_BASEFEE_PER_GAS: (
+            r"Invalid block header: basefee 0x[0-9a-f]+ does not equal "
+            r"expected basefee"
         ),
         TransactionException.INITCODE_SIZE_EXCEEDED: (
             r"transaction invalid Initcode size of \d+ exceeds "
@@ -466,7 +494,10 @@ class BesuExceptionMapper(ExceptionMapper):
         ),
         TransactionException.TYPE_3_TX_MAX_BLOB_GAS_ALLOWANCE_EXCEEDED: (
             r"Blob transaction 0x[0-9a-f]+ exceeds "
-            r"block blob gas limit: \d+ > \d+"
+            r"block blob gas limit: \d+ > \d+|"
+            # Block import rejects the header's blob gas used, which counts
+            # the transaction's blobs, before it reaches the transaction.
+            r"blob gas used \d+ exceeds max \d+"
         ),
         TransactionException.TYPE_3_TX_BLOB_COUNT_EXCEEDED: (
             r"Blob transaction has too many blobs: \d+|"
