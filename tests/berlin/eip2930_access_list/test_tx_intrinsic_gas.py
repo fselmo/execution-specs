@@ -178,24 +178,33 @@ def test_tx_intrinsic_gas(
     intrinsic_gas_cost = intrinsic_gas_cost_calculator(
         calldata=data, access_list=access_list
     )
+    gas_limit = intrinsic_gas_cost + (-1 if below_intrinsic else 0)
 
     exception: List[TransactionException] | TransactionException | None = None
     if below_intrinsic:
-        data_floor_gas_cost_calculator = (
-            fork.transaction_data_floor_cost_calculator()
+        standard_gas_cost = intrinsic_gas_cost_calculator(
+            calldata=data,
+            access_list=access_list,
+            return_cost_deducted_prior_execution=True,
         )
-        data_floor_gas_cost = data_floor_gas_cost_calculator(data=data)
-        if data_floor_gas_cost > intrinsic_gas_cost:
-            exception = TransactionException.INTRINSIC_GAS_BELOW_FLOOR_GAS_COST
-        elif data_floor_gas_cost == intrinsic_gas_cost:
+        data_floor_gas_cost = fork.transaction_data_floor_cost_calculator()(
+            data=data, access_list=access_list
+        )
+        below_standard = gas_limit < standard_gas_cost
+        below_floor = gas_limit < data_floor_gas_cost
+        if below_standard and below_floor:
             # Depending on the implementation, client might raise either
             # exception.
             exception = [
                 TransactionException.INTRINSIC_GAS_TOO_LOW,
                 TransactionException.INTRINSIC_GAS_BELOW_FLOOR_GAS_COST,
             ]
-        else:
+        elif below_standard:
             exception = TransactionException.INTRINSIC_GAS_TOO_LOW
+        elif below_floor:
+            exception = TransactionException.INTRINSIC_GAS_BELOW_FLOOR_GAS_COST
+        else:
+            raise ValueError("gas limit is not below either threshold")
 
     tx = Transaction(
         ty=tx_type,
@@ -203,7 +212,7 @@ def test_tx_intrinsic_gas(
         to=pre.deploy_contract(code=Op.SSTORE(0, Op.ADD(1, 1))),
         data=data,
         access_list=access_list,
-        gas_limit=intrinsic_gas_cost + (-1 if below_intrinsic else 0),
+        gas_limit=gas_limit,
         error=exception,
         protected=True,
     )

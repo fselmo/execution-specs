@@ -861,26 +861,37 @@ def test_create_tx_below_total_intrinsic(
     intrinsic is entirely execution:
     ``fork.transaction_intrinsic_cost_calculator()(contract_creation=True,
     calldata=initcode)``. Pinning ``gas_limit`` at ``intrinsic - 1`` must
-    be rejected as intrinsic-gas-too-low, mirroring the set_code case in
-    ``test_set_code_tx_below_total_intrinsic``.
+    be rejected: as too low, or as below the floor when the calldata
+    floor is the higher of the two.
 
     This now overlaps ``test_create_tx_intrinsic_gas_boundary``
     (``gas_delta=-1``), but additionally sweeps the initcode so the
     per-word init-code cost folded into the execution intrinsic is
     exercised.
     """
-    intrinsic = fork.transaction_intrinsic_cost_calculator()(
+    intrinsic_cost_calculator = fork.transaction_intrinsic_cost_calculator()
+    intrinsic = intrinsic_cost_calculator(
         contract_creation=True,
         calldata=initcode,
     )
+    standard_cost = intrinsic_cost_calculator(
+        contract_creation=True,
+        calldata=initcode,
+        return_cost_deducted_prior_execution=True,
+    )
+    gas_limit = intrinsic - 1
+    if gas_limit < standard_cost:
+        error = TransactionException.INTRINSIC_GAS_TOO_LOW
+    else:
+        error = TransactionException.INTRINSIC_GAS_BELOW_FLOOR_GAS_COST
 
     sender = pre.fund_eoa()
     tx = Transaction(
         to=None,
         data=initcode,
-        gas_limit=intrinsic - 1,
+        gas_limit=gas_limit,
         sender=sender,
-        error=TransactionException.INTRINSIC_GAS_TOO_LOW,
+        error=error,
     )
 
     post = {
