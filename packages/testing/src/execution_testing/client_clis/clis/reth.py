@@ -140,6 +140,9 @@ class RethExceptionMapper(ExceptionMapper):
             # Amsterdam header missing its BAL hash.
             r"unexpected length|"
             r"missing slot number|"
+            # A header field present before its fork.
+            r"unexpected block access list hash|"
+            r"unexpected blob gas used|"
             # alloy-rlp's bare error for an integer wider than its field, such
             # as a Cancun header missing a blob field so the parent beacon
             # block root lands in it.
