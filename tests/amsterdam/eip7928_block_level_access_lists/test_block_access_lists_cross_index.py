@@ -9,6 +9,8 @@ Includes tests for system contracts (withdrawal/consolidation) cross-index
 tracking and NOOP filtering behavior.
 """
 
+from typing import Type
+
 import pytest
 from execution_testing import (
     Account,
@@ -25,7 +27,9 @@ from execution_testing import (
     BlockAccessListExpectation,
     BlockchainTestFiller,
     Bytecode,
+    Bytes,
     ConsolidationRequest,
+    FeeSystemContractRequest,
     Fork,
     Initcode,
     Op,
@@ -756,6 +760,120 @@ def test_bal_same_index_call_keeps_one_nonce_and_code_change(
                 balance=0, storage={code_size_slot: len(deploy_code)}
             ),
             created: Account(nonce=1, code=deploy_code, balance=endowment),
+        },
+    )
+
+
+SYSTEM_ADDRESS_BALANCE = 7
+
+
+@pytest.mark.parametrize(
+    "access_code,result,value",
+    [
+        pytest.param(
+            Op.BALANCE(Op.CALLER), SYSTEM_ADDRESS_BALANCE, 0, id="balance"
+        ),
+        pytest.param(Op.EXTCODESIZE(Op.CALLER), 0, 0, id="extcodesize"),
+        pytest.param(
+            Op.EXTCODEHASH(Op.CALLER),
+            Bytes().keccak256(),
+            0,
+            id="extcodehash",
+        ),
+        pytest.param(
+            Op.EXTCODECOPY(Op.CALLER, 0, 0, 32) + Op.MLOAD(0),
+            0,
+            0,
+            id="extcodecopy",
+        ),
+        pytest.param(Op.CALL(address=Op.CALLER), 1, 0, id="call"),
+        pytest.param(Op.STATICCALL(address=Op.CALLER), 1, 0, id="staticcall"),
+        pytest.param(
+            Op.CALL(address=Op.CALLER, value=1), 1, 1, id="call_with_value"
+        ),
+    ],
+)
+@pytest.mark.with_all_system_contract_request_types(
+    selector=lambda cls: issubclass(cls, FeeSystemContractRequest)
+)
+@pytest.mark.pre_alloc_mutable()
+def test_bal_system_call_accesses_system_address(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+    fork: Fork,
+    request_class: Type[FeeSystemContractRequest],
+    access_code: Bytecode,
+    result: int,
+    value: int,
+) -> None:
+    """
+    Ensure a system call whose code accesses `SYSTEM_ADDRESS` lists it in
+    the BAL: being the system caller does not exclude it once the call
+    itself reads or pays the account.
+
+    The other request predeploys keep their code and run at the same
+    index without touching it.
+    """
+    predeploy = request_class.system_contract_address
+    assert predeploy in _system_contracts_called(
+        fork, SystemCallPhase.AFTER_TRANSACTIONS
+    ), f"{request_class.__name__} is no longer called after transactions"
+
+    pre.fund_address(SYSTEM_ADDRESS, amount=SYSTEM_ADDRESS_BALANCE)
+    # The access's result overwrites a sentinel, so a zero result is still
+    # a recorded change.
+    result_slot = 0
+    pre[predeploy] = Account(
+        balance=value,
+        code=Op.SSTORE(result_slot, access_code),
+        storage={result_slot: 0xDEAD},
+    )
+
+    system_address_balance = SYSTEM_ADDRESS_BALANCE + value
+    if value:
+        system_address_expectation = BalAccountExpectation(
+            balance_changes=[
+                BalBalanceChange(
+                    block_access_index=1, post_balance=system_address_balance
+                )
+            ],
+        )
+        predeploy_balance_changes = [
+            BalBalanceChange(block_access_index=1, post_balance=0)
+        ]
+    else:
+        system_address_expectation = BalAccountExpectation.empty()
+        predeploy_balance_changes = []
+
+    blockchain_test(
+        pre=pre,
+        blocks=[
+            Block(
+                txs=[],
+                expected_block_access_list=BlockAccessListExpectation(
+                    account_expectations={
+                        predeploy: BalAccountExpectation(
+                            storage_changes=[
+                                BalStorageSlot(
+                                    slot=result_slot,
+                                    slot_changes=[
+                                        BalStorageChange(
+                                            block_access_index=1,
+                                            post_value=result,
+                                        )
+                                    ],
+                                )
+                            ],
+                            balance_changes=predeploy_balance_changes,
+                        ),
+                        SYSTEM_ADDRESS: system_address_expectation,
+                    }
+                ),
+            )
+        ],
+        post={
+            predeploy: Account(balance=0, storage={result_slot: result}),
+            SYSTEM_ADDRESS: Account(balance=system_address_balance),
         },
     )
 
