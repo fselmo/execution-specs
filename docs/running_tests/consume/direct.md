@@ -8,6 +8,7 @@ uv run consume direct --bin=<evm-binary> [OPTIONS]
 
 - `--bin EVM_BIN`: Path to an evm executable that can process `StateTestFixture` and/or `BlockTestFixture` formats.
 - `--traces`: Collect execution traces from the evm executable.
+- `--disable-strict-exception-matching CLIENTS_OR_FORKS`: Comma-separated client names or forks for which a block rejected for an unexpected reason only warns (see [Rejection Reasons](#rejection-reasons)).
 
 !!! warning "Limited Client Support"
 
@@ -22,6 +23,10 @@ uv run consume direct --bin=<evm-binary> [OPTIONS]
 | Besu | `evmtool` | `state-test` | `block-test` |
 | Nethermind | `nethtest` | `nethtest` | `nethtest --blockTest` |
 | evmone | `evmone-statetest`, `evmone-blockchaintest` | `evmone-statetest` | `evmone-blockchaintest` |
+
+## Rejection Reasons
+
+For block tests, `consume direct` also checks why the client rejected each invalid block: each error is mapped through the client's exception mapper and must match the fixture's `expectException`, as `consume engine` does for `validationError`. This needs a runner that lists its rejections in a `rejections` field of each JSON result (`[{"index", "hash", "error"}]`, with `index` the block's position in the fixture's `blocks`); with an older runner only the outcome is checked, and a warning says so. An error the mapper does not recognize fails the test with the raw message, which usually means the mapper needs a new entry. Besu's `evmtool` reports `rejections`, with the failing rule named in each error, from its runner branch [`lcc2/bal-runner-interface-v2`](https://github.com/fselmo/besu/tree/lcc2/bal-runner-interface-v2) on; with an earlier `evmtool` only the outcome is checked.
 
 ## Advantages
 

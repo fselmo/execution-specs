@@ -79,6 +79,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:  # noqa: D103
             "consumer tool."
         ),
     )
+    consume_group.addoption(
+        "--disable-strict-exception-matching",
+        action="store",
+        dest="disable_strict_exception_matching",
+        default="",
+        help=(
+            "Comma-separated list of client names and/or forks for which a "
+            "rejection with an unexpected reason only warns instead of "
+            "failing the test."
+        ),
+    )
     debug_group = parser.getgroup("debug", "Arguments defining debug behavior")
     debug_group.addoption(
         "--dump-dir",
@@ -163,6 +174,36 @@ def fixture_path(
     else:
         assert isinstance(test_case, TestCaseIndexFile)
         yield fixtures_source.path / test_case.json_path
+
+
+@pytest.fixture(scope="function")
+def strict_exception_matching(
+    request: pytest.FixtureRequest,
+    fixture_consumer: FixtureConsumerTool,
+    test_case: TestCaseIndexFile | TestCaseStream,
+) -> bool:
+    """
+    Return whether a rejection with an unexpected reason fails the test.
+
+    Matching is not strict for a mapper marked unreliable, or when
+    `--disable-strict-exception-matching` names the client (matched against
+    the consumer and mapper class names) or the fixture's fork.
+    """
+    mapper = fixture_consumer.exception_mapper
+    if mapper is not None and not mapper.reliable:
+        return False
+    names = [
+        fixture_consumer.__class__.__name__.lower(),
+        mapper.mapper_name.lower() if mapper else "",
+        str(test_case.fork).lower(),
+    ]
+    disabled = request.config.getoption("disable_strict_exception_matching")
+    return not any(
+        entry.lower() in name
+        for entry in disabled.split(",")
+        if entry
+        for name in names
+    )
 
 
 @pytest.fixture(scope="function")

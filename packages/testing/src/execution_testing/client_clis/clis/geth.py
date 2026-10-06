@@ -330,6 +330,8 @@ class GethFixtureConsumer(
 ):
     """Geth's implementation of the fixture consumer."""
 
+    exception_mapper = GethExceptionMapper()
+
     def consume_blockchain_test(
         self,
         fixture_path: Path,
@@ -386,6 +388,9 @@ class GethFixtureConsumer(
                 if not test_result["pass"]
             )
             raise Exception(exception_text)
+        self.check_rejections(
+            BlockchainFixture, fixture_path, fixture_name, result_json
+        )
 
     @cache  # noqa
     def consume_state_test_file(
