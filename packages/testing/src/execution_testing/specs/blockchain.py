@@ -93,6 +93,7 @@ from execution_testing.test_types import (
     Removable,
     TestPhase,
     Transaction,
+    TransactionType,
     Withdrawal,
 )
 from execution_testing.test_types.block_access_list import (
@@ -1658,12 +1659,20 @@ class BlockchainTest(BaseTest):
             if is_last_block and is_inclusion_list_variant:
                 if block.inclusion_list_txs is None:
                     block.inclusion_list_txs = []
-                block.inclusion_list_txs.append(block.txs.pop())
+                moved_tx = block.txs.pop()
+                block.inclusion_list_txs.append(moved_tx)
+                last_fork = self.fork.transitions_to()
+                moved_tx_appendable = (
+                    moved_tx.ty != TransactionType.BLOB_TRANSACTION
+                    or last_fork.inclusion_list_blob_entries_appendable()
+                )
                 if block.exception:
                     block.exception = None
                     block.expected_inclusion_list_satisfied = True
                 else:
-                    block.expected_inclusion_list_satisfied = False
+                    block.expected_inclusion_list_satisfied = (
+                        not moved_tx_appendable
+                    )
                 if block.header_verify:
                     block.header_verify = None
                 if block.rlp_modifier:

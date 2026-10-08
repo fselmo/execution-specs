@@ -1233,6 +1233,18 @@ class BaseFork(ForkOpcodeInterface, metaclass=BaseForkMeta):
 
     @classmethod
     @abstractmethod
+    def inclusion_list_blob_entries_appendable(cls) -> bool:
+        """
+        Return true if an appendable blob transaction in the inclusion list
+        makes a payload that leaves it out unsatisfied.
+
+        EIP-7805 has not settled whether blob entries count; flip this if the
+        spec makes them never appendable.
+        """
+        pass
+
+    @classmethod
+    @abstractmethod
     def engine_new_payload_target_blobs_per_block(cls) -> bool:
         """
         Return true if the engine api version requires new payload calls to
