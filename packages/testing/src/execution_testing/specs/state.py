@@ -62,6 +62,7 @@ from .base import BaseTest, FillResult, OpMode
 from .blockchain import Block, BlockchainTest, Header
 from .debugging import print_traces
 from .helpers import RecordedPostStateContext, verify_transactions
+from .invariants import BlockTotals, check_block_invariants
 
 logger = get_logger(__name__)
 
@@ -417,17 +418,13 @@ class StateTest(BaseTest):
             slow_request=self.is_tx_gas_heavy_test,
         )
         output_alloc = transition_tool_output.alloc.materialize()
+        context = self.post_state_context(
+            tx=tx, env=env, fork=fork, result=transition_tool_output.result
+        )
 
         try:
             self.post.verify_post_alloc(
-                pre_alloc=pre_alloc,
-                got_alloc=output_alloc,
-                context=self.post_state_context(
-                    tx=tx,
-                    env=env,
-                    fork=fork,
-                    result=transition_tool_output.result,
-                ),
+                pre_alloc=pre_alloc, got_alloc=output_alloc, context=context
             )
         except Exception as e:
             print_traces(t8n.get_traces())
@@ -444,6 +441,24 @@ class StateTest(BaseTest):
             pprint(transition_tool_output.result)
             pprint(output_alloc)
             raise e
+
+        if self.invariant_checks:
+            # A state test runs no block finalization, so it has no block
+            # access list to check.
+            check_block_invariants(
+                fork=fork,
+                pre_alloc=pre_alloc,
+                post_alloc=output_alloc,
+                result=transition_tool_output.result,
+                txs=[tx],
+                totals=BlockTotals.of_state_test(
+                    fork=fork,
+                    tx=tx,
+                    env=env,
+                    result=transition_tool_output.result,
+                    context=context,
+                ),
+            )
 
         gas_optimization: int | None = None
 
