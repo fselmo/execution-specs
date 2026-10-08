@@ -4,7 +4,7 @@ Test `excessBlobGas` & `blobGasUsed` block fields at fork transition.
 Tests for [EIP-4844: Shard Blob Transactions](https://eips.ethereum.org/EIPS/eip-4844).
 """
 
-from typing import List, Mapping
+from typing import Any, List, Mapping
 
 import pytest
 from execution_testing import (
@@ -21,6 +21,7 @@ from execution_testing import (
     Hash,
     Header,
     Op,
+    RecipientType,
     Transaction,
     TransitionFork,
     add_kzg_version,
@@ -133,7 +134,9 @@ def pre_fork_blocks(
         while remaining_blobs > 0:
             tx_blobs = min(remaining_blobs, max_blobs_per_tx)
             blob_tx_gas_limit = (
-                pre_fork.transaction_intrinsic_cost_calculator()()
+                pre_fork.transaction_intrinsic_cost_calculator()(
+                    sends_value=True, recipient_type=RecipientType.EOA
+                )
             )
             txs.append(
                 Transaction(
@@ -491,11 +494,9 @@ def test_fork_transition_excess_blob_gas_at_blob_genesis(
     )
 
 
-@pytest.mark.valid_for_bpo_forks
-@pytest.mark.valid_at_transition_to("Prague", subsequent_forks=True)
-@pytest.mark.parametrize_by_fork(
-    "post_fork_block_count,pre_fork_blobs_per_block,post_fork_blobs_per_block",
-    lambda fork: [
+def blob_counts_across_transition(fork: TransitionFork) -> List[Any]:
+    """Return block and blob counts on each side of a fork transition."""
+    return [
         pytest.param(
             SpecHelpers.get_min_excess_blobs_for_blob_gas_price(
                 fork=fork.transitions_from(), blob_gas_price=2
@@ -539,7 +540,14 @@ def test_fork_transition_excess_blob_gas_at_blob_genesis(
             1,
             id="max_blobs_before_and_single_blob_after",
         ),
-    ],
+    ]
+
+
+@pytest.mark.valid_for_bpo_forks
+@pytest.mark.valid_at_transition_to("Prague", subsequent_forks=True)
+@pytest.mark.parametrize_by_fork(
+    "post_fork_block_count,pre_fork_blobs_per_block,post_fork_blobs_per_block",
+    blob_counts_across_transition,
 )
 @pytest.mark.parametrize("block_base_fee_per_gas", [7, 16, 23])
 @pytest.mark.slow
@@ -553,6 +561,34 @@ def test_fork_transition_excess_blob_gas_post_blob_genesis(
 ) -> None:
     """
     Test `excessBlobGas` calculation in the header when the fork is activated.
+    """
+    blockchain_test(
+        pre=pre,
+        post=post,
+        blocks=pre_fork_blocks + post_fork_blocks,
+        genesis_environment=genesis_environment,
+    )
+
+
+# `valid_for_bpo_forks` keeps only transitions that change the blob
+# schedule, so the transitions after Prague that keep it are covered here.
+@pytest.mark.valid_at_transition_to("Osaka", subsequent_forks=True)
+@pytest.mark.parametrize_by_fork(
+    "post_fork_block_count,pre_fork_blobs_per_block,post_fork_blobs_per_block",
+    blob_counts_across_transition,
+)
+@pytest.mark.parametrize("block_base_fee_per_gas", [7, 16, 23])
+@pytest.mark.slow
+def test_fork_transition_excess_blob_gas_same_blob_schedule(
+    blockchain_test: BlockchainTestFiller,
+    genesis_environment: Environment,
+    pre: Alloc,
+    pre_fork_blocks: List[Block],
+    post_fork_blocks: List[Block],
+    post: Mapping[Address, Account],
+) -> None:
+    """
+    Test that `excessBlobGas` carries over a fork that keeps the blob schedule.
     """
     blockchain_test(
         pre=pre,
