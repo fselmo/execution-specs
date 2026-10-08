@@ -108,6 +108,7 @@ from .helpers import (
     verify_block,
     verify_transactions,
 )
+from .invariants import BlockTotals, check_block_invariants
 
 
 def environment_from_parent_header(parent: "FixtureHeader") -> "Environment":
@@ -1293,6 +1294,22 @@ class BlockchainTest(BaseTest):
                 f"also rejects the block itself ({block_exception}). The "
                 "fixture would carry two defects and name one. Change the "
                 "block so that only the transaction is invalid."
+            )
+
+        if self.invariant_checks and block.exception is None:
+            check_block_invariants(
+                fork=fork,
+                pre_alloc=(
+                    previous_alloc.materialize()
+                    if isinstance(previous_alloc, LazyAlloc)
+                    else previous_alloc
+                ),
+                post_alloc=transition_tool_output.alloc.materialize(),
+                result=transition_tool_output.result,
+                txs=txs,
+                totals=BlockTotals.of_built_block(built_block),
+                block_access_list=t8n_bal,
+                bal_witness=transition_tool_output.bal_witness,
             )
 
         return built_block

@@ -665,6 +665,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "performed during filling."
         ),
     )
+    debug_group.addoption(
+        "--invariant-checks",
+        action="store_true",
+        dest="invariant_checks",
+        default=False,
+        help=(
+            "Check chain invariants (ether conservation, gas accounting, "
+            "nonces, block access list) on every filled block and warn "
+            "with InvariantViolationWarning on each violation."
+        ),
+    )
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -786,6 +797,7 @@ def pytest_configure(config: pytest.Config) -> None:
             returncode=pytest.ExitCode.USAGE_ERROR,
         )
     config.t8n = t8n  # type: ignore[attr-defined]
+    t8n.compute_bal_witness = config.getoption("invariant_checks")
 
     if "Tools" not in config.stash[metadata_key]:
         config.stash[metadata_key]["Tools"] = {
@@ -1610,6 +1622,9 @@ def base_test_parametrizer(cls: Type[BaseTest]) -> Any:
                 kwargs["is_exception_test"] = is_exception_test
                 kwargs["is_inclusion_test"] = is_inclusion_test
                 kwargs["invalid_tx_not_last"] = invalid_tx_not_last
+                kwargs["invariant_checks"] = request.config.getoption(
+                    "invariant_checks"
+                )
                 if (
                     op_mode == OpMode.OPTIMIZE_GAS
                     or op_mode == OpMode.OPTIMIZE_GAS_POST_PROCESSING
