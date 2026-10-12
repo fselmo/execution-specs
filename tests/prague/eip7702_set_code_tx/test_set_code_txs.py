@@ -2645,6 +2645,7 @@ def test_set_code_using_valid_synthetic_signatures(
     ],
 )
 @pytest.mark.eels_base_coverage
+@pytest.mark.inclusion_test
 def test_valid_tx_invalid_auth_signature(
     state_test: StateTestFiller,
     pre: Alloc,
@@ -2795,6 +2796,7 @@ class InvalidChainID(StrEnum):
         ),
     ],
 )
+@pytest.mark.inclusion_test
 def test_valid_tx_invalid_chain_id(
     state_test: StateTestFiller,
     pre: Alloc,
