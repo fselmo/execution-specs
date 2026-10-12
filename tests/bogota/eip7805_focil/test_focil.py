@@ -2,6 +2,7 @@
 
 import pytest
 from execution_testing import (
+    AccessList,
     Account,
     Alloc,
     AuthorizationTuple,
@@ -210,6 +211,102 @@ def test_block_with_failing_included_il_tx_is_valid(
                 txs=[failing_il_tx],
                 inclusion_list_txs=[failing_il_tx],
                 expected_inclusion_list_satisfied=True,
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "entries_in_block", [False, True], ids=["omitted", "included"]
+)
+def test_inclusion_list_over_one_list_byte_limit(
+    blockchain_test: BlockchainTestFiller,
+    pre: Alloc,
+    fork: Fork,
+    entries_in_block: bool,
+) -> None:
+    """
+    A payload's inclusion list may hold more bytes than one committee member
+    can send, since the consensus layer merges several lists.
+    """
+    limit = fork.inclusion_list_transactions_size_limit()
+    assert limit is not None
+    calldata = b"\x01" * (limit // 2)
+    entries = [
+        Transaction(
+            sender=pre.fund_eoa(),
+            to=pre.nonexistent_account(),
+            data=calldata,
+            gas_limit=fork.transaction_intrinsic_cost_calculator()(
+                calldata=calldata
+            ),
+        ).with_signature_and_sender()
+        for _ in range(2)
+    ]
+    entry_sizes = [len(entry.rlp()) for entry in entries]
+    assert all(size <= limit for size in entry_sizes)
+    assert sum(entry_sizes) > limit
+
+    blockchain_test(
+        pre=pre,
+        post={},
+        blocks=[
+            Block(
+                txs=entries if entries_in_block else [],
+                inclusion_list_txs=entries,
+                expected_inclusion_list_satisfied=entries_in_block,
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("entry", ["same_bytes", "access_list_changed"])
+def test_il_entry_matched_to_block_tx_by_bytes(
+    blockchain_test: BlockchainTestFiller,
+    pre: Alloc,
+    fork: Fork,
+    entry: str,
+) -> None:
+    """
+    An IL entry counts as included only when a block tx has its exact bytes.
+
+    Changing a block tx's access list and keeping its signature gives a
+    different transaction, signed by whatever address the signature now
+    recovers to; funded, that sender's transaction is appendable.
+    """
+    recipient = pre.nonexistent_account()
+    access_list = [AccessList(address=recipient, storage_keys=[])]
+    block_tx = Transaction(
+        ty=2,
+        sender=pre.fund_eoa(),
+        to=recipient,
+        gas_limit=fork.transaction_intrinsic_cost_calculator()(
+            access_list=access_list
+        ),
+    ).with_signature_and_sender()
+
+    if entry == "same_bytes":
+        il_entry = block_tx
+        expected_satisfied = True
+    elif entry == "access_list_changed":
+        il_entry = block_tx.copy(
+            access_list=access_list, sender=None
+        ).with_signature_and_sender()
+        assert il_entry.sender is not None
+        assert il_entry.sender != block_tx.sender
+        pre.fund_address(il_entry.sender, 10**18)
+        expected_satisfied = False
+    else:
+        raise ValueError(f"unknown entry: {entry}")
+
+    blockchain_test(
+        pre=pre,
+        post={},
+        blocks=[
+            Block(
+                txs=[block_tx],
+                inclusion_list_txs=[il_entry],
+                expected_inclusion_list_satisfied=expected_satisfied,
             )
         ],
     )
