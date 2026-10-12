@@ -8,6 +8,8 @@ from execution_testing import (
     AuthorizationTuple,
     Block,
     BlockchainTestFiller,
+    Bytes,
+    Fork,
     Op,
     Transaction,
 )
@@ -124,6 +126,102 @@ def test_included_il_tx_of_each_type_is_readable(
                 txs=[il_tx],
                 inclusion_list_txs=[il_tx],
                 expected_inclusion_list_satisfied=True,
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "malformed_entry",
+    [
+        "empty",
+        "type_0x00",
+        "undefined_type",
+        "type_0x7f",
+        "type_0xff",
+        "type_1_with_type_2_payload",
+        "type_2_trailing_byte",
+        "truncated_legacy",
+    ],
+)
+@pytest.mark.parametrize(
+    "appendable_tx_follows",
+    [
+        pytest.param(False, id="alone"),
+        pytest.param(True, id="before_appendable_tx"),
+    ],
+)
+def test_undecodable_il_entry_is_skipped(
+    blockchain_test: BlockchainTestFiller,
+    pre: Alloc,
+    fork: Fork,
+    malformed_entry: str,
+    appendable_tx_follows: bool,
+) -> None:
+    """
+    An inclusion list entry that is not a transaction is skipped.
+
+    Alone it leaves the payload satisfied. Followed by an appendable
+    transaction, the check moves on past it and the payload is unsatisfied.
+    """
+    # Entries built from raw bytes are signed here, before the framework
+    # would set their gas limit.
+    transfer_gas = fork.transaction_intrinsic_cost_calculator()()
+    # The re-tagged entries carry an appendable transaction's payload, so a
+    # client that decodes the payload despite the type byte sees a
+    # transaction that must be included.
+    type_2_payload = (
+        Transaction(
+            ty=2,
+            sender=pre.fund_eoa(),
+            to=pre.nonexistent_account(),
+            gas_limit=transfer_gas,
+        )
+        .with_signature_and_sender()
+        .rlp()[1:]
+    )
+    undefined_type = max(fork.tx_types()) + 1
+    assert undefined_type < 0x7F
+
+    if malformed_entry == "empty":
+        entry = Bytes(b"")
+    elif malformed_entry == "type_0x00":
+        entry = Bytes(b"\x00" + type_2_payload)
+    elif malformed_entry == "undefined_type":
+        entry = Bytes(bytes([undefined_type]) + type_2_payload)
+    elif malformed_entry == "type_0x7f":
+        entry = Bytes(b"\x7f" + type_2_payload)
+    elif malformed_entry == "type_0xff":
+        entry = Bytes(b"\xff" + type_2_payload)
+    elif malformed_entry == "type_1_with_type_2_payload":
+        entry = Bytes(b"\x01" + type_2_payload)
+    elif malformed_entry == "type_2_trailing_byte":
+        entry = Bytes(b"\x02" + type_2_payload + b"\x00")
+    elif malformed_entry == "truncated_legacy":
+        legacy_tx = Transaction(
+            ty=0,
+            sender=pre.fund_eoa(),
+            to=pre.nonexistent_account(),
+            gas_limit=transfer_gas,
+        )
+        entry = Bytes(legacy_tx.with_signature_and_sender().rlp()[:-1])
+    else:
+        raise ValueError(f"unknown malformed entry: {malformed_entry}")
+
+    inclusion_list: list[Transaction | Bytes] = [entry]
+    if appendable_tx_follows:
+        inclusion_list.append(
+            Transaction(sender=pre.fund_eoa(), to=pre.nonexistent_account())
+        )
+
+    blockchain_test(
+        pre=pre,
+        post={},
+        blocks=[
+            Block(
+                txs=[],
+                inclusion_list_txs=inclusion_list,
+                expected_inclusion_list_satisfied=not appendable_tx_follows,
             )
         ],
     )
