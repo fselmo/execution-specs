@@ -9,7 +9,7 @@ import pytest
 from click.testing import CliRunner
 
 import execution_testing.cli.check_fixtures
-from execution_testing.base_types import AccessList, Address, Hash
+from execution_testing.base_types import AccessList, Address, Bytes, Hash
 from execution_testing.client_clis import TransitionTool
 from execution_testing.exceptions import (
     EngineAPIError,
@@ -132,10 +132,12 @@ def test_make_genesis(  # noqa: D103
     assert fixture.genesis.block_hash.startswith(fixture_hash)
 
 
-@pytest.mark.parametrize("inclusion_list_satisfied", [False, True])
+@pytest.mark.parametrize(
+    "entry", ["included", "pending", "pending_undecodable"]
+)
 def test_blockchain_fixtures_include_inclusion_lists(
     default_t8n: TransitionTool,
-    inclusion_list_satisfied: bool,
+    entry: str,
 ) -> None:
     """Test inclusion list plumbing across classic and engine fixtures."""
     tx = Transaction(
@@ -149,10 +151,21 @@ def test_blockchain_fixtures_include_inclusion_lists(
 
     pre = Alloc({sender: Account(balance=10**18)})
 
-    if inclusion_list_satisfied:
+    if entry == "included":
         block = Block(txs=[tx], inclusion_list_txs=[tx])
-    else:
+        inclusion_list_satisfied = True
+    elif entry == "pending":
         block = Block(txs=[], inclusion_list_txs=[tx])
+        inclusion_list_satisfied = False
+    elif entry == "pending_undecodable":
+        # The t8n must judge the override's bytes, not the tx's fields.
+        signed_il_tx = signed_il_tx.copy(
+            rlp_override=Bytes(b"\x7e" + signed_il_tx.rlp())
+        )
+        block = Block(txs=[], inclusion_list_txs=[signed_il_tx])
+        inclusion_list_satisfied = True
+    else:
+        raise ValueError(f"unknown entry: {entry}")
 
     engine_fixture = (
         BlockchainTest(

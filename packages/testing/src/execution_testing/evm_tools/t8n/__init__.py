@@ -428,8 +428,12 @@ class T8N(Load):
                         )
                         for tx in self.txs
                     ),
+                    # An entry's `rlp_override` is the exact bytes the
+                    # payload carries, such as a type this fork cannot decode.
                     tuple(
-                        self.fork.encode_transaction(
+                        tx.rlp_override
+                        if tx.rlp_override is not None
+                        else self.fork.encode_transaction(
                             self.convert_transaction(tx)
                         )
                         for tx in self.inclusion_list_txs
