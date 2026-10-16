@@ -85,6 +85,7 @@
       * [Dependencies and Packaging](dev/deps_and_packaging.md)
       * [Releasing](dev/releasing.md)
       * [Releasing Test Fixtures](dev/releasing_tests.md)
+      * [Property Testing](dev/property_testing.md)
   * [Library Reference](library/index.md)
       * [EEST CLI Tools](library/cli/index.md)
           * [eest](library/cli/eest.md)
