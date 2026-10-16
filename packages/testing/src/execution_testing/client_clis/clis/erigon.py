@@ -129,7 +129,22 @@ class ErigonExceptionMapper(ExceptionMapper):
         BlockException.INVALID_BLOCK_ACCESS_LIST: (
             r"invalid block access list|block access list mismatch"
         ),
-        BlockException.INCORRECT_BLOCK_FORMAT: (r"invalid block access list"),
+        BlockException.INCORRECT_BLOCK_FORMAT: (
+            r"invalid block access list|"
+            # A pre-Amsterdam header carrying the field.
+            r"unexpected bal hash|"
+            # A pre-Cancun header carrying the field.
+            r"invalid (excessBlobGas|blobGasUsed) before fork: "
+            r"have \S+, expected 'nil'|"
+            # The BAL hash position holds the slot number's empty string: an
+            # Amsterdam header missing the hash, or an earlier one carrying a
+            # slot number.
+            r"read BlockAccessListHash: "
+            r"input value has wrong size \d+, want 32|"
+            # A Cancun header missing a blob field, so the parent beacon
+            # block root lands in a uint64 field.
+            r"read (BlobGasUsed|ExcessBlobGas): rlp: uint overflow"
+        ),
         BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
             r"block access list too large"
         ),
