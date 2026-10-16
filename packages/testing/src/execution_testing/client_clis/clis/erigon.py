@@ -52,17 +52,18 @@ class ErigonExceptionMapper(ExceptionMapper):
         ),
         TransactionException.NONCE_MISMATCH_TOO_LOW: "nonce too low",
         TransactionException.NONCE_MISMATCH_TOO_HIGH: "nonce too high",
-        TransactionException.GAS_ALLOWANCE_EXCEEDED: "gas limit reached",
         TransactionException.INVALID_CHAINID: "invalid chain id for signer",
         TransactionException.INVALID_SIGNATURE_VRS: (
             "invalid transaction v, r, s values"
         ),
+        TransactionException.TYPE_1_TX_PRE_FORK: (
+            "accessList txn is not supported by signer"
+        ),
+        TransactionException.TYPE_2_TX_PRE_FORK: (
+            "dynamicFee txn is not supported by signer"
+        ),
         TransactionException.TYPE_3_TX_PRE_FORK: (
             "blob txn is not supported by signer"
-        ),
-        TransactionException.TYPE_3_TX_INVALID_BLOB_VERSIONED_HASH: (
-            "invalid blob versioned hash, must start with "
-            "VERSIONED_HASH_VERSION_KZG"
         ),
         TransactionException.TYPE_3_TX_BLOB_COUNT_EXCEEDED: (
             "blob transaction has too many blobs"
@@ -75,9 +76,6 @@ class ErigonExceptionMapper(ExceptionMapper):
         ),
         TransactionException.TYPE_3_TX_CONTRACT_CREATION: (
             "wrong size for To: 0"
-        ),
-        TransactionException.TYPE_3_TX_MAX_BLOB_GAS_ALLOWANCE_EXCEEDED: (
-            "blobs/blobgas exceeds max"
         ),
         TransactionException.TYPE_4_EMPTY_AUTHORIZATION_LIST: (
             "SetCodeTransaction without authorizations is invalid"
@@ -102,21 +100,23 @@ class ErigonExceptionMapper(ExceptionMapper):
         ),
         BlockException.INVALID_BLOCK_HASH: "invalid block hash",
         BlockException.RLP_BLOCK_LIMIT_EXCEEDED: "block exceeds max rlp size",
-        BlockException.INVALID_BASEFEE_PER_GAS: (
-            "invalid block: invalid baseFee"
-        ),
+        BlockException.INVALID_BASEFEE_PER_GAS: "invalid baseFee: have",
         BlockException.INVALID_BLOCK_TIMESTAMP_OLDER_THAN_PARENT: (
-            "invalid block: timestamp older than parent"
+            "timestamp older than parent"
         ),
-        BlockException.INVALID_BLOCK_NUMBER: "invalid block number",
-        BlockException.EXTRA_DATA_TOO_BIG: (
-            "invalid block: extra-data longer than 32 bytes"
-        ),
-        BlockException.INVALID_GASLIMIT: "invalid block: invalid gas limit",
-        BlockException.INVALID_STATE_ROOT: "invalid block: wrong trie root",
+        BlockException.EXTRA_DATA_TOO_BIG: "extra-data longer than 32 bytes",
+        BlockException.INVALID_GASLIMIT: "invalid gas limit",
         BlockException.INVALID_RECEIPTS_ROOT: "receiptHash mismatch",
         BlockException.INVALID_LOG_BLOOM: "invalid bloom",
-        BlockException.INCORRECT_BLOCK_FORMAT: "invalid block access list",
+        BlockException.INVALID_TRANSACTIONS_ROOT: (
+            "body has invalid transaction hash"
+        ),
+        BlockException.INVALID_UNCLES_HASH: "body has invalid uncle hash",
+        BlockException.RLP_WITHDRAWALS_NOT_READ: "body is missing withdrawals",
+        BlockException.INVALID_WITHDRAWALS_ROOT: (
+            "body has invalid withdrawals hash"
+        ),
+        BlockException.INCORRECT_BLOCK_FORMAT: "missing slotNumber",
         BlockException.GAS_USED_OVERFLOW: "block gas used overflow",
     }
     mapping_regex = {
@@ -147,6 +147,52 @@ class ErigonExceptionMapper(ExceptionMapper):
         ),
         BlockException.INVALID_GAS_USED_ABOVE_LIMIT: (
             r"invalid gasUsed: have \d+, gasLimit \d+"
+        ),
+        # Anchored so the block blob-gas budget's "blob gas limit reached"
+        # does not also read as the execution gas budget.
+        TransactionException.GAS_ALLOWANCE_EXCEEDED: (
+            r"(^|: )gas limit reached"
+        ),
+        TransactionException.TYPE_3_TX_MAX_BLOB_GAS_ALLOWANCE_EXCEEDED: (
+            r"blobs/blobgas exceeds max|blob gas limit reached"
+        ),
+        TransactionException.TYPE_3_TX_INVALID_BLOB_VERSIONED_HASH: (
+            r"invalid blob versioned hash, must start with "
+            r"VERSIONED_HASH_VERSION_KZG|"
+            r"blob txn versioned hash has invalid version byte"
+        ),
+        # A pre-EIP-155 fork rejects any v other than 27 or 28 as carrying a
+        # chain id; the word boundary keeps out "unprotected txn".
+        TransactionException.INVALID_CHAINID: (
+            r"\bprotected txn is not supported by signer"
+        ),
+        BlockException.INVALID_STATE_ROOT: (
+            r"invalid block: wrong trie root|invalid state root hash"
+        ),
+        # A header claiming height 0 skips the parent lookup on import and is
+        # only turned away when it would become the head.
+        BlockException.INVALID_BLOCK_NUMBER: (
+            r"invalid block number|"
+            r"forkchoice head is a non-genesis block at height 0"
+        ),
+        BlockException.GASLIMIT_TOO_BIG: (
+            r"invalid gasLimit: have \d+, max \d+"
+        ),
+        BlockException.UNKNOWN_PARENT: (
+            r"parent's total difficulty not found with hash [0-9a-f]+ "
+        ),
+        BlockException.UNKNOWN_PARENT_ZERO: (
+            r"parent's total difficulty not found with hash 0{64} "
+        ),
+        # After the merge a body/header uncle hash mismatch can only mean
+        # uncles where none are allowed.
+        BlockException.IMPORT_IMPOSSIBLE_UNCLES_OVER_PARIS: (
+            r"non empty uncle hash|body has invalid uncle hash"
+        ),
+        # The proof-of-stake check; the proof-of-work formula check reads
+        # "invalid difficulty: have ..., want ...".
+        BlockException.IMPORT_IMPOSSIBLE_DIFFICULTY_OVER_PARIS: (
+            r"invalid difficulty($|[^:])"
         ),
     }
 

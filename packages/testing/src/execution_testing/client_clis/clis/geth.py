@@ -80,16 +80,8 @@ class GethExceptionMapper(ExceptionMapper):
         TransactionException.TYPE_3_TX_WITH_FULL_BLOBS: (
             "unexpected blob sidecar in transaction at index"
         ),
-        TransactionException.TYPE_3_TX_CONTRACT_CREATION: (
-            "input string too short for common.Address, "
-            "decoding into (types.BlobTx).To"
-        ),
         TransactionException.TYPE_4_EMPTY_AUTHORIZATION_LIST: (
             "EIP-7702 transaction with empty auth list"
-        ),
-        TransactionException.TYPE_4_TX_CONTRACT_CREATION: (
-            "input string too short for common.Address, "
-            "decoding into (types.SetCodeTx).To"
         ),
         TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM: (
             "transaction gas limit too high"
@@ -123,8 +115,14 @@ class GethExceptionMapper(ExceptionMapper):
         ),
         BlockException.INVALID_GASLIMIT: "invalid gas limit",
         BlockException.INVALID_BLOCK_NUMBER: "invalid block number",
+        # geth does not tell a zero parent hash from any other unknown one.
+        BlockException.UNKNOWN_PARENT: "unknown ancestor",
+        BlockException.UNKNOWN_PARENT_ZERO: "unknown ancestor",
         BlockException.EXTRA_DATA_TOO_BIG: "invalid extradata length",
         BlockException.INVALID_RECEIPTS_ROOT: "invalid receipt root hash",
+        BlockException.INVALID_WITHDRAWALS_ROOT: (
+            "withdrawals root hash mismatch"
+        ),
         BlockException.INVALID_LOG_BLOOM: "invalid bloom",
         BlockException.INVALID_STATE_ROOT: "invalid merkle root",
         BlockException.GAS_USED_OVERFLOW: "bal validation failure",
@@ -136,6 +134,25 @@ class GethExceptionMapper(ExceptionMapper):
         TransactionException.TYPE_3_TX_MAX_BLOB_GAS_ALLOWANCE_EXCEEDED: (
             r"blob gas used \d+ exceeds maximum allowance \d+"
         ),
+        # These types require a `to`, so an empty one fails to decode. When
+        # the transaction is decoded inside a block, the field path starts
+        # with `(types.Block)(types.extblock).Txs[i]`.
+        TransactionException.TYPE_3_TX_CONTRACT_CREATION: (
+            r"input string too short for common\.Address, "
+            r"decoding into \S*\(types\.BlobTx\)\.To"
+        ),
+        TransactionException.TYPE_4_TX_CONTRACT_CREATION: (
+            r"input string too short for common\.Address, "
+            r"decoding into \S*\(types\.SetCodeTx\)\.To"
+        ),
+        # A blob transaction in a pre-Cancun block fails body validation
+        # before it is executed.
+        TransactionException.TYPE_3_TX_PRE_FORK: (
+            r"data blobs present in block body"
+        ),
+        # geth reports a wrong block number as an unknown ancestor whenever
+        # the parent header is not cached.
+        BlockException.INVALID_BLOCK_NUMBER: r"unknown ancestor",
         BlockException.BLOB_GAS_USED_ABOVE_LIMIT: (
             r"blob gas used \d+ exceeds maximum allowance \d+"
         ),
