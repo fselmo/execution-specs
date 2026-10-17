@@ -20,6 +20,7 @@ from execution_testing import (
     BalStorageChange,
     BalStorageSlot,
     Block,
+    BlockAccessList,
     BlockAccessListExpectation,
     BlockchainTestFiller,
     BlockException,
@@ -64,6 +65,7 @@ from execution_testing.test_types.block_access_list.modifiers import (
     remove_nonces,
     remove_slot_change,
     remove_storage,
+    remove_storage_read,
     remove_storage_reads,
     reverse_accounts,
     reverse_balance_changes,
@@ -72,7 +74,6 @@ from execution_testing.test_types.block_access_list.modifiers import (
     reverse_slot_changes,
     reverse_storage_reads,
     reverse_storage_slots,
-    sort_accounts_by_address,
     swap_bal_indices,
 )
 
@@ -1969,10 +1970,7 @@ def test_bal_invalid_extraneous_coinbase(
                 exception=BlockException.INVALID_BLOCK_ACCESS_LIST,
                 expected_block_access_list=BlockAccessListExpectation(
                     account_expectations={coinbase: None}
-                ).modify(
-                    append_account(BalAccountChange(address=coinbase)),
-                    sort_accounts_by_address(),
-                ),
+                ).modify(append_account(BalAccountChange(address=coinbase))),
             )
         ],
     )
@@ -2065,10 +2063,6 @@ def test_bal_invalid_non_minimal_scalar_encoding(
     a matching hash and accepts. With the header committing to the
     payload RLP, a client that decodes leniently and hashes the bytes as
     received accepts instead.
-
-    A strict client may notice the bad scalar while decoding, or only
-    once the hash it derives from the payload disagrees with the header;
-    both verdicts reject the block, so both are accepted.
     """
     alice = pre.fund_eoa()
     oracle = pre.deploy_contract(code=Op.SSTORE(1, 1) + Op.SLOAD(2))
@@ -2115,8 +2109,11 @@ def test_bal_invalid_non_minimal_scalar_encoding(
             ),
         }
     )
+    exceptions = [BlockException.INVALID_BLOCK_ACCESS_LIST]
     if header_commits_to == "canonical_rlp":
         expectation = expectation.modify_rlp(encoder)
+        # The header commits to other bytes than the payload delivers.
+        exceptions.append(BlockException.INVALID_BLOCK_HASH)
     elif header_commits_to == "payload_rlp":
         expectation = expectation.modify(override_rlp(encoder))
     else:
@@ -2129,10 +2126,124 @@ def test_bal_invalid_non_minimal_scalar_encoding(
         blocks=[
             Block(
                 txs=[tx],
-                exception=[
-                    BlockException.INVALID_BLOCK_ACCESS_LIST,
-                    BlockException.INVALID_BLOCK_HASH,
-                ],
+                exception=exceptions,
+                expected_block_access_list=expectation,
+            )
+        ],
+    )
+
+
+@pytest.mark.valid_from("Amsterdam")
+@pytest.mark.blockchain_test_engine_only
+@pytest.mark.exception_test
+@pytest.mark.parametrize(
+    "field",
+    [
+        "storage_slot",
+        "storage_value",
+        "storage_read",
+        "balance",
+        "storage_block_access_index",
+    ],
+)
+@pytest.mark.parametrize("header_commits_to", ["canonical_rlp", "payload_rlp"])
+def test_bal_invalid_zero_scalar_encoding(
+    blockchain_test: BlockchainTestFiller,
+    pre: Alloc,
+    field: BalScalarField,
+    header_commits_to: str,
+) -> None:
+    """
+    Reject a `newPayload` whose BAL encodes a zero integer scalar as `0x00`
+    instead of `0x80`.
+
+    A decoder that checks for leading zeros only in strings longer than
+    one byte accepts `0x00`. Nonces are excluded: a recorded nonce is
+    always at least 1.
+    """
+    block_timestamp = 12
+    beacon_root = Hash(0xABCDEF)
+    alice = pre.fund_eoa()
+
+    target: Address
+    account_expectation: BalAccountExpectation
+    if field == "storage_slot":
+        target = pre.deploy_contract(code=Op.SSTORE(0, 1))
+        account_expectation = BalAccountExpectation(
+            storage_changes=[
+                BalStorageSlot(
+                    slot=0,
+                    slot_changes=[
+                        BalStorageChange(block_access_index=1, post_value=1)
+                    ],
+                )
+            ],
+        )
+    elif field == "storage_value":
+        target = pre.deploy_contract(code=Op.SSTORE(1, 0), storage={1: 1})
+        account_expectation = BalAccountExpectation(
+            storage_changes=[
+                BalStorageSlot(
+                    slot=1,
+                    slot_changes=[
+                        BalStorageChange(block_access_index=1, post_value=0)
+                    ],
+                )
+            ],
+        )
+    elif field == "storage_read":
+        target = pre.deploy_contract(code=Op.SLOAD(0))
+        account_expectation = BalAccountExpectation(
+            storage_changes=[], storage_reads=[0]
+        )
+    elif field == "balance":
+        sink = pre.fund_eoa()
+        target = pre.deploy_contract(
+            code=Op.CALL(gas=Op.GAS, address=sink, value=Op.SELFBALANCE),
+            balance=1,
+        )
+        account_expectation = BalAccountExpectation(
+            balance_changes=[
+                BalBalanceChange(block_access_index=1, post_balance=0)
+            ],
+        )
+    elif field == "storage_block_access_index":
+        # Only a pre-execution system call records changes at index 0.
+        target = BEACON_ROOTS_ADDRESS
+        account_expectation = beacon_root_system_call_expectations(
+            block_timestamp, beacon_root
+        )[BEACON_ROOTS_ADDRESS]
+    else:
+        raise ValueError(f"Unhandled field: {field}")
+
+    txs: list[Transaction] = []
+    if target != BEACON_ROOTS_ADDRESS:
+        txs.append(Transaction(sender=alice, to=target))
+
+    encoder = encode_scalar_non_minimally(target, field)
+    expectation = BlockAccessListExpectation(
+        account_expectations={target: account_expectation}
+    )
+    exceptions = [BlockException.INVALID_BLOCK_ACCESS_LIST]
+    if header_commits_to == "canonical_rlp":
+        expectation = expectation.modify_rlp(encoder)
+        # The header commits to other bytes than the payload delivers.
+        exceptions.append(BlockException.INVALID_BLOCK_HASH)
+    elif header_commits_to == "payload_rlp":
+        expectation = expectation.modify(override_rlp(encoder))
+    else:
+        raise ValueError(f"Unhandled header commitment: {header_commits_to}")
+
+    blockchain_test(
+        pre=pre,
+        # The block is rejected and the post state remains unchanged.
+        post=pre,
+        blocks=[
+            Block(
+                txs=txs,
+                timestamp=block_timestamp,
+                parent_beacon_block_root=beacon_root,
+                exception=exceptions,
                 expected_block_access_list=expectation,
             )
         ],
@@ -2531,10 +2642,11 @@ def test_bal_invalid_phantom_read_on_selfdestruct(
 @pytest.mark.valid_from("Amsterdam")
 @pytest.mark.exception_test
 @pytest.mark.parametrize(
-    "modifier",
+    "corruption",
     [
-        pytest.param(remove_accounts, id="missing_entry"),
-        pytest.param(remove_storage_reads, id="missing_reads"),
+        pytest.param("entry", id="missing_entry"),
+        pytest.param("reads", id="missing_reads"),
+        pytest.param("one_read", id="missing_one_read"),
     ],
 )
 # The deposit contract keeps no queue, so it has no slots to read.
@@ -2545,12 +2657,12 @@ def test_bal_invalid_missing_request_predeploy_accesses(
     blockchain_test: BlockchainTestFiller,
     pre: Alloc,
     request_class: Type[FeeSystemContractRequest],
-    modifier: Callable,
+    corruption: str,
 ) -> None:
     """
-    Reject a BAL that hides the queue slots the post-execution system call
-    read from a request predeploy, either by dropping the predeploy's entry
-    outright or by clearing only its storage reads.
+    Reject a BAL that hides queue slots the post-execution system call
+    read from a request predeploy: by dropping the predeploy's entry, by
+    clearing its storage reads, or by dropping just one of them.
 
     Nothing but the BAL records those reads, so the block stays
     self-consistent on state root and gas.
@@ -2562,6 +2674,15 @@ def test_bal_invalid_missing_request_predeploy_accesses(
         request_class.queue_head_slot,
         request_class.queue_tail_slot,
     ]
+    modifier: Callable[[BlockAccessList], BlockAccessList]
+    if corruption == "entry":
+        modifier = remove_accounts(predeploy)
+    elif corruption == "reads":
+        modifier = remove_storage_reads(predeploy)
+    elif corruption == "one_read":
+        modifier = remove_storage_read(predeploy, request_class.count_slot)
+    else:
+        raise ValueError(f"Unhandled corruption: {corruption}")
     blockchain_test(
         pre=pre,
         post={},
@@ -2577,7 +2698,85 @@ def test_bal_invalid_missing_request_predeploy_accesses(
                         ),
                         SYSTEM_ADDRESS: None,
                     }
-                ).modify(modifier(predeploy)),
+                ).modify(modifier),
+            )
+        ],
+    )
+
+
+@pytest.mark.valid_from("Amsterdam")
+@pytest.mark.exception_test
+# The deposit contract keeps no queue, so its system call writes nothing.
+@pytest.mark.with_all_system_contract_request_types(
+    selector=lambda cls: issubclass(cls, FeeSystemContractRequest)
+)
+def test_bal_invalid_dropped_request_predeploy_sweep_change(
+    blockchain_test: BlockchainTestFiller,
+    pre: Alloc,
+    request_class: Type[FeeSystemContractRequest],
+) -> None:
+    """
+    Reject a BAL that drops the post-execution sweep's reset of a request
+    predeploy's count, keeping the transaction's increment of that slot.
+    """
+    predeploy = request_class.system_contract_address
+    request = request_class.from_index(0).copy(
+        fee=request_class.get_enqueue_fees(1)[0]
+    )
+    sender = pre.fund_eoa()
+    txs = [
+        Transaction(
+            sender=sender,
+            to=predeploy,
+            value=request.value,
+            data=request.calldata,
+        )
+    ]
+    system_call_index = len(txs) + 1
+
+    blockchain_test(
+        pre=pre,
+        # The block is rejected, so the request is never queued.
+        post={sender: Account(nonce=0), predeploy: Account(storage={})},
+        blocks=[
+            Block(
+                txs=txs,
+                exception=BlockException.INVALID_BLOCK_ACCESS_LIST,
+                expected_block_access_list=BlockAccessListExpectation(
+                    account_expectations={
+                        predeploy: BalAccountExpectation(
+                            balance_changes=[
+                                BalBalanceChange(
+                                    block_access_index=1,
+                                    post_balance=request.value,
+                                )
+                            ],
+                            storage_changes=[
+                                BalStorageSlot(
+                                    slot=request_class.count_slot,
+                                    slot_changes=[
+                                        BalStorageChange(
+                                            block_access_index=1,
+                                            post_value=1,
+                                        ),
+                                        BalStorageChange(
+                                            block_access_index=(
+                                                system_call_index
+                                            ),
+                                            post_value=0,
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    }
+                ).modify(
+                    remove_slot_change(
+                        predeploy,
+                        slot=request_class.count_slot,
+                        block_access_index=system_call_index,
+                    )
+                ),
             )
         ],
     )

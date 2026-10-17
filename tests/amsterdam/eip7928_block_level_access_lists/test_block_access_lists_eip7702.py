@@ -18,12 +18,15 @@ from execution_testing import (
     Block,
     BlockAccessListExpectation,
     BlockchainTestFiller,
+    Environment,
     Fork,
+    Header,
     Initcode,
     Op,
     RecipientType,
     StateTestFiller,
     Transaction,
+    TransactionReceipt,
     Withdrawal,
     compute_create_address,
 )
@@ -1846,4 +1849,99 @@ def test_bal_7702_delegation_to_system_address(
             authority: Account(nonce=1, code=delegation),
             SYSTEM_ADDRESS: Account.NONEXISTENT,
         },
+    )
+
+
+def test_bal_7702_delegation_to_coinbase(
+    pre: Alloc,
+    blockchain_test: BlockchainTestFiller,
+    fork: Fork,
+) -> None:
+    """
+    Loading the delegation target and receiving the priority fee both touch
+    the coinbase, and both land in one entry.
+    """
+    coinbase = pre.fund_eoa(amount=0)
+    sender = pre.fund_eoa()
+    authority = pre.fund_eoa(amount=0)
+
+    authorization_list = [
+        AuthorizationTuple(
+            address=coinbase,
+            nonce=0,
+            signer=authority,
+            creates_account=True,
+        )
+    ]
+    delegation = Spec7702.delegation_designation(coinbase)
+
+    # The coinbase is warm from the start of the transaction (EIP-3651), so
+    # loading it as the delegation target costs a warm access.
+    gas_used = fork.transaction_intrinsic_cost_calculator()(
+        recipient_type=RecipientType.DELEGATION_7702,
+        authorization_list_or_count=authorization_list,
+        return_cost_deducted_prior_execution=True,
+    ) + fork.transaction_top_frame_gas_calculator()(
+        recipient_type=RecipientType.DELEGATION_7702,
+        delegation_warm=True,
+        authorizations=authorization_list,
+    )
+    genesis_env = Environment(base_fee_per_gas=7)
+    base_fee_per_gas = fork.base_fee_per_gas_calculator()(
+        parent_base_fee_per_gas=int(genesis_env.base_fee_per_gas or 0),
+        parent_gas_used=0,
+        parent_gas_limit=genesis_env.gas_limit,
+    )
+    tip = 2
+    coinbase_balance = gas_used * tip
+
+    tx = Transaction(
+        sender=sender,
+        to=authority,
+        authorization_list=authorization_list,
+        max_fee_per_gas=base_fee_per_gas + tip,
+        max_priority_fee_per_gas=tip,
+        expected_receipt=TransactionReceipt(gas_used=gas_used),
+    )
+
+    block = Block(
+        txs=[tx],
+        fee_recipient=coinbase,
+        header_verify=Header(base_fee_per_gas=base_fee_per_gas),
+        expected_block_access_list=BlockAccessListExpectation(
+            account_expectations={
+                authority: BalAccountExpectation(
+                    nonce_changes=[
+                        BalNonceChange(block_access_index=1, post_nonce=1)
+                    ],
+                    code_changes=[
+                        BalCodeChange(
+                            block_access_index=1, new_code=delegation
+                        )
+                    ],
+                ),
+                coinbase: BalAccountExpectation(
+                    nonce_changes=[],
+                    balance_changes=[
+                        BalBalanceChange(
+                            block_access_index=1,
+                            post_balance=coinbase_balance,
+                        )
+                    ],
+                    code_changes=[],
+                    storage_changes=[],
+                    storage_reads=[],
+                ),
+            }
+        ),
+    )
+
+    blockchain_test(
+        pre=pre,
+        blocks=[block],
+        post={
+            authority: Account(nonce=1, code=delegation),
+            coinbase: Account(balance=coinbase_balance),
+        },
+        genesis_environment=genesis_env,
     )
