@@ -4,11 +4,17 @@ import json
 import shutil
 import stat
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 import pytest
 
-from execution_testing.client_clis import GethFixtureConsumer
+from execution_testing.client_clis import (
+    EthrexFixtureConsumer,
+    FixtureConsumerTool,
+    GethFixtureConsumer,
+    NethtestFixtureConsumer,
+    RethFixtureConsumer,
+)
 from execution_testing.client_clis.client_runner import (
     parse_run,
     rejection_problems,
@@ -18,6 +24,8 @@ from execution_testing.exceptions import EngineAPIError
 from execution_testing.fixtures import (
     BlockchainEngineFixture,
     BlockchainFixture,
+    FixtureFormat,
+    StateFixture,
 )
 
 # Fixtures whose blocks (or payloads) 2 and 4 are invalid, each with
@@ -346,3 +354,103 @@ def test_a_runner_without_the_interface_keeps_the_old_path(
     fake_evm.consume(consumer, FIXTURE_NAME)
     run_flag = f"blocktest --run {FIXTURE_NAME} {fake_evm.fixture_path}"
     assert fake_evm.calls() == [run_flag, run_flag]
+
+
+# A runner binary stand-in: `--version` prints $VERSION, any `--help` prints
+# $HELP, and a run logs its arguments and prints $RESULTS.
+FAKE_RUNNER = """#!/bin/sh
+if [ "$1" = --version ]; then echo "$VERSION"; exit 0; fi
+for arg in "$@"; do
+    if [ "$arg" = --help ]; then echo "$HELP"; exit 0; fi
+done
+echo "$@" >> "$LOG"
+echo "$RESULTS"
+"""
+
+
+@pytest.fixture
+def fake_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Write a runner binary that speaks the interface."""
+    binary = tmp_path / "runner"
+    binary.write_text(FAKE_RUNNER)
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("HELP", "--bal-sequential")
+    monkeypatch.setenv("LOG", str(tmp_path / "calls.log"))
+    return binary
+
+
+@pytest.mark.parametrize(
+    "version,consumer_class,formats",
+    [
+        pytest.param(
+            "ef-test-runner 2.7.0 (47c7ff1)",
+            RethFixtureConsumer,
+            {BlockchainFixture, BlockchainEngineFixture},
+            id="reth",
+        ),
+        pytest.param(
+            "ethrex-blocktest 4.0.0",
+            EthrexFixtureConsumer,
+            {BlockchainFixture},
+            id="ethrex_blocktest",
+        ),
+        pytest.param(
+            "ethrex-enginetest 4.0.0",
+            EthrexFixtureConsumer,
+            {BlockchainEngineFixture},
+            id="ethrex_enginetest",
+        ),
+        pytest.param(
+            "Nethermind nethtest 2.2.0-preview+441af213",
+            NethtestFixtureConsumer,
+            {StateFixture, BlockchainFixture, BlockchainEngineFixture},
+            id="nethermind",
+        ),
+    ],
+)
+def test_runner_binaries_are_detected(
+    fake_runner: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    version: str,
+    consumer_class: type[FixtureConsumerTool],
+    formats: Set[FixtureFormat],
+) -> None:
+    """Each runner binary is detected from `--version` with its formats."""
+    monkeypatch.setenv("VERSION", version)
+    consumer = FixtureConsumerTool.from_binary_path(binary_path=fake_runner)
+    assert type(consumer) is consumer_class
+    assert {
+        fixture_format
+        for fixture_format in (
+            StateFixture,
+            BlockchainFixture,
+            BlockchainEngineFixture,
+        )
+        if consumer.can_consume(fixture_format)
+    } == formats
+
+
+def test_ethrex_runs_its_binary_without_a_subcommand(
+    fake_runner: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Ethrex's `blocktest` binary is the command, with `--json` results."""
+    monkeypatch.setenv("VERSION", "ethrex-blocktest 4.0.0")
+    monkeypatch.setenv(
+        "RESULTS", json.dumps([result(rejections={2: "x", 4: "y"})])
+    )
+    consumer = EthrexFixtureConsumer(binary=fake_runner)
+    run = consumer.run_fixture_file(BlockchainFixture, BLOCKCHAIN_FIXTURE)
+    assert run.error is None
+    assert (tmp_path / "calls.log").read_text() == (
+        f"--json {BLOCKCHAIN_FIXTURE}\n"
+    )
+
+
+def test_a_runner_only_binary_must_speak_the_interface(
+    fake_runner: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reth has no older path, so a binary without the interface fails."""
+    monkeypatch.setenv("VERSION", "ef-test-runner 1.0.0 (abc)")
+    monkeypatch.setenv("HELP", "--threads")
+    with pytest.raises(Exception, match="does not speak"):
+        FixtureConsumerTool.from_binary_path(binary_path=fake_runner)
