@@ -7,6 +7,8 @@ that boundary. Top-frame boundary OOGs are covered by the dedicated
 top-frame charge tests in ``test_top_frame_charges.py``.
 """
 
+from typing import List
+
 import pytest
 from execution_testing import (
     Alloc,
@@ -36,6 +38,19 @@ REFERENCE_SPEC_GIT_PATH = ref_spec_2780.git_path
 REFERENCE_SPEC_VERSION = ref_spec_2780.version
 
 pytestmark = pytest.mark.valid_from("Amsterdam")
+
+
+def below_standard_cost_exception(
+    gas_limit: int, floor_gas: int
+) -> List[TransactionException] | TransactionException:
+    """Return the exception a limit below the standard cost can raise."""
+    if gas_limit >= floor_gas:
+        return TransactionException.INTRINSIC_GAS_TOO_LOW
+    # The spec checks max(standard cost, floor), so either is valid.
+    return [
+        TransactionException.INTRINSIC_GAS_TOO_LOW,
+        TransactionException.INTRINSIC_GAS_BELOW_FLOOR_GAS_COST,
+    ]
 
 
 @EIPChecklist.GasCostChanges.Test.OutOfGas()
@@ -70,6 +85,7 @@ def test_intrinsic_gas_floor_boundary(
         recipient_type=recipient_type,
         return_cost_deducted_prior_execution=True,
     )
+    floor_gas = fork.transaction_data_floor_cost_calculator()(data=b"")
 
     tx = Transaction(
         sender=sender,
@@ -77,7 +93,7 @@ def test_intrinsic_gas_floor_boundary(
         value=value,
         gas_limit=intrinsic_gas - 1,
         gas_price=1_000_000_000,
-        error=TransactionException.INTRINSIC_GAS_TOO_LOW,
+        error=below_standard_cost_exception(intrinsic_gas - 1, floor_gas),
     )
 
     state_test(pre=pre, tx=tx, post={})
@@ -117,6 +133,9 @@ def test_intrinsic_gas_floor_boundary_contract_creation(
         sends_value=bool(value),
         return_cost_deducted_prior_execution=True,
     )
+    floor_gas = fork.transaction_data_floor_cost_calculator()(
+        data=init_code, contract_creation=True
+    )
 
     tx = Transaction(
         sender=sender,
@@ -125,7 +144,7 @@ def test_intrinsic_gas_floor_boundary_contract_creation(
         data=init_code,
         gas_limit=intrinsic_gas - 1,
         gas_price=1_000_000_000,
-        error=TransactionException.INTRINSIC_GAS_TOO_LOW,
+        error=below_standard_cost_exception(intrinsic_gas - 1, floor_gas),
     )
 
     state_test(pre=pre, tx=tx, post={})
@@ -177,6 +196,7 @@ def test_intrinsic_gas_floor_boundary_with_authorizations(
         authorization_list_or_count=authorization_list,
         return_cost_deducted_prior_execution=True,
     )
+    floor_gas = fork.transaction_data_floor_cost_calculator()(data=b"")
 
     tx = Transaction(
         sender=sender,
@@ -186,7 +206,7 @@ def test_intrinsic_gas_floor_boundary_with_authorizations(
         gas_limit=intrinsic_gas - 1,
         max_fee_per_gas=1_000_000_000,
         max_priority_fee_per_gas=1_000_000_000,
-        error=TransactionException.INTRINSIC_GAS_TOO_LOW,
+        error=below_standard_cost_exception(intrinsic_gas - 1, floor_gas),
     )
 
     state_test(pre=pre, tx=tx, post=pre)
@@ -234,6 +254,7 @@ def test_intrinsic_gas_floor_boundary_all_tx_types(
         authorization_list_or_count=authorizations,
         return_cost_deducted_prior_execution=True,
     )
+    floor_gas = fork.transaction_data_floor_cost_calculator()(data=b"")
 
     tx = Transaction(
         ty=tx_type,
@@ -243,7 +264,7 @@ def test_intrinsic_gas_floor_boundary_all_tx_types(
         authorization_list=authorizations or None,
         blob_versioned_hashes=blob_versioned_hashes,
         gas_limit=intrinsic_gas - 1,
-        error=TransactionException.INTRINSIC_GAS_TOO_LOW,
+        error=below_standard_cost_exception(intrinsic_gas - 1, floor_gas),
     )
 
     state_test(pre=pre, tx=tx, post=pre)
