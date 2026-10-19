@@ -20,6 +20,7 @@ from execution_testing.fixtures import (
     StateFixture,
 )
 
+from ..client_runner import RUNNER_COMMANDS, ClientRunner
 from ..ethereum_cli import EthereumCLI, Executable
 from ..file_utils import dump_files_to_directory
 from ..fixture_consumer_tool import FixtureConsumerTool
@@ -84,10 +85,23 @@ class Nethtest(EthereumCLI):
 
 class NethtestFixtureConsumer(
     Nethtest,
+    ClientRunner,
     FixtureConsumerTool,
     fixture_formats=[StateFixture, BlockchainFixture],
 ):
     """Nethermind implementation of the fixture consumer."""
+
+    runner_commands = RUNNER_COMMANDS["nethermind"]
+
+    def __init__(
+        self,
+        binary: Executable,
+        trace: bool = False,
+        exception_mapper: ExceptionMapper | None = None,
+    ):
+        """Initialize the consumer with Nethermind's exception mapper."""
+        super().__init__(binary, trace, exception_mapper)
+        self.runner_exception_mapper = NethermindExceptionMapper()
 
     def _build_command_with_options(
         self,
@@ -275,6 +289,11 @@ class NethtestFixtureConsumer(
         Execute the appropriate geth fixture consumer for the fixture at
         `fixture_path`.
         """
+        if self.speaks_runner_interface(fixture_format):
+            self.consume_with_runner(
+                fixture_format, fixture_path, fixture_name, debug_output_path
+            )
+            return
         command = self._build_command_with_options(
             fixture_format, fixture_path, fixture_name, debug_output_path
         )
@@ -475,9 +494,6 @@ class NethermindExceptionMapper(ExceptionMapper):
             r"InvalidBlockLevelAccessListHash:"
             r"|InvalidBlockLevelAccessList:"
             r"|BlockLevelAccessListIndexOutOfRange:"
-            # The BAL decoder refuses a slot listed in both storage reads
-            # and storage changes.
-            r"|Invalid storage read, already in storage changes"
             r"|could not be parsed as a block: "
             r"Error decoding block access list:"
             r"|Error decoding block access list:"
