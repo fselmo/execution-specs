@@ -24,7 +24,7 @@ from .clis.besu import BesuFixtureConsumer, BesuTransitionTool
 # first look, it does not by itself decide identity.
 from .clis.erigon import ErigonExceptionMapper, ErigonFixtureConsumer
 from .clis.ethereumjs import EthereumJSTransitionTool
-from .clis.ethrex import EthrexFixtureConsumer
+from .clis.ethrex import EthrexBlocktestConsumer, EthrexEnginetestConsumer
 from .clis.evmone import (
     EvmOneBlockchainFixtureConsumer,
     EvmoneExceptionMapper,
@@ -64,7 +64,8 @@ __all__ = (
     "ErigonExceptionMapper",
     "ErigonFixtureConsumer",
     "EthereumJSTransitionTool",
-    "EthrexFixtureConsumer",
+    "EthrexBlocktestConsumer",
+    "EthrexEnginetestConsumer",
     "EvmoneExceptionMapper",
     "EvmOneTransitionTool",
     "EvmOneStateFixtureConsumer",

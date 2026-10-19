@@ -10,7 +10,8 @@ import pytest
 
 from execution_testing.base_types import Hash, to_json
 from execution_testing.client_clis import (
-    EthrexFixtureConsumer,
+    EthrexBlocktestConsumer,
+    EthrexEnginetestConsumer,
     FixtureConsumerTool,
     GethFixtureConsumer,
     NethtestFixtureConsumer,
@@ -402,13 +403,13 @@ def fake_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         ),
         pytest.param(
             "ethrex-blocktest 4.0.0",
-            EthrexFixtureConsumer,
+            EthrexBlocktestConsumer,
             {BlockchainFixture},
             id="ethrex_blocktest",
         ),
         pytest.param(
             "ethrex-enginetest 4.0.0",
-            EthrexFixtureConsumer,
+            EthrexEnginetestConsumer,
             {BlockchainEngineFixture},
             id="ethrex_enginetest",
         ),
@@ -450,7 +451,7 @@ def test_ethrex_runs_its_binary_without_a_subcommand(
     monkeypatch.setenv(
         "RESULTS", json.dumps([result(rejections={2: "x", 4: "y"})])
     )
-    consumer = EthrexFixtureConsumer(binary=fake_runner)
+    consumer = EthrexBlocktestConsumer(binary=fake_runner)
     run = consumer.run_fixture_file(BlockchainFixture, BLOCKCHAIN_FIXTURE)
     assert run.error is None
     assert (tmp_path / "calls.log").read_text() == (

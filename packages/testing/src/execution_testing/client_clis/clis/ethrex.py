@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Tuple
+from typing import ClassVar, Tuple
 
 from execution_testing.exceptions import (
     BlockException,
@@ -214,21 +214,17 @@ class EthrexExceptionMapper(ExceptionMapper):
     }
 
 
-class EthrexFixtureConsumer(
-    ClientRunner,
-    FixtureConsumerTool,
-    fixture_formats=[],
-):
+class EthrexRunner(ClientRunner):
     """
-    One of ethrex's runner binaries, `blocktest` or `enginetest`, each of
-    which runs one format, and only through the interface.
+    One of ethrex's runner binaries: ethrex ships each runner command as a
+    binary of its own, which runs one format, and only through the
+    interface.
     """
 
-    default_binary = Path("blocktest")
-    detect_binary_pattern = re.compile(r"^ethrex-(blocktest|enginetest) ")
     version_flag = "--version"
     runner_commands = RUNNER_COMMANDS["ethrex"]
     runner_exception_mapper = EthrexExceptionMapper()
+    runner_format: ClassVar[FixtureFormat]
 
     def __init__(self, binary: Executable, trace: bool = False):
         """Initialize the consumer; the binary must speak the interface."""
@@ -240,15 +236,30 @@ class EthrexFixtureConsumer(
         self, fixture_format: FixtureFormat
     ) -> Tuple[str, ...] | None:
         """Return the command only for the format this binary runs."""
-        command = self.version().split()[0]
-        if (
-            command == "ethrex-blocktest"
-            and fixture_format == BlockchainFixture
-        ):
-            return self.runner_commands.blocktest
-        if (
-            command == "ethrex-enginetest"
-            and fixture_format == BlockchainEngineFixture
-        ):
-            return self.runner_commands.enginetest
-        return None
+        if fixture_format != self.runner_format:
+            return None
+        return super().runner_command(fixture_format)
+
+
+class EthrexBlocktestConsumer(
+    EthrexRunner,
+    FixtureConsumerTool,
+    fixture_formats=[],
+):
+    """ethrex's `blocktest` binary."""
+
+    default_binary = Path("blocktest")
+    detect_binary_pattern = re.compile(r"^ethrex-blocktest ")
+    runner_format = BlockchainFixture
+
+
+class EthrexEnginetestConsumer(
+    EthrexRunner,
+    FixtureConsumerTool,
+    fixture_formats=[],
+):
+    """ethrex's `enginetest` binary."""
+
+    default_binary = Path("enginetest")
+    detect_binary_pattern = re.compile(r"^ethrex-enginetest ")
+    runner_format = BlockchainEngineFixture
