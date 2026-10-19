@@ -28,6 +28,7 @@ from execution_testing.fixtures import (
 from execution_testing.forks import Fork
 
 from ..cli_types import TransitionToolOutput
+from ..client_runner import RUNNER_COMMANDS, ClientRunner
 from ..ethereum_cli import EthereumCLI, Executable
 from ..fixture_consumer_tool import FixtureConsumerTool
 from ..transition_tool import (
@@ -472,10 +473,14 @@ class BesuExceptionMapper(ExceptionMapper):
 
 class BesuFixtureConsumer(
     BesuEvmTool,
+    ClientRunner,
     FixtureConsumerTool,
     fixture_formats=[StateFixture, BlockchainFixture],
 ):
     """Besu's implementation of the fixture consumer."""
+
+    runner_commands = RUNNER_COMMANDS["besu"]
+    runner_exception_mapper = BesuExceptionMapper()
 
     def consume_blockchain_test(
         self,
@@ -633,6 +638,11 @@ class BesuFixtureConsumer(
         Execute the appropriate Besu fixture consumer for the
         fixture at ``fixture_path``.
         """
+        if self.speaks_runner_interface(fixture_format):
+            self.consume_with_runner(
+                fixture_format, fixture_path, fixture_name, debug_output_path
+            )
+            return
         if fixture_format == BlockchainFixture:
             self.consume_blockchain_test(
                 fixture_path=fixture_path,

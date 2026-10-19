@@ -20,6 +20,7 @@ from execution_testing.fixtures import (
     StateFixture,
 )
 
+from ..client_runner import RUNNER_COMMANDS, ClientRunner
 from ..ethereum_cli import EthereumCLI, Executable
 from ..file_utils import dump_files_to_directory
 from ..fixture_consumer_tool import FixtureConsumerTool
@@ -29,9 +30,11 @@ class Nethtest(EthereumCLI):
     """Nethermind `nethtest` binary base class."""
 
     default_binary = Path("nethtest")
-    # new pattern allows e.g. '1.2.3', in the past that was denied
+    # new pattern allows e.g. '1.2.3', in the past that was denied; nethtest
+    # builds with the runner interface print `Nethermind nethtest 1.2.3+abc`
     detect_binary_pattern = re.compile(
-        r"^\d+\.\d+\.\d+(-[a-zA-Z0-9]+)?(\+[a-f0-9]{40})?$"
+        r"^(Nethermind nethtest )?\d+\.\d+\.\d+(-[a-zA-Z0-9]+)?"
+        r"(\+[a-f0-9]{8,40})?$"
     )
     version_flag: str = "--version"
     cached_version: Optional[str] = None
@@ -83,10 +86,23 @@ class Nethtest(EthereumCLI):
 
 class NethtestFixtureConsumer(
     Nethtest,
+    ClientRunner,
     FixtureConsumerTool,
     fixture_formats=[StateFixture, BlockchainFixture],
 ):
     """Nethermind implementation of the fixture consumer."""
+
+    runner_commands = RUNNER_COMMANDS["nethermind"]
+
+    def __init__(
+        self,
+        binary: Executable,
+        trace: bool = False,
+        exception_mapper: ExceptionMapper | None = None,
+    ):
+        """Initialize the consumer with Nethermind's exception mapper."""
+        super().__init__(binary, trace, exception_mapper)
+        self.runner_exception_mapper = NethermindExceptionMapper()
 
     def _build_command_with_options(
         self,
@@ -274,6 +290,11 @@ class NethtestFixtureConsumer(
         Execute the appropriate geth fixture consumer for the fixture at
         `fixture_path`.
         """
+        if self.speaks_runner_interface(fixture_format):
+            self.consume_with_runner(
+                fixture_format, fixture_path, fixture_name, debug_output_path
+            )
+            return
         command = self._build_command_with_options(
             fixture_format, fixture_path, fixture_name, debug_output_path
         )

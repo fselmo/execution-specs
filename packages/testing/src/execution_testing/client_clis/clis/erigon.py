@@ -21,6 +21,7 @@ from execution_testing.fixtures import (
     StateFixture,
 )
 
+from ..client_runner import RUNNER_COMMANDS, ClientRunner
 from ..ethereum_cli import EthereumCLI, Executable, run_command
 from ..fixture_consumer_tool import FixtureConsumerTool
 
@@ -245,6 +246,7 @@ class ErigonEvm(EthereumCLI):
 
 class ErigonFixtureConsumer(
     ErigonEvm,
+    ClientRunner,
     FixtureConsumerTool,
     fixture_formats=[StateFixture, BlockchainFixture],
 ):
@@ -257,6 +259,9 @@ class ErigonFixtureConsumer(
     on stdout) when ``--jsonout`` is given. Without it the consumer's
     ``json.loads`` fails on the first non-JSON line.
     """
+
+    runner_commands = RUNNER_COMMANDS["erigon"]
+    runner_exception_mapper = ErigonExceptionMapper()
 
     def consume_blockchain_test(
         self,
@@ -390,6 +395,11 @@ class ErigonFixtureConsumer(
         debug_output_path: Optional[Path] = None,
     ) -> None:
         """Dispatch to the appropriate Erigon fixture consumer."""
+        if self.speaks_runner_interface(fixture_format):
+            self.consume_with_runner(
+                fixture_format, fixture_path, fixture_name, debug_output_path
+            )
+            return
         if fixture_format == BlockchainFixture:
             self.consume_blockchain_test(
                 fixture_path=fixture_path,

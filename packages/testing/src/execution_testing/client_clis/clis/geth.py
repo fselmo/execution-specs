@@ -23,6 +23,7 @@ from execution_testing.fixtures import (
 )
 from execution_testing.forks import Fork
 
+from ..client_runner import RUNNER_COMMANDS, ClientRunner
 from ..ethereum_cli import EthereumCLI, Executable
 from ..fixture_consumer_tool import FixtureConsumerTool
 from ..transition_tool import TransitionTool, dump_files_to_directory
@@ -290,10 +291,14 @@ class GethTransitionTool(GethEvm, TransitionTool):
 
 class GethFixtureConsumer(
     GethEvm,
+    ClientRunner,
     FixtureConsumerTool,
     fixture_formats=[StateFixture, BlockchainFixture],
 ):
     """Geth's implementation of the fixture consumer."""
+
+    runner_commands = RUNNER_COMMANDS["go-ethereum"]
+    runner_exception_mapper = GethExceptionMapper()
 
     def consume_blockchain_test(
         self,
@@ -454,6 +459,11 @@ class GethFixtureConsumer(
         Execute the appropriate geth fixture consumer for the fixture at
         `fixture_path`.
         """
+        if self.speaks_runner_interface(fixture_format):
+            self.consume_with_runner(
+                fixture_format, fixture_path, fixture_name, debug_output_path
+            )
+            return
         if fixture_format == BlockchainFixture:
             self.consume_blockchain_test(
                 fixture_path=fixture_path,
