@@ -35,7 +35,9 @@ exit 0
 
 
 def runner_result(
-    block_4_error: str, name: str = FIXTURE_NAME
+    block_4_error: str,
+    name: str = FIXTURE_NAME,
+    block_2_error: str = PRIORITY_FEE_ERROR,
 ) -> List[Dict[str, Any]]:
     """Return results that reject blocks 2 and 4 of a fixture."""
     return [
@@ -43,7 +45,7 @@ def runner_result(
             "name": name,
             "pass": True,
             "rejections": [
-                {"index": 2, "error": PRIORITY_FEE_ERROR},
+                {"index": 2, "error": block_2_error},
                 {"index": 4, "error": block_4_error},
             ],
         }
@@ -83,15 +85,21 @@ def consume_direct(pytester: Pytester, monkeypatch: pytest.MonkeyPatch) -> Any:
         json.dumps(runner_result(PRIORITY_FEE_ERROR, ENGINE_FIXTURE_NAME)),
     )
 
-    def run(results: List[Dict[str, Any]], *args: str) -> Any:
+    def run(
+        results: List[Dict[str, Any]],
+        *args: str,
+        binaries: List[Path] | None = None,
+    ) -> Any:
         monkeypatch.setenv("BLOCKTEST", json.dumps(results))
+        # `--bin=` keeps pytest's early parse, which runs before the copied
+        # conftest adds the option, from taking the path for a test path.
+        bin_args = [f"--bin={binary}" for binary in binaries or [evm]]
         return pytester.runpytest(
             "-c",
             "pytest-consume.ini",
             "--input",
             str(fixtures),
-            "--bin",
-            str(evm),
+            *bin_args,
             str(direct / "test_via_direct.py"),
             *args,
         )
@@ -180,3 +188,55 @@ def test_unknown_bal_modes_are_rejected(consume_direct: Any) -> None:
     """A mode outside the runner flags is a usage error."""
     result = consume_direct([], "--bal-modes", "serial")
     assert result.ret == pytest.ExitCode.USAGE_ERROR
+
+
+# One of ethrex's runner binaries, each its own command; $1 of the template
+# is the command name, results come from $BLOCKTEST or $ENGINETEST.
+FAKE_ETHREX = """#!/bin/sh
+if [ "$1" = --version ]; then echo "ethrex-{command} 4.0.0"; exit 0; fi
+for arg in "$@"; do
+    if [ "$arg" = --help ]; then echo "--bal-sequential"; exit 0; fi
+done
+echo "${variable}"
+"""
+
+
+def test_binaries_that_run_one_format_each(
+    consume_direct: Any, pytester: Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    With ethrex's two binaries, each fixture runs once, on the binary for
+    its format, and the other pairs are deselected rather than skipped.
+    """
+    ethrex_error = "priority fee 2 is greater than max fee 1"
+    binaries = []
+    for command, variable in (
+        ("blocktest", "BLOCKTEST"),
+        ("enginetest", "ENGINETEST"),
+    ):
+        binary = Path(pytester.path) / command
+        binary.write_text(
+            FAKE_ETHREX.replace("{command}", command).replace(
+                "{variable}", variable
+            )
+        )
+        binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+        binaries.append(binary)
+    monkeypatch.setenv(
+        "ENGINETEST",
+        json.dumps(
+            runner_result(ethrex_error, ENGINE_FIXTURE_NAME, ethrex_error)
+        ),
+    )
+    result = consume_direct(
+        runner_result(ethrex_error, block_2_error=ethrex_error),
+        "-v",
+        binaries=binaries,
+    )
+    result.assert_outcomes(passed=2, deselected=2)
+    result.stdout.fnmatch_lines(
+        [
+            "*EthrexBlocktestConsumer-*London*PASSED*",
+            "*EthrexEnginetestConsumer-*Shanghai*PASSED*",
+        ]
+    )

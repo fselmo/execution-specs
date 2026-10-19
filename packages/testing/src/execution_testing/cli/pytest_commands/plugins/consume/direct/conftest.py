@@ -281,17 +281,23 @@ def bal_mode_applies(fixture_format: FixtureFormat, mode: str) -> bool:
 def pytest_collection_modifyitems(
     config: pytest.Config, items: List[pytest.Item]
 ) -> None:
-    """Deselect the BAL modes that do not apply to a test's format."""
-    if not config.getoption("bal_modes"):
-        return
+    """
+    Deselect the tests a binary cannot run, as when ethrex's `blocktest`
+    meets an engine fixture, and the BAL modes a format has no use for.
+    """
     selected, deselected = [], []
     for item in items:
         assert isinstance(item, pytest.Function)
-        test_case = item.callspec.params["test_case"]
-        mode = item.callspec.params["bal_mode"]
+        params = item.callspec.params
+        test_case = params["test_case"]
+        fixture_consumer = params["fixture_consumer"]
+        mode = params.get("bal_mode", "parallel")
         assert isinstance(test_case, (TestCaseIndexFile, TestCaseStream))
+        assert isinstance(fixture_consumer, FixtureConsumerTool)
         assert isinstance(mode, str)
-        if bal_mode_applies(test_case.format, mode):
+        if fixture_consumer.can_consume(test_case.format) and bal_mode_applies(
+            test_case.format, mode
+        ):
             selected.append(item)
         else:
             deselected.append(item)
