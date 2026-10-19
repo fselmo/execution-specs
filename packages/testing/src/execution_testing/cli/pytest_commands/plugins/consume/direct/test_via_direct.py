@@ -5,6 +5,8 @@ interface similar to geth's EVM 'blocktest' command.
 
 from pathlib import Path
 
+import pytest
+
 from execution_testing.fixtures import FixtureConsumer
 from execution_testing.fixtures.consume import (
     TestCaseIndexFile,
@@ -22,6 +24,11 @@ def test_fixture(
     Generic test function used to call the fixture consumer with a given
     fixture file path and a fixture name (for a single test run).
     """
+    if not fixture_consumer.can_consume(test_case.format):
+        pytest.skip(
+            f"{fixture_consumer.__class__.__name__} does not consume "
+            f"{test_case.format.format_name} fixtures"
+        )
     fixture_consumer.consume_fixture(
         test_case.format,
         fixture_path,

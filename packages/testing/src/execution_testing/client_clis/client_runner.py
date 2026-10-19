@@ -15,13 +15,16 @@ from typing import Annotated, Any, ClassVar, Dict, List, Tuple
 from pydantic import TypeAdapter, ValidationError
 
 from execution_testing.exceptions import (
+    EngineAPIError,
     ExceptionMapper,
     ExceptionMapperValidator,
     UndefinedException,
 )
 from execution_testing.fixtures import (
     BaseFixture,
+    BlockchainEngineFixture,
     BlockchainFixture,
+    FixtureConsumer,
     FixtureFormat,
 )
 from execution_testing.fixtures.blockchain import InvalidFixtureBlock
@@ -125,6 +128,9 @@ def rejection_problems(
     """
     Compare the blocks or payloads a runner rejected, and why, with what the
     fixture expects; return one line per mismatch.
+
+    A payload that expects a JSON-RPC error is checked by its code, which
+    belongs to the Engine API rather than to the client.
     """
     expected: Dict[int, Any] = {}
     if isinstance(fixture, BlockchainFixture):
@@ -132,6 +138,13 @@ def rejection_problems(
         for index, block in enumerate(fixture.blocks):
             if isinstance(block, InvalidFixtureBlock):
                 expected[index] = block.expect_exception
+    elif isinstance(fixture, BlockchainEngineFixture):
+        kind = "payload"
+        for index, payload in enumerate(fixture.payloads):
+            if payload.error_code is not None:
+                expected[index] = payload.error_code
+            elif payload.validation_error is not None:
+                expected[index] = payload.validation_error
     else:
         raise ValueError(f"Unsupported fixture format: {fixture.format_name}")
 
@@ -151,6 +164,13 @@ def rejection_problems(
             problems.append(
                 f'{kind} {index}: expected valid, client said "{error}"'
             )
+            continue
+        if isinstance(want, EngineAPIError):
+            if not error.startswith(f"{want.value}:"):
+                problems.append(
+                    f"{kind} {index}: expected error code {want.value}, "
+                    f'client said "{error}"'
+                )
             continue
         mapped = map_client_error(error, mapper)
         if isinstance(mapped, UndefinedException):
@@ -173,7 +193,7 @@ def read_fixture_file(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text())
 
 
-class ClientRunner(EthereumCLI):
+class ClientRunner(FixtureConsumer, EthereumCLI):
     """
     A client binary that may speak the runner interface.
 
@@ -191,7 +211,18 @@ class ClientRunner(EthereumCLI):
         """Return the runner command for a fixture format, if it has one."""
         if fixture_format == BlockchainFixture:
             return self.runner_commands.blocktest
+        if fixture_format == BlockchainEngineFixture:
+            return self.runner_commands.enginetest
         return None
+
+    def can_consume(self, fixture_format: FixtureFormat) -> bool:
+        """
+        Return whether the consumer takes a format, on its old path or
+        through the runner interface, which adds Blockchain Engine Tests.
+        """
+        return super().can_consume(
+            fixture_format
+        ) or self.speaks_runner_interface(fixture_format)
 
     @cache  # noqa: B019
     def speaks_runner_interface(self, fixture_format: FixtureFormat) -> bool:

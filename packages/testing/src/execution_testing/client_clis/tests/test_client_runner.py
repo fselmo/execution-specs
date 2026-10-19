@@ -14,13 +14,21 @@ from execution_testing.client_clis.client_runner import (
     rejection_problems,
 )
 from execution_testing.client_clis.clis.geth import GethExceptionMapper
-from execution_testing.fixtures import BlockchainFixture
+from execution_testing.exceptions import EngineAPIError
+from execution_testing.fixtures import (
+    BlockchainEngineFixture,
+    BlockchainFixture,
+)
 
-# A London fixture whose blocks 2 and 4 are invalid, each with
+# Fixtures whose blocks (or payloads) 2 and 4 are invalid, each with
 # PRIORITY_GREATER_THAN_MAX_FEE_PER_GAS.
 SPEC_FIXTURES = Path(__file__).parents[2] / "specs" / "tests" / "fixtures"
 BLOCKCHAIN_FIXTURE = SPEC_FIXTURES / "blockchain_london_invalid_filled.json"
+ENGINE_FIXTURE = (
+    SPEC_FIXTURES / "blockchain_shanghai_invalid_filled_engine.json"
+)
 FIXTURE_NAME = "000/my_blockchain_test/London"
+ENGINE_FIXTURE_NAME = "000/my_blockchain_test/Shanghai"
 
 PRIORITY_FEE_ERROR = "max priority fee per gas higher than max fee per gas"
 
@@ -138,6 +146,74 @@ def test_rejection_reasons(
     assert (
         rejection_problems(blockchain_fixture, parsed, GethExceptionMapper())
         == problems
+    )
+
+
+@pytest.fixture(scope="module")
+def engine_fixture() -> BlockchainEngineFixture:
+    """The Shanghai engine fixture with two invalid payloads."""
+    fixtures = json.loads(ENGINE_FIXTURE.read_text())
+    return BlockchainEngineFixture.model_validate(
+        fixtures[ENGINE_FIXTURE_NAME]
+    )
+
+
+def test_payload_rejection_reasons(
+    engine_fixture: BlockchainEngineFixture,
+) -> None:
+    """Engine payloads are checked by index and reason, like blocks."""
+    parsed = parse_run(
+        ["evm"],
+        0,
+        json.dumps(
+            [result(ENGINE_FIXTURE_NAME, rejections={2: PRIORITY_FEE_ERROR})]
+        ),
+        "",
+    ).results[ENGINE_FIXTURE_NAME]
+    assert rejection_problems(
+        engine_fixture, parsed, GethExceptionMapper()
+    ) == [
+        "payload 4: expected "
+        "TransactionException.PRIORITY_GREATER_THAN_MAX_FEE_PER_GAS, "
+        "client accepted it"
+    ]
+
+
+@pytest.mark.parametrize(
+    "error,problems",
+    [
+        pytest.param("-32602: Invalid params", [], id="same_code"),
+        pytest.param(
+            "-38003: Invalid payload attributes",
+            [
+                "payload 4: expected error code -32602, "
+                'client said "-38003: Invalid payload attributes"'
+            ],
+            id="other_code",
+        ),
+    ],
+)
+def test_payload_error_codes(
+    engine_fixture: BlockchainEngineFixture, error: str, problems: List[str]
+) -> None:
+    """A payload that expects a JSON-RPC error is checked by its code alone."""
+    fixture = engine_fixture.model_copy(deep=True)
+    fixture.payloads[4].error_code = EngineAPIError.InvalidParams
+    parsed = parse_run(
+        ["evm"],
+        0,
+        json.dumps(
+            [
+                result(
+                    ENGINE_FIXTURE_NAME,
+                    rejections={2: PRIORITY_FEE_ERROR, 4: error},
+                )
+            ]
+        ),
+        "",
+    ).results[ENGINE_FIXTURE_NAME]
+    assert (
+        rejection_problems(fixture, parsed, GethExceptionMapper()) == problems
     )
 
 
