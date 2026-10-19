@@ -9,13 +9,17 @@ import json
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any, Generator, List
 
 import pytest
 
 from execution_testing.base_types import to_json
 from execution_testing.cli.pytest_commands.plugins.consume.consume import (
     FixturesSource,
+)
+from execution_testing.client_clis.client_runner import (
+    BAL_MODE_FLAGS,
+    BalMode,
 )
 from execution_testing.client_clis.ethereum_cli import (
     EthereumCLI,
@@ -66,6 +70,17 @@ class CollectOnlyFixtureConsumer(
         pass
 
 
+def parse_bal_modes(value: str) -> List[str]:
+    """Parse `--bal-modes` into a list of known modes."""
+    modes = [mode.strip() for mode in value.split(",") if mode.strip()]
+    unknown = [mode for mode in modes if mode not in BAL_MODE_FLAGS]
+    if unknown or not modes:
+        raise ValueError(
+            f"Unknown BAL modes {unknown}; choose from {list(BAL_MODE_FLAGS)}"
+        )
+    return modes
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:  # noqa: D103
     consume_group = parser.getgroup(
         "consume_direct",
@@ -84,6 +99,31 @@ def pytest_addoption(parser: pytest.Parser) -> None:  # noqa: D103
             "`docker:<image>#<binary>` to run another binary in the image. "
             "Flag can be used multiple times to specify multiple fixture "
             "consumer binaries."
+        ),
+    )
+    consume_group.addoption(
+        "--bal-modes",
+        action="store",
+        dest="bal_modes",
+        type=parse_bal_modes,
+        default=None,
+        help=(
+            "Comma-separated ways to execute blocks with access lists, each "
+            "run as its own test: `parallel` (the runner's default), "
+            "`sequential` and `withhold` (block tests only). Needs a binary "
+            "that speaks the client runner interface; without the flag, "
+            "tests run once, in parallel mode, with unchanged test ids."
+        ),
+    )
+    consume_group.addoption(
+        "--require-bal-parallel",
+        action="store_true",
+        dest="require_bal_parallel",
+        default=False,
+        help=(
+            "Fail, instead of warning, when a valid block with an access "
+            "list does not run on the parallel executor, or a block falls "
+            "back to the sequential one, in the parallel mode."
         ),
     )
     consume_group.addoption(
@@ -195,8 +235,20 @@ def fixture_name(test_case: TestCaseIndexFile | TestCaseStream) -> str:
     return test_case.id
 
 
+@pytest.fixture
+def bal_mode() -> BalMode:
+    """The BAL mode when `--bal-modes` is not given."""
+    return "parallel"
+
+
+@pytest.fixture
+def require_bal_parallel(request: pytest.FixtureRequest) -> bool:
+    """Whether a block that did not run in parallel fails its test."""
+    return request.config.getoption("require_bal_parallel")
+
+
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    """Parametrize test cases for every fixture consumer."""
+    """Parametrize test cases for every fixture consumer and BAL mode."""
     metafunc.parametrize(
         "fixture_consumer",
         (
@@ -206,3 +258,43 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             for fixture_consumer in metafunc.config.fixture_consumers  # type: ignore[attr-defined]
         ),
     )
+    bal_modes = metafunc.config.getoption("bal_modes")
+    if bal_modes:
+        metafunc.parametrize(
+            "bal_mode",
+            [pytest.param(mode, id=f"bal_{mode}") for mode in bal_modes],
+        )
+
+
+def bal_mode_applies(fixture_format: FixtureFormat, mode: str) -> bool:
+    """
+    Return whether a BAL mode applies to a format: only blockchain formats
+    have access lists, and only block tests can withhold them.
+    """
+    if mode == "parallel":
+        return True
+    if mode == "withhold":
+        return fixture_format == BlockchainFixture
+    return fixture_format in (BlockchainFixture, BlockchainEngineFixture)
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: List[pytest.Item]
+) -> None:
+    """Deselect the BAL modes that do not apply to a test's format."""
+    if not config.getoption("bal_modes"):
+        return
+    selected, deselected = [], []
+    for item in items:
+        assert isinstance(item, pytest.Function)
+        test_case = item.callspec.params["test_case"]
+        mode = item.callspec.params["bal_mode"]
+        assert isinstance(test_case, (TestCaseIndexFile, TestCaseStream))
+        assert isinstance(mode, str)
+        if bal_mode_applies(test_case.format, mode):
+            selected.append(item)
+        else:
+            deselected.append(item)
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
