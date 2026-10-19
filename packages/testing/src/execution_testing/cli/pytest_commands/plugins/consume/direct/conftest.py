@@ -26,7 +26,9 @@ from execution_testing.client_clis.fixture_consumer_tool import (
 )
 from execution_testing.fixtures import (
     BaseFixture,
+    BlockchainEngineFixture,
     BlockchainFixture,
+    FixtureFormat,
     StateFixture,
 )
 from execution_testing.fixtures.consume import (
@@ -34,6 +36,16 @@ from execution_testing.fixtures.consume import (
     TestCaseStream,
 )
 from execution_testing.fixtures.file import Fixtures
+
+DIRECT_FIXTURE_FORMATS: list[FixtureFormat] = [
+    StateFixture,
+    BlockchainFixture,
+    BlockchainEngineFixture,
+]
+"""
+Formats a direct consumer may take; Blockchain Engine Tests need a binary
+that speaks the client runner interface.
+"""
 
 
 class CollectOnlyCLI(EthereumCLI):
@@ -96,10 +108,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:  # noqa: D103
 
 
 def pytest_configure(config: pytest.Config) -> None:  # noqa: D103
-    config.supported_fixture_formats = [  # type: ignore[attr-defined]
-        StateFixture,
-        BlockchainFixture,
-    ]
+    config.supported_fixture_formats = DIRECT_FIXTURE_FORMATS  # type: ignore[attr-defined]
     fixture_consumers = []
     for fixture_consumer_bin_path in config.getoption("fixture_consumer_bin"):
         fixture_consumers.append(
@@ -127,6 +136,16 @@ def pytest_configure(config: pytest.Config) -> None:  # noqa: D103
             "path via `--bin`."
         )
     config.fixture_consumers = fixture_consumers  # type: ignore[attr-defined]
+    # Collect only the formats some binary can consume, so a binary without
+    # the runner interface collects no Blockchain Engine Tests.
+    config.supported_fixture_formats = [  # type: ignore[attr-defined]
+        fixture_format
+        for fixture_format in DIRECT_FIXTURE_FORMATS
+        if any(
+            fixture_consumer.can_consume(fixture_format)
+            for fixture_consumer in fixture_consumers
+        )
+    ]
 
 
 @pytest.fixture(scope="function")
