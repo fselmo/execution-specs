@@ -23,7 +23,7 @@ from execution_testing.fixtures import (
 )
 from execution_testing.forks import Fork
 
-from ..ethereum_cli import EthereumCLI
+from ..ethereum_cli import EthereumCLI, Executable
 from ..fixture_consumer_tool import FixtureConsumerTool
 from ..transition_tool import TransitionTool, dump_files_to_directory
 
@@ -201,24 +201,13 @@ class GethEvm(EthereumCLI):
 
     def __init__(
         self,
-        binary: Optional[Path] = None,
+        binary: Optional[Executable] = None,
         trace: bool = False,
     ):
         """Initialize the GethEvm class."""
         self.binary = binary if binary else self.default_binary
         self.trace = trace
         self._info_metadata: Optional[Dict[str, Any]] = {}
-
-    def _run_command(self, command: List[str]) -> subprocess.CompletedProcess:
-        try:
-            return subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except Exception as e:
-            raise Exception("Unexpected exception calling evm tool.") from e
 
     def _consume_debug_dump(
         self,
@@ -258,15 +247,6 @@ class GethEvm(EthereumCLI):
         )
         shutil.copyfile(fixture_path, debug_fixture_path)
 
-    @cache  # noqa
-    def help(self, subcommand: str | None = None) -> str:
-        """Return the help string, optionally for a subcommand."""
-        help_command = [str(self.binary)]
-        if subcommand:
-            help_command.append(subcommand)
-        help_command.append("--help")
-        return self._run_command(help_command).stdout
-
 
 class GethTransitionTool(GethEvm, TransitionTool):
     """go-ethereum `evm` Transition tool interface wrapper class."""
@@ -290,8 +270,7 @@ class GethTransitionTool(GethEvm, TransitionTool):
         TransitionTool.__init__(
             self, binary=binary, exception_mapper=exception_mapper, trace=trace
         )
-        help_command = [str(self.binary), str(self.subcommand), "--help"]
-        result = self._run_command(help_command)
+        result = self._run_command([str(self.subcommand), "--help"])
         if result.returncode != 0:
             raise Exception(
                 "evm process unexpectedly returned a non-zero status "
@@ -338,15 +317,16 @@ class GethFixtureConsumer(
         if fixture_name:
             subcommand_options += ["--run", re.escape(fixture_name)]
 
-        command = (
-            [str(self.binary)]
-            + global_options
+        args = (
+            global_options
             + [subcommand]
             + subcommand_options
             + [str(fixture_path)]
         )
-
-        result = self._run_command(command)
+        result = self._run_command(
+            args, read_only=[fixture_path], writable=[debug_output_path]
+        )
+        command = list(result.args)
 
         if debug_output_path:
             self._consume_debug_dump(
@@ -394,14 +374,16 @@ class GethFixtureConsumer(
             global_options += ["--verbosity", "100"]
             subcommand_options += ["--trace"]
 
-        command = (
-            [str(self.binary)]
-            + global_options
+        args = (
+            global_options
             + [subcommand]
             + subcommand_options
             + [str(fixture_path)]
         )
-        result = self._run_command(command)
+        result = self._run_command(
+            args, read_only=[fixture_path], writable=[debug_output_path]
+        )
+        command = list(result.args)
 
         if debug_output_path:
             self._consume_debug_dump(

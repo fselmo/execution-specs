@@ -84,9 +84,9 @@ def test_from_binary(
     """Test that `from_binary` instantiates the correct subclass."""
 
     class MockCompletedProcess:
-        def __init__(self, stdout: bytes) -> None:
+        def __init__(self, stdout: str) -> None:
             self.stdout = stdout
-            self.stderr = None
+            self.stderr = ""
             self.returncode = 0
 
     def mock_which(self: str) -> str:
@@ -95,7 +95,7 @@ def test_from_binary(
 
     def mock_run(args: list, **kwargs: dict) -> MockCompletedProcess:
         del args, kwargs
-        return MockCompletedProcess(read_result.encode())
+        return MockCompletedProcess(read_result)
 
     monkeypatch.setattr(shutil, "which", mock_which)
     monkeypatch.setattr(subprocess, "run", mock_run)
@@ -109,8 +109,8 @@ def test_from_binary(
 class MockEvmoneVersion:
     """Stand-in for the completed `evmone --version` process."""
 
-    stdout = b"evmone 0.22.0"
-    stderr = None
+    stdout = "evmone 0.22.0"
+    stderr = ""
     returncode = 0
 
 

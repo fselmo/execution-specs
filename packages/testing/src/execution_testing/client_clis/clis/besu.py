@@ -28,7 +28,7 @@ from execution_testing.fixtures import (
 from execution_testing.forks import Fork
 
 from ..cli_types import TransitionToolOutput
-from ..ethereum_cli import EthereumCLI
+from ..ethereum_cli import EthereumCLI, Executable
 from ..fixture_consumer_tool import FixtureConsumerTool
 from ..transition_tool import (
     Profiler,
@@ -50,24 +50,12 @@ class BesuEvmTool(EthereumCLI):
 
     def __init__(
         self,
-        binary: Optional[Path] = None,
+        binary: Optional[Executable] = None,
         trace: bool = False,
     ):
         """Initialize the BesuEvmTool class."""
         self.binary = binary if binary else self.default_binary
         self.trace = trace
-
-    def _run_command(self, command: List[str]) -> subprocess.CompletedProcess:
-        """Run a command and return the result."""
-        try:
-            return subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except Exception as e:
-            raise Exception("Unexpected exception calling evmtool.") from e
 
     def _consume_debug_dump(
         self,
@@ -130,20 +118,12 @@ class BesuTransitionTool(TransitionTool):
         super().__init__(
             exception_mapper=BesuExceptionMapper(), binary=binary, trace=trace
         )
-        args = [str(self.binary), "t8n", "--help"]
-        try:
-            result = subprocess.run(
-                args, capture_output=True, text=True, check=True
-            )
-        except subprocess.CalledProcessError as e:
+        result = self._run_command(["t8n", "--help"])
+        if result.returncode != 0:
             raise Exception(
                 "evm process unexpectedly returned a non-zero status "
-                f"code: {e}. Stderr: {e.stderr}"
-            ) from e
-        except Exception as e:
-            raise Exception(
-                f"Unexpected exception calling evm tool: {e}."
-            ) from e
+                f"code: {result.returncode}. Stderr: {result.stderr}"
+            )
         self.help_string = result.stdout
         self.besu_trace_dir = (
             tempfile.TemporaryDirectory() if self.trace else None
@@ -520,14 +500,12 @@ class BesuFixtureConsumer(
                 fixture_name,
             ]
 
-        command = (
-            [str(self.binary)]
-            + [subcommand]
-            + subcommand_options
-            + [str(fixture_path)]
+        result = self._run_command(
+            [subcommand] + subcommand_options + [str(fixture_path)],
+            read_only=[fixture_path],
+            writable=[debug_output_path],
         )
-
-        result = self._run_command(command)
+        command = list(result.args)
 
         if debug_output_path:
             self._consume_debug_dump(
@@ -566,13 +544,12 @@ class BesuFixtureConsumer(
         if debug_output_path:
             subcommand_options += ["--json"]
 
-        command = (
-            [str(self.binary)]
-            + [subcommand]
-            + subcommand_options
-            + [str(fixture_path)]
+        result = self._run_command(
+            [subcommand] + subcommand_options + [str(fixture_path)],
+            read_only=[fixture_path],
+            writable=[debug_output_path],
         )
-        result = self._run_command(command)
+        command = list(result.args)
 
         if debug_output_path:
             self._consume_debug_dump(

@@ -20,7 +20,7 @@ from execution_testing.fixtures import (
     StateFixture,
 )
 
-from ..ethereum_cli import EthereumCLI
+from ..ethereum_cli import EthereumCLI, Executable
 from ..file_utils import dump_files_to_directory
 from ..fixture_consumer_tool import FixtureConsumerTool
 
@@ -38,7 +38,7 @@ class Nethtest(EthereumCLI):
 
     def __init__(
         self,
-        binary: Path,
+        binary: Executable,
         trace: bool = False,
         exception_mapper: ExceptionMapper | None = None,
     ):
@@ -48,20 +48,9 @@ class Nethtest(EthereumCLI):
         # TODO: Implement NethermindExceptionMapper
         self.exception_mapper = exception_mapper if exception_mapper else None
 
-    def _run_command(self, command: List[str]) -> subprocess.CompletedProcess:
-        try:
-            return subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except Exception as e:
-            raise Exception("Unexpected exception calling evm tool.") from e
-
     def _consume_debug_dump(
         self,
-        command: Tuple[str, ...],
+        command: List[str],
         result: subprocess.CompletedProcess,
         debug_output_path: Path,
     ) -> None:
@@ -91,15 +80,6 @@ class Nethtest(EthereumCLI):
             },
         )
 
-    @cache  # noqa
-    def help(self, subcommand: str | None = None) -> str:
-        """Return the help string, optionally for a subcommand."""
-        help_command = [str(self.binary)]
-        if subcommand:
-            help_command.append(subcommand)
-        help_command.append("--help")
-        return self._run_command(help_command).stdout
-
 
 class NethtestFixtureConsumer(
     Nethtest,
@@ -116,7 +96,7 @@ class NethtestFixtureConsumer(
         debug_output_path: Optional[Path] = None,
     ) -> Tuple[str, ...]:
         assert fixture_name, "Fixture name must be provided for nethtest."
-        command = [str(self.binary)]
+        command: List[str] = []
         if fixture_format is BlockchainFixture:
             # nethtest matches the filter against the key after `.py::`.
             command += [
@@ -153,17 +133,18 @@ class NethtestFixtureConsumer(
         function is cached in order to only call the command once and
         `consume_state_test` can simply select the result that was requested.
         """
-        del fixture_path
-        result = subprocess.run(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        result = self._run_command(
+            command, read_only=[fixture_path], writable=[debug_output_path]
         )
 
         if debug_output_path:
-            self._consume_debug_dump(command, result, debug_output_path)
+            self._consume_debug_dump(
+                list(result.args), result, debug_output_path
+            )
 
         if result.returncode != 0:
             raise Exception(
-                f"Unexpected exit code:\n{' '.join(command)}\n\n"
+                f"Unexpected exit code:\n{' '.join(result.args)}\n\n"
                 f"Error:\n{result.stderr}"
             )
 
@@ -243,13 +224,14 @@ class NethtestFixtureConsumer(
         debug_output_path: Optional[Path] = None,
     ) -> None:
         """Execute the the fixture at `fixture_path` via `nethtest`."""
-        del fixture_path
-        result = subprocess.run(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        result = self._run_command(
+            command, read_only=[fixture_path], writable=[debug_output_path]
         )
 
         if debug_output_path:
-            self._consume_debug_dump(command, result, debug_output_path)
+            self._consume_debug_dump(
+                list(result.args), result, debug_output_path
+            )
 
         if result.returncode != 0:
             raise Exception(
@@ -257,7 +239,7 @@ class NethtestFixtureConsumer(
                 f"({result.returncode}).\n"
                 f"stdout:\n{result.stdout}\n"
                 f"stderr:\n{result.stderr}\n"
-                f"{' '.join(command)}"
+                f"{' '.join(result.args)}"
             )
 
         # nethtest exits 0 even when a test fails; the verdict is in the JSON

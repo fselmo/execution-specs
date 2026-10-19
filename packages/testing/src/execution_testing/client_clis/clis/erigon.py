@@ -21,7 +21,7 @@ from execution_testing.fixtures import (
     StateFixture,
 )
 
-from ..ethereum_cli import EthereumCLI
+from ..ethereum_cli import EthereumCLI, Executable, run_command
 from ..fixture_consumer_tool import FixtureConsumerTool
 
 
@@ -175,7 +175,7 @@ class ErigonEvm(EthereumCLI):
 
     def __init__(
         self,
-        binary: Optional[Path] = None,
+        binary: Optional[Executable] = None,
         trace: bool = False,
     ):
         """Initialize the ErigonEvm class."""
@@ -185,7 +185,7 @@ class ErigonEvm(EthereumCLI):
 
     @classmethod
     def detect_binary(
-        cls, binary_output: str, binary: Optional[Path] = None
+        cls, binary_output: str, binary: Optional[Executable] = None
     ) -> bool:
         """
         Confirm the binary is Erigon's `evm`, not go-ethereum's.
@@ -200,27 +200,10 @@ class ErigonEvm(EthereumCLI):
         if binary is None:
             return False
         try:
-            help_output = subprocess.run(
-                [str(binary), "--help"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=10,
-            ).stdout
+            result = run_command(binary, ["--help"], timeout=10)
         except Exception:
             return False
-        return cls.erigon_marker in help_output
-
-    def _run_command(self, command: List[str]) -> subprocess.CompletedProcess:
-        try:
-            return subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except Exception as e:
-            raise Exception("Unexpected exception calling evm tool.") from e
+        return cls.erigon_marker in result.stdout + result.stderr
 
     def _consume_debug_dump(
         self,
@@ -259,15 +242,6 @@ class ErigonEvm(EthereumCLI):
         )
         shutil.copyfile(fixture_path, debug_fixture_path)
 
-    @cache  # noqa
-    def help(self, subcommand: str | None = None) -> str:
-        """Return the help string, optionally for a subcommand."""
-        help_command = [str(self.binary)]
-        if subcommand:
-            help_command.append(subcommand)
-        help_command.append("--help")
-        return self._run_command(help_command).stdout
-
 
 class ErigonFixtureConsumer(
     ErigonEvm,
@@ -299,14 +273,12 @@ class ErigonFixtureConsumer(
         if fixture_name:
             subcommand_options += ["--run", re.escape(fixture_name)]
 
-        command = (
-            [str(self.binary)]
-            + [subcommand]
-            + subcommand_options
-            + [str(fixture_path)]
+        result = self._run_command(
+            [subcommand] + subcommand_options + [str(fixture_path)],
+            read_only=[fixture_path],
+            writable=[debug_output_path],
         )
-
-        result = self._run_command(command)
+        command = list(result.args)
 
         if debug_output_path:
             self._consume_debug_dump(
@@ -350,13 +322,12 @@ class ErigonFixtureConsumer(
         if debug_output_path:
             subcommand_options += ["--json"]
 
-        command = (
-            [str(self.binary)]
-            + [subcommand]
-            + subcommand_options
-            + [str(fixture_path)]
+        result = self._run_command(
+            [subcommand] + subcommand_options + [str(fixture_path)],
+            read_only=[fixture_path],
+            writable=[debug_output_path],
         )
-        result = self._run_command(command)
+        command = list(result.args)
 
         if debug_output_path:
             self._consume_debug_dump(
