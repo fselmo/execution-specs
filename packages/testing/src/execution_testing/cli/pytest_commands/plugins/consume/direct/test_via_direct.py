@@ -30,11 +30,6 @@ def test_fixture(
     Generic test function used to call the fixture consumer with a given
     fixture file path and a fixture name (for a single test run).
     """
-    if not fixture_consumer.can_consume(test_case.format):
-        pytest.skip(
-            f"{fixture_consumer.__class__.__name__} does not consume "
-            f"{test_case.format.format_name} fixtures"
-        )
     if isinstance(
         fixture_consumer, ClientRunner
     ) and fixture_consumer.speaks_runner_interface(test_case.format):
