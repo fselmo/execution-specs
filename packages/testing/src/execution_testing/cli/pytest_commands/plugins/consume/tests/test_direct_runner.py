@@ -140,3 +140,43 @@ def test_a_runner_without_the_interface_collects_no_engine_tests(
         [{"name": FIXTURE_NAME, "pass": True}], "--collect-only", "-q"
     )
     result.stdout.fnmatch_lines(["*1 test collected*"])
+
+
+def test_each_bal_mode_is_its_own_test(consume_direct: Any) -> None:
+    """
+    Every mode is its own test id; `withhold` applies to block tests only,
+    so the engine fixture runs in two modes and the block fixture in three.
+    """
+    result = consume_direct(
+        runner_result(PRIORITY_FEE_ERROR),
+        "--bal-modes",
+        "parallel,sequential,withhold",
+        "-v",
+    )
+    result.assert_outcomes(passed=5, deselected=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*bal_sequential-*Shanghai*PASSED*",
+            "*bal_withhold-*London*PASSED*",
+        ]
+    )
+    result.stdout.no_fnmatch_line("*bal_withhold-*Shanghai*")
+
+
+def test_old_runners_skip_the_other_bal_modes(
+    consume_direct: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A runner without the interface runs the parallel mode only."""
+    monkeypatch.setenv("HELP", "--run value")
+    result = consume_direct(
+        [{"name": FIXTURE_NAME, "pass": True}],
+        "--bal-modes",
+        "parallel,sequential",
+    )
+    result.assert_outcomes(passed=1, skipped=1)
+
+
+def test_unknown_bal_modes_are_rejected(consume_direct: Any) -> None:
+    """A mode outside the runner flags is a usage error."""
+    result = consume_direct([], "--bal-modes", "serial")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR

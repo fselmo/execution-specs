@@ -4,10 +4,11 @@ import json
 import shutil
 import stat
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, Tuple
 
 import pytest
 
+from execution_testing.base_types import Hash, to_json
 from execution_testing.client_clis import (
     EthrexFixtureConsumer,
     FixtureConsumerTool,
@@ -16,6 +17,10 @@ from execution_testing.client_clis import (
     RethFixtureConsumer,
 )
 from execution_testing.client_clis.client_runner import (
+    BalExecutionWarning,
+    BalMode,
+    bal_problems,
+    parse_bal_report,
     parse_run,
     rejection_problems,
 )
@@ -26,6 +31,10 @@ from execution_testing.fixtures import (
     BlockchainFixture,
     FixtureFormat,
     StateFixture,
+)
+from execution_testing.fixtures.blockchain import FixtureBlock
+from execution_testing.test_types.block_access_list.t8n import (
+    BlockAccessList,
 )
 
 # Fixtures whose blocks (or payloads) 2 and 4 are invalid, each with
@@ -234,6 +243,7 @@ if [ "$2" = --help ]; then echo "$HELP"; exit 0; fi
 echo "$@" >> "$LOG"
 echo "$RESULTS"
 echo "runner stderr" >&2
+echo "$REPORT" >&2
 exit "$EXIT"
 """
 
@@ -305,7 +315,9 @@ def test_each_file_runs_once_and_results_are_found_by_name(
     consumer = GethFixtureConsumer(binary=fake_evm.binary)
     fake_evm.consume(consumer, FIXTURE_NAME)
     fake_evm.consume(consumer, FIXTURE_NAME)
-    assert fake_evm.calls() == [f"blocktest {fake_evm.fixture_path}"]
+    assert fake_evm.calls() == [
+        f"blocktest --bal-report {fake_evm.fixture_path}"
+    ]
     with pytest.raises(AssertionError, match="no result for 'missing'"):
         fake_evm.consume(consumer, "missing")
 
@@ -442,7 +454,7 @@ def test_ethrex_runs_its_binary_without_a_subcommand(
     run = consumer.run_fixture_file(BlockchainFixture, BLOCKCHAIN_FIXTURE)
     assert run.error is None
     assert (tmp_path / "calls.log").read_text() == (
-        f"--json {BLOCKCHAIN_FIXTURE}\n"
+        f"--json --bal-report {BLOCKCHAIN_FIXTURE}\n"
     )
 
 
@@ -454,3 +466,155 @@ def test_a_runner_only_binary_must_speak_the_interface(
     monkeypatch.setenv("HELP", "--threads")
     with pytest.raises(Exception, match="does not speak"):
         FixtureConsumerTool.from_binary_path(binary_path=fake_runner)
+
+
+def report_line(event: str, block_hash: Hash, **fields: str) -> str:
+    """Return one execution report line; lines are matched by hash only."""
+    return json.dumps(
+        {"event": event, "block": 1, "hash": str(block_hash), **fields}
+    )
+
+
+@pytest.fixture
+def amsterdam_like_fixture(
+    blockchain_fixture: BlockchainFixture,
+) -> BlockchainFixture:
+    """The London fixture with an access list on its first block."""
+    fixture = blockchain_fixture.model_copy(deep=True)
+    first_block = fixture.blocks[0]
+    assert isinstance(first_block, FixtureBlock)
+    first_block.block_access_list = BlockAccessList()
+    return fixture
+
+
+@pytest.mark.parametrize(
+    "lines,problems",
+    [
+        pytest.param(
+            [("balExecution", 0, {"path": "parallel", "reason": ""})],
+            [],
+            id="parallel",
+        ),
+        pytest.param(
+            [
+                (
+                    "balExecution",
+                    0,
+                    {"path": "sequential", "reason": "block-import"},
+                )
+            ],
+            ['block 1 ran sequential (reason "block-import")'],
+            id="sequential",
+        ),
+        pytest.param([], ["block 1 has no balExecution line"], id="missing"),
+        pytest.param(
+            [
+                ("balExecution", 0, {"path": "parallel", "reason": ""}),
+                (
+                    "balFallback",
+                    2,
+                    {
+                        "parallelError": "boom",
+                        "sequentialResult": "invalid",
+                        "sequentialError": "nonce",
+                    },
+                ),
+            ],
+            [
+                'block 3 fell back to sequential ("boom"), which found it '
+                "invalid"
+            ],
+            id="fallback_on_an_invalid_block",
+        ),
+        pytest.param(
+            [("balExecution", 1, {"path": "sequential", "reason": "x"})],
+            ["block 1 has no balExecution line"],
+            id="only_blocks_with_a_list_must_run_parallel",
+        ),
+    ],
+)
+def test_bal_report(
+    amsterdam_like_fixture: BlockchainFixture,
+    lines: List[Tuple[str, int, Dict[str, str]]],
+    problems: List[str],
+) -> None:
+    """
+    A valid block with an access list must run on the parallel executor,
+    and no block may fall back; lines are tied to blocks by hash.
+    """
+    stderr_lines = ["INFO some client log", "{not json"]
+    for event, block_index, fields in lines:
+        block = amsterdam_like_fixture.blocks[block_index]
+        if isinstance(block, FixtureBlock):
+            block_hash = block.header.block_hash
+        else:
+            assert block.rlp_decoded is not None
+            block_hash = block.rlp_decoded.header.block_hash
+        stderr_lines.append(report_line(event, block_hash, **fields))
+    report = parse_bal_report("\n".join(stderr_lines))
+    assert bal_problems(amsterdam_like_fixture, report) == problems
+
+
+@pytest.mark.parametrize(
+    "bal_mode,flag",
+    [
+        pytest.param("parallel", "--bal-report", id="parallel"),
+        pytest.param("sequential", "--bal-sequential", id="sequential"),
+        pytest.param("withhold", "--bal-withhold", id="withhold"),
+    ],
+)
+def test_each_mode_runs_with_its_flag(
+    fake_evm: FakeEvm, bal_mode: BalMode, flag: str
+) -> None:
+    """Each mode is a run of its own, with the mode's runner flag."""
+    fake_evm.configure(
+        help_text="--bal-sequential", results=[result()], exit_code=0
+    )
+    consumer = GethFixtureConsumer(binary=fake_evm.binary)
+    consumer.consume_with_runner(
+        BlockchainFixture, fake_evm.fixture_path, FIXTURE_NAME, None, bal_mode
+    )
+    assert fake_evm.calls() == [f"blocktest {flag} {fake_evm.fixture_path}"]
+
+
+@pytest.mark.parametrize("require_bal_parallel", [False, True])
+def test_a_block_off_the_parallel_executor_warns_or_fails(
+    fake_evm: FakeEvm,
+    amsterdam_like_fixture: BlockchainFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    require_bal_parallel: bool,
+) -> None:
+    """
+    A valid block with a list that ran sequentially is a warning, or a
+    failure when parallel execution is required.
+    """
+    fake_evm.fixture_path.write_text(
+        json.dumps({FIXTURE_NAME: to_json(amsterdam_like_fixture)})
+    )
+    fake_evm.configure(
+        help_text="--bal-sequential", results=[result()], exit_code=0
+    )
+    block = amsterdam_like_fixture.blocks[0]
+    assert isinstance(block, FixtureBlock)
+    monkeypatch.setenv(
+        "REPORT",
+        report_line(
+            "balExecution",
+            block.header.block_hash,
+            path="sequential",
+            reason="disabled",
+        ),
+    )
+    consumer = GethFixtureConsumer(binary=fake_evm.binary)
+    expectation = (
+        pytest.raises(AssertionError, match="ran sequential")
+        if require_bal_parallel
+        else pytest.warns(BalExecutionWarning, match="ran sequential")
+    )
+    with expectation:
+        consumer.consume_with_runner(
+            BlockchainFixture,
+            fake_evm.fixture_path,
+            FIXTURE_NAME,
+            require_bal_parallel=require_bal_parallel,
+        )
