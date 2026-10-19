@@ -2,6 +2,8 @@
 
 One interface for clients' `blocktest` and `enginetest` runners, so any harness can run any client the same way and read the same results.
 
+[`consume direct`](direct.md#client-runners) runs any runner that speaks it.
+
 MUST, SHOULD and MAY are as in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 
 ## Commands
