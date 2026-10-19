@@ -1,7 +1,6 @@
 """Nimbus Transition tool interface."""
 
 import re
-import subprocess
 from pathlib import Path
 from typing import ClassVar, Dict, Optional
 
@@ -39,20 +38,13 @@ class NimbusTransitionTool(TransitionTool):
             binary=binary,
             trace=trace,
         )
-        args = [str(self.binary), "--help"]
-        try:
-            result = subprocess.run(
-                args, capture_output=True, text=True, check=True
-            )
-        except subprocess.CalledProcessError as e:
+        result = self._run_command(["--help"])
+        if result.returncode != 0:
             raise Exception(
                 f"evm process unexpectedly returned "
-                f"a non-zero status code: {e}. Stderr: {e.stderr}"
-            ) from e
-        except Exception as e:
-            raise Exception(
-                f"Unexpected exception calling evm tool: {e}."
-            ) from e
+                f"a non-zero status code: {result.returncode}. "
+                f"Stderr: {result.stderr}"
+            )
         self.help_string = result.stdout
 
     def version(self) -> str:

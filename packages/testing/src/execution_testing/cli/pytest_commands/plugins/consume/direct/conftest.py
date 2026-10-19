@@ -17,7 +17,10 @@ from execution_testing.base_types import to_json
 from execution_testing.cli.pytest_commands.plugins.consume.consume import (
     FixturesSource,
 )
-from execution_testing.client_clis.ethereum_cli import EthereumCLI
+from execution_testing.client_clis.ethereum_cli import (
+    EthereumCLI,
+    parse_executable,
+)
 from execution_testing.client_clis.fixture_consumer_tool import (
     FixtureConsumerTool,
 )
@@ -61,12 +64,14 @@ def pytest_addoption(parser: pytest.Parser) -> None:  # noqa: D103
         "--bin",
         action="append",
         dest="fixture_consumer_bin",
-        type=Path,
+        type=parse_executable,
         default=[],
         help=(
-            "Path to a geth evm executable that provides `blocktest` or "
-            "`statetest`. Flag can be used multiple times to specify "
-            "multiple fixture consumer binaries."
+            "A client's test runner binary, such as geth's `evm`: a host "
+            "path, or `docker:<image>` to run the image's entrypoint, or "
+            "`docker:<image>#<binary>` to run another binary in the image. "
+            "Flag can be used multiple times to specify multiple fixture "
+            "consumer binaries."
         ),
     )
     consume_group.addoption(
@@ -99,7 +104,7 @@ def pytest_configure(config: pytest.Config) -> None:  # noqa: D103
     for fixture_consumer_bin_path in config.getoption("fixture_consumer_bin"):
         fixture_consumers.append(
             FixtureConsumerTool.from_binary_path(
-                binary_path=Path(fixture_consumer_bin_path),
+                binary_path=fixture_consumer_bin_path,
                 trace=config.getoption("consumer_collect_traces"),
             )
         )

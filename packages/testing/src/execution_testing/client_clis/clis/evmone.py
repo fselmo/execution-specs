@@ -13,6 +13,10 @@ from typing import Any, ClassVar, Dict, List, Optional
 
 import pytest
 
+from execution_testing.client_clis.ethereum_cli import (
+    EthereumCLI,
+    Executable,
+)
 from execution_testing.client_clis.file_utils import (
     dump_files_to_directory,
 )
@@ -72,10 +76,9 @@ class EvmOneTransitionTool(TransitionTool):
         return True
 
 
-class EvmoneFixtureConsumerCommon:
+class EvmoneFixtureConsumerCommon(EthereumCLI):
     """Common functionality for Evmone fixture consumers."""
 
-    binary: Path
     version_flag: str = "--version"
 
     cached_version: Optional[str] = None
@@ -87,17 +90,6 @@ class EvmoneFixtureConsumerCommon:
         """Initialize the EvmoneFixtureConsumerCommon class."""
         del trace
         self._info_metadata: Optional[Dict[str, Any]] = {}
-
-    def _run_command(self, command: List[str]) -> subprocess.CompletedProcess:
-        try:
-            return subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except Exception as e:
-            raise Exception("Unexpected exception calling evm tool.") from e
 
     # TODO: copied from geth.py, needs to be deduplicated, but nethermind.py
     # also has its version
@@ -168,8 +160,12 @@ class EvmoneFixtureConsumerCommon:
             global_options += [
                 "--gtest_output=json:{}".format(tempfile_json.name)
             ]
-            command = [str(self.binary)] + global_options + [str(fixture_path)]
-            result = self._run_command(command)
+            result = self._run_command(
+                global_options + [str(fixture_path)],
+                read_only=[fixture_path],
+                writable=[Path(tempfile_json.name)],
+            )
+            command = list(result.args)
 
             if result.returncode not in [0, 1]:
                 cmd_str = " ".join(command)
@@ -254,7 +250,7 @@ class EvmOneStateFixtureConsumer(
 
     def __init__(
         self,
-        binary: Optional[Path] = None,
+        binary: Optional[Executable] = None,
         trace: bool = False,
     ):
         """Initialize the EvmOneStateFixtureConsumer class."""
@@ -294,7 +290,7 @@ class EvmOneBlockchainFixtureConsumer(
 
     def __init__(
         self,
-        binary: Optional[Path] = None,
+        binary: Optional[Executable] = None,
         trace: bool = False,
     ):
         """Initialize the EvmOneBlockchainFixtureConsumer class."""
