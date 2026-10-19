@@ -224,6 +224,34 @@ class ClientRunner(FixtureConsumer, EthereumCLI):
             fixture_format
         ) or self.speaks_runner_interface(fixture_format)
 
+    def require_runner_interface(self) -> None:
+        """Raise unless the binary speaks the interface for some format."""
+        if not any(
+            self.speaks_runner_interface(fixture_format)
+            for fixture_format in (BlockchainFixture, BlockchainEngineFixture)
+        ):
+            raise Exception(
+                f"{self.binary} does not speak the client runner interface: "
+                f"its help lists no {INTERFACE_FLAG}"
+            )
+
+    def consume_fixture(
+        self,
+        fixture_format: FixtureFormat,
+        fixture_path: Path,
+        fixture_name: str | None = None,
+        debug_output_path: Path | None = None,
+    ) -> None:
+        """Consume a fixture through the runner, the only path it has."""
+        if not self.speaks_runner_interface(fixture_format):
+            raise Exception(
+                f"{self.binary} does not run "
+                f"{fixture_format.format_name} fixtures"
+            )
+        self.consume_with_runner(
+            fixture_format, fixture_path, fixture_name, debug_output_path
+        )
+
     @cache  # noqa: B019
     def speaks_runner_interface(self, fixture_format: FixtureFormat) -> bool:
         """

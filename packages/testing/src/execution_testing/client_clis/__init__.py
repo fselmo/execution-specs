@@ -24,6 +24,7 @@ from .clis.besu import BesuFixtureConsumer, BesuTransitionTool
 # first look, it does not by itself decide identity.
 from .clis.erigon import ErigonExceptionMapper, ErigonFixtureConsumer
 from .clis.ethereumjs import EthereumJSTransitionTool
+from .clis.ethrex import EthrexFixtureConsumer
 from .clis.evmone import (
     EvmOneBlockchainFixtureConsumer,
     EvmoneExceptionMapper,
@@ -34,6 +35,7 @@ from .clis.execution_specs import ExecutionSpecsTransitionTool
 from .clis.geth import GethFixtureConsumer, GethTransitionTool
 from .clis.nethermind import Nethtest, NethtestFixtureConsumer
 from .clis.nimbus import NimbusTransitionTool
+from .clis.reth import RethFixtureConsumer
 from .ethereum_cli import CLINotFoundInPathError, UnknownCLIError
 from .filler_backend import FillerBackend
 from .fixture_consumer_tool import FixtureConsumerTool
@@ -62,6 +64,7 @@ __all__ = (
     "ErigonExceptionMapper",
     "ErigonFixtureConsumer",
     "EthereumJSTransitionTool",
+    "EthrexFixtureConsumer",
     "EvmoneExceptionMapper",
     "EvmOneTransitionTool",
     "EvmOneStateFixtureConsumer",
@@ -78,6 +81,7 @@ __all__ = (
     "NethtestFixtureConsumer",
     "NimbusTransitionTool",
     "Result",
+    "RethFixtureConsumer",
     "TraceComparator",
     "TraceComparatorType",
     "TraceComparisonResult",

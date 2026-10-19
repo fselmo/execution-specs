@@ -1,10 +1,17 @@
 """Reth execution client transition tool."""
 
+import re
+from pathlib import Path
+
 from execution_testing.exceptions import (
     BlockException,
     ExceptionMapper,
     TransactionException,
 )
+
+from ..client_runner import RUNNER_COMMANDS, ClientRunner
+from ..ethereum_cli import Executable
+from ..fixture_consumer_tool import FixtureConsumerTool
 
 
 class RethExceptionMapper(ExceptionMapper):
@@ -159,3 +166,23 @@ class RethExceptionMapper(ExceptionMapper):
             r"mismatched block requests hash"
         ),
     }
+
+
+class RethFixtureConsumer(
+    ClientRunner,
+    FixtureConsumerTool,
+    fixture_formats=[],
+):
+    """Reth's `ef-test-runner`, which only runs through the interface."""
+
+    default_binary = Path("ef-test-runner")
+    detect_binary_pattern = re.compile(r"^ef-test-runner \d")
+    version_flag = "--version"
+    runner_commands = RUNNER_COMMANDS["reth"]
+    runner_exception_mapper = RethExceptionMapper()
+
+    def __init__(self, binary: Executable, trace: bool = False):
+        """Initialize the consumer; the binary must speak the interface."""
+        del trace
+        self.binary = binary
+        self.require_runner_interface()

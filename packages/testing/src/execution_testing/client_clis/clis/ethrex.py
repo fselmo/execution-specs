@@ -1,10 +1,23 @@
 """Ethrex execution client transition tool."""
 
+import re
+from pathlib import Path
+from typing import Tuple
+
 from execution_testing.exceptions import (
     BlockException,
     ExceptionMapper,
     TransactionException,
 )
+from execution_testing.fixtures import (
+    BlockchainEngineFixture,
+    BlockchainFixture,
+    FixtureFormat,
+)
+
+from ..client_runner import RUNNER_COMMANDS, ClientRunner
+from ..ethereum_cli import Executable
+from ..fixture_consumer_tool import FixtureConsumerTool
 
 
 class EthrexExceptionMapper(ExceptionMapper):
@@ -199,3 +212,43 @@ class EthrexExceptionMapper(ExceptionMapper):
             r"Block access list accounts not in strictly ascending order.*"
         ),
     }
+
+
+class EthrexFixtureConsumer(
+    ClientRunner,
+    FixtureConsumerTool,
+    fixture_formats=[],
+):
+    """
+    One of ethrex's runner binaries, `blocktest` or `enginetest`, each of
+    which runs one format, and only through the interface.
+    """
+
+    default_binary = Path("blocktest")
+    detect_binary_pattern = re.compile(r"^ethrex-(blocktest|enginetest) ")
+    version_flag = "--version"
+    runner_commands = RUNNER_COMMANDS["ethrex"]
+    runner_exception_mapper = EthrexExceptionMapper()
+
+    def __init__(self, binary: Executable, trace: bool = False):
+        """Initialize the consumer; the binary must speak the interface."""
+        del trace
+        self.binary = binary
+        self.require_runner_interface()
+
+    def runner_command(
+        self, fixture_format: FixtureFormat
+    ) -> Tuple[str, ...] | None:
+        """Return the command only for the format this binary runs."""
+        command = self.version().split()[0]
+        if (
+            command == "ethrex-blocktest"
+            and fixture_format == BlockchainFixture
+        ):
+            return self.runner_commands.blocktest
+        if (
+            command == "ethrex-enginetest"
+            and fixture_format == BlockchainEngineFixture
+        ):
+            return self.runner_commands.enginetest
+        return None
