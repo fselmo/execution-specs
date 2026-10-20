@@ -25,6 +25,12 @@ class UnknownCLIError(Exception):
     pass
 
 
+class ContainerRunError(Exception):
+    """Exception raised if Docker cannot run a binary's image at all."""
+
+    pass
+
+
 class CLINotFoundInPathError(Exception):
     """Exception raised if the specified CLI binary isn't found in the path."""
 
@@ -241,6 +247,10 @@ class EthereumCLI:
         else:
             binary = cls._resolve_binary_path(binary_path)
 
+        # When no probe exits 0, Docker's own error (a missing daemon or
+        # image) explains it better than an unknown CLI.
+        any_probe_ran = False
+        last_probe_error = ""
         # Group the tools by version flag, so we only have to call the tool
         # once for all the classes that share the same version flag
         for version_flag, subclasses in groupby(
@@ -265,9 +275,13 @@ class EthereumCLI:
                         "Subprocess returncode is not 0! "
                         f"It is: {result.returncode}"
                     )
+                    last_probe_error = (
+                        f"exit {result.returncode}: {result.stderr.strip()}"
+                    )
                     # don't raise exception, you are supposed to keep trying
                     # different version flags
                     continue
+                any_probe_ran = True
 
                 # if there is a breaking error try sth else
                 if result.stderr:
@@ -301,6 +315,7 @@ class EthereumCLI:
                     f"Trying to determine t8n version with flag "
                     f"`{version_flag}` failed: {e}"
                 )
+                last_probe_error = str(e)
                 continue
 
             # Built outside the try blocks, so a matched tool that can't be
@@ -308,6 +323,10 @@ class EthereumCLI:
             if matched is not None:
                 return matched(binary=binary, **kwargs)
 
+        if isinstance(binary, DockerImage) and not any_probe_ran:
+            raise ContainerRunError(
+                f"Docker could not run {binary}:\n{last_probe_error}"
+            )
         raise UnknownCLIError(f"Unknown CLI: {binary}")
 
     @staticmethod

@@ -13,6 +13,7 @@ from execution_testing.client_clis import (
     GethFixtureConsumer,
 )
 from execution_testing.client_clis.ethereum_cli import (
+    ContainerRunError,
     DockerImage,
     command_line,
     parse_executable,
@@ -206,3 +207,31 @@ def test_detection_through_a_container(
     tool = FixtureConsumerTool.from_binary_path(binary_path=image)
     assert type(tool) is expected_class
     assert tool.binary == image
+
+
+@pytest.mark.parametrize(
+    "docker_script,error",
+    [
+        pytest.param(
+            "#!/bin/sh\necho 'pull access denied for nope' >&2\nexit 125\n",
+            "exit 125: pull access denied for nope",
+            id="pull_denied",
+        ),
+        pytest.param(None, "No such file or directory", id="no_docker"),
+    ],
+)
+def test_docker_failures_name_docker_s_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    docker_script: str | None,
+    error: str,
+) -> None:
+    """
+    When Docker cannot run the image for any version probe, its own error
+    is raised, not an unknown CLI.
+    """
+    if docker_script is not None:
+        write_script(tmp_path / "docker", docker_script)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(ContainerRunError, match=error):
+        FixtureConsumerTool.from_binary_path(binary_path=DockerImage("nope"))
