@@ -189,17 +189,30 @@ def pytest_configure(config: pytest.Config) -> None:  # noqa: D103
 
 
 @pytest.fixture(scope="function")
-def test_dump_dir(
-    request: pytest.FixtureRequest, fixture_path: Path, fixture_name: str
+def run_dump_dir(
+    request: pytest.FixtureRequest, fixture_path: Path, bal_mode: BalMode
 ) -> Path | None:
-    """The directory to write evm debug output to."""
+    """
+    The directory for a fixture file's debug output in one BAL mode, which
+    holds a runner's output for the whole file.
+    """
     base_dump_dir = request.config.getoption("base_dump_dir")
     if not base_dump_dir:
+        return None
+    if bal_mode == "parallel":
+        return base_dump_dir / fixture_path.stem
+    return base_dump_dir / fixture_path.stem / f"bal_{bal_mode}"
+
+
+@pytest.fixture(scope="function")
+def test_dump_dir(run_dump_dir: Path | None, fixture_name: str) -> Path | None:
+    """The directory to write evm debug output to."""
+    if run_dump_dir is None:
         return None
     if len(fixture_name) > 142:
         # ensure file name is not too long for eCryptFS
         fixture_name = fixture_name[:70] + "..." + fixture_name[-70:]
-    return base_dump_dir / fixture_path.stem / fixture_name.replace("/", "-")
+    return run_dump_dir / fixture_name.replace("/", "-")
 
 
 @pytest.fixture

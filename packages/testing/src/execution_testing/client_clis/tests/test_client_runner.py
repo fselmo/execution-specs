@@ -16,6 +16,7 @@ from execution_testing.client_clis import (
     GethFixtureConsumer,
     NethtestFixtureConsumer,
     RethFixtureConsumer,
+    client_runner,
 )
 from execution_testing.client_clis.client_runner import (
     BalExecutionWarning,
@@ -619,3 +620,29 @@ def test_a_block_off_the_parallel_executor_warns_or_fails(
             FIXTURE_NAME,
             require_bal_parallel=require_bal_parallel,
         )
+
+
+def test_a_run_is_dumped_once_per_directory(
+    fake_evm: FakeEvm, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Every fixture of a file shares one run, so its output is dumped once."""
+    fake_evm.configure(
+        help_text="--bal-sequential", results=[result()], exit_code=0
+    )
+    dumps: List[Path] = []
+    monkeypatch.setattr(
+        client_runner,
+        "dump_files_to_directory",
+        lambda directory, _files: dumps.append(directory),
+    )
+    consumer = GethFixtureConsumer(binary=fake_evm.binary)
+    dump_dir = tmp_path / "dump"
+    consumer.consume_with_runner(
+        BlockchainFixture, fake_evm.fixture_path, FIXTURE_NAME, dump_dir
+    )
+    # A second fixture of the same file, which this runner did not report.
+    with pytest.raises(AssertionError, match="no result"):
+        consumer.consume_with_runner(
+            BlockchainFixture, fake_evm.fixture_path, "other", dump_dir
+        )
+    assert dumps == [dump_dir]
