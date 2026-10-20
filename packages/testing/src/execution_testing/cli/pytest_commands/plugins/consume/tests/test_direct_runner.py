@@ -198,6 +198,39 @@ def test_no_fixture_the_binary_can_run(
     result.assert_outcomes(skipped=1)
 
 
+def test_each_mode_dumps_its_run_once(
+    consume_direct: Any, pytester: Pytester
+) -> None:
+    """
+    With `--dump-dir`, each file's run is dumped once per mode, the
+    `parallel` one beside the file's other output and the others under
+    their mode, so no mode overwrites another.
+    """
+    dump_dir = Path(pytester.path) / "dump"
+    result = consume_direct(
+        runner_result(PRIORITY_FEE_ERROR),
+        "-m",
+        "blockchain_test",
+        "--bal-modes",
+        "parallel,sequential",
+        f"--dump-dir={dump_dir}",
+    )
+    result.assert_outcomes(passed=2)
+    london = dump_dir / "london"
+    assert sorted(path.name for path in london.iterdir()) == [
+        "bal_sequential",
+        "consume_direct_args.py",
+        "consume_direct_returncode.txt",
+        "consume_direct_stderr.txt",
+        "consume_direct_stdout.txt",
+    ]
+    assert "--bal-report" in (london / "consume_direct_args.py").read_text()
+    assert (
+        "--bal-sequential"
+        in (london / "bal_sequential" / "consume_direct_args.py").read_text()
+    )
+
+
 def test_unknown_bal_modes_are_rejected(consume_direct: Any) -> None:
     """A mode outside the runner flags is a usage error."""
     result = consume_direct([], "--bal-modes", "serial")

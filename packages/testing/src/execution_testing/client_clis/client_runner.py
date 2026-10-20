@@ -415,6 +415,26 @@ class ClientRunner(FixtureConsumer, EthereumCLI):
             list(result.args), result.returncode, result.stdout, result.stderr
         )
 
+    @cache  # noqa: B019
+    def dump_run(
+        self,
+        fixture_format: FixtureFormat,
+        fixture_path: Path,
+        bal_mode: BalMode,
+        dump_dir: Path,
+    ) -> None:
+        """Dump a run's command and output, once per directory."""
+        run = self.run_fixture_file(fixture_format, fixture_path, bal_mode)
+        dump_files_to_directory(
+            dump_dir,
+            {
+                "consume_direct_args.py": run.command,
+                "consume_direct_returncode.txt": run.returncode,
+                "consume_direct_stdout.txt": run.stdout,
+                "consume_direct_stderr.txt": run.stderr,
+            },
+        )
+
     def consume_with_runner(
         self,
         fixture_format: FixtureFormat,
@@ -435,17 +455,14 @@ class ClientRunner(FixtureConsumer, EthereumCLI):
         In the parallel mode, a valid block with an access list that did not
         run on the parallel executor, or any fallback, is a warning, or a
         failure with `require_bal_parallel`.
+
+        `debug_output_path` receives the run's command and output once, as
+        the run covers the whole file in one mode.
         """
         run = self.run_fixture_file(fixture_format, fixture_path, bal_mode)
         if debug_output_path:
-            dump_files_to_directory(
-                debug_output_path,
-                {
-                    "consume_direct_args.py": run.command,
-                    "consume_direct_returncode.txt": run.returncode,
-                    "consume_direct_stdout.txt": run.stdout,
-                    "consume_direct_stderr.txt": run.stderr,
-                },
+            self.dump_run(
+                fixture_format, fixture_path, bal_mode, debug_output_path
             )
         if run.error is not None:
             raise Exception(

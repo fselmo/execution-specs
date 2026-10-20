@@ -23,6 +23,7 @@ def test_fixture(
     fixture_consumer: FixtureConsumer,
     fixture_path: Path,
     test_dump_dir: Path | None,
+    run_dump_dir: Path | None,
     bal_mode: BalMode,
     require_bal_parallel: bool,
 ) -> None:
@@ -37,7 +38,7 @@ def test_fixture(
             test_case.format,
             fixture_path,
             fixture_name=test_case.id,
-            debug_output_path=test_dump_dir,
+            debug_output_path=run_dump_dir,
             bal_mode=bal_mode,
             require_bal_parallel=require_bal_parallel,
         )
