@@ -184,6 +184,20 @@ def test_old_runners_skip_the_other_bal_modes(
     result.assert_outcomes(passed=1, skipped=1)
 
 
+def test_no_fixture_the_binary_can_run(
+    consume_direct: Any, pytester: Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    With only engine fixtures and a binary without the interface, nothing is
+    collected and the run reports one skipped empty parameter set.
+    """
+    shutil.rmtree(Path(pytester.path) / "fixtures" / "blockchain_tests")
+    monkeypatch.setenv("HELP", "--run value")
+    result = consume_direct([])
+    assert result.ret == pytest.ExitCode.OK
+    result.assert_outcomes(skipped=1)
+
+
 def test_unknown_bal_modes_are_rejected(consume_direct: Any) -> None:
     """A mode outside the runner flags is a usage error."""
     result = consume_direct([], "--bal-modes", "serial")
