@@ -403,6 +403,12 @@ def fake_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             id="reth",
         ),
         pytest.param(
+            "ef-test-runner v2.8.0",
+            RethFixtureConsumer,
+            {BlockchainFixture, BlockchainEngineFixture},
+            id="reth_reworded",
+        ),
+        pytest.param(
             "ethrex-blocktest 4.0.0",
             EthrexBlocktestConsumer,
             {BlockchainFixture},
