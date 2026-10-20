@@ -646,3 +646,29 @@ def test_a_run_is_dumped_once_per_directory(
             BlockchainFixture, fake_evm.fixture_path, "other", dump_dir
         )
     assert dumps == [dump_dir]
+
+
+@pytest.mark.parametrize(
+    "results,error",
+    [
+        pytest.param([result()], None, id="every_fixture_passed"),
+        pytest.param([], "no result for '000/", id="empty_results"),
+        pytest.param([result(passed=False)], "' failed", id="failed"),
+    ],
+)
+def test_a_whole_file_needs_a_passing_result_per_fixture(
+    fake_evm: FakeEvm, results: List[Dict[str, Any]], error: str | None
+) -> None:
+    """
+    Without a fixture name, as when `fill` verifies a file, every fixture
+    in the file needs a passing result, so `[]` with exit 0 fails.
+    """
+    fake_evm.configure(
+        help_text="--bal-sequential", results=results, exit_code=0
+    )
+    consumer = GethFixtureConsumer(binary=fake_evm.binary)
+    if error is None:
+        consumer.consume_fixture(BlockchainFixture, fake_evm.fixture_path)
+        return
+    with pytest.raises(AssertionError, match=error):
+        consumer.consume_fixture(BlockchainFixture, fake_evm.fixture_path)
