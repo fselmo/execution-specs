@@ -450,7 +450,8 @@ class ClientRunner(FixtureConsumer, EthereumCLI):
 
         A named fixture must pass and give the reasons the fixture expects,
         read through the client's exception mapper. Without a name, as when
-        `fill` verifies its output, only `pass` is checked.
+        `fill` verifies its output, every fixture in the file must have a
+        result, and only `pass` is checked.
 
         In the parallel mode, a valid block with an access list that did not
         run on the parallel executor, or any fallback, is a warning, or a
@@ -470,10 +471,20 @@ class ClientRunner(FixtureConsumer, EthereumCLI):
                 f"stderr:\n{run.stderr}"
             )
         if fixture_name is None:
+            missing = [
+                name
+                for name in read_fixture_file(fixture_path)
+                if name not in run.results
+            ]
             failed = [name for name, r in run.results.items() if not r.passed]
-            if failed:
+            if missing or failed:
                 raise AssertionError(
-                    "Runner reported failures:\n" + "\n".join(failed)
+                    "\n".join(
+                        [
+                            *(f"no result for '{name}'" for name in missing),
+                            *(f"'{name}' failed" for name in failed),
+                        ]
+                    )
                 )
             return
 
