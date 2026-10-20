@@ -176,7 +176,7 @@ class RethFixtureConsumer(
     """Reth's `ef-test-runner`, which only runs through the interface."""
 
     default_binary = Path("ef-test-runner")
-    detect_binary_pattern = re.compile(r"^ef-test-runner \d")
+    detect_binary_pattern = re.compile(r"\bef-test-runner\b")
     version_flag = "--version"
     runner_commands = RUNNER_COMMANDS["reth"]
     runner_exception_mapper = RethExceptionMapper()

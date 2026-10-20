@@ -249,7 +249,7 @@ class EthrexBlocktestConsumer(
     """ethrex's `blocktest` binary."""
 
     default_binary = Path("blocktest")
-    detect_binary_pattern = re.compile(r"^ethrex-blocktest ")
+    detect_binary_pattern = re.compile(r"\bethrex-blocktest\b")
     runner_format = BlockchainFixture
 
 
@@ -261,5 +261,5 @@ class EthrexEnginetestConsumer(
     """ethrex's `enginetest` binary."""
 
     default_binary = Path("enginetest")
-    detect_binary_pattern = re.compile(r"^ethrex-enginetest ")
+    detect_binary_pattern = re.compile(r"\bethrex-enginetest\b")
     runner_format = BlockchainEngineFixture
