@@ -292,7 +292,11 @@ def pytest_collection_modifyitems(
         test_case = params["test_case"]
         fixture_consumer = params["fixture_consumer"]
         mode = params.get("bal_mode", "parallel")
-        assert isinstance(test_case, (TestCaseIndexFile, TestCaseStream))
+        if not isinstance(test_case, (TestCaseIndexFile, TestCaseStream)):
+            # No test case has a format any binary consumes: pytest keeps
+            # its empty parameter set as one skipped item.
+            selected.append(item)
+            continue
         assert isinstance(fixture_consumer, FixtureConsumerTool)
         assert isinstance(mode, str)
         if fixture_consumer.can_consume(test_case.format) and bal_mode_applies(
