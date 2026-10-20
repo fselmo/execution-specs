@@ -1,5 +1,7 @@
 """Abstract base class to help create Python interfaces to Ethereum CLIs."""
 
+import csv
+import io
 import os
 import shutil
 import subprocess
@@ -118,10 +120,25 @@ def command_line(
         if path is not None:
             mounts[path.absolute()] = "rw"
     for path, mode in mounts.items():
-        command += ["--volume", f"{path}:{path}:{mode}"]
+        command += ["--mount", bind_mount(path, read_only=mode == "ro")]
     if executable.entrypoint is not None:
         command += ["--entrypoint", executable.entrypoint]
     return [*command, executable.image, *args]
+
+
+def bind_mount(path: Path, *, read_only: bool) -> str:
+    """
+    Return a `--mount` value binding `path` at the same path.
+
+    `--volume` splits on `:`, which test ids put in dump and fixture paths;
+    `--mount` reads CSV, so a field with a comma is quoted.
+    """
+    fields = ["type=bind", f"source={path}", f"target={path}"]
+    if read_only:
+        fields.append("readonly")
+    line = io.StringIO()
+    csv.writer(line, lineterminator="").writerow(fields)
+    return line.getvalue()
 
 
 def run_command(
