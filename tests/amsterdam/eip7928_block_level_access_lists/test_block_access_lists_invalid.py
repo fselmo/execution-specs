@@ -936,6 +936,43 @@ def test_bal_invalid_surplus_system_address_from_system_call(
 
 @pytest.mark.valid_from("Amsterdam")
 @pytest.mark.exception_test
+@pytest.mark.with_all_system_contract_request_types(
+    selector=lambda cls: issubclass(cls, FeeSystemContractRequest)
+)
+@pytest.mark.pre_alloc_mutable()
+def test_bal_invalid_missing_system_address_from_system_call(
+    blockchain_test: BlockchainTestFiller,
+    pre: Alloc,
+    request_class: Type[FeeSystemContractRequest],
+) -> None:
+    """
+    Reject a BAL that leaves out SYSTEM_ADDRESS after a request predeploy's
+    system call read its balance: the system caller is excluded only while
+    the call does not access it.
+    """
+    predeploy = request_class.system_contract_address
+    pre.fund_address(SYSTEM_ADDRESS, amount=1)
+    pre[predeploy] = Account(code=Op.POP(Op.BALANCE(Op.CALLER)))
+
+    blockchain_test(
+        pre=pre,
+        post={},
+        blocks=[
+            Block(
+                txs=[],
+                exception=BlockException.INVALID_BLOCK_ACCESS_LIST,
+                expected_block_access_list=BlockAccessListExpectation(
+                    account_expectations={
+                        SYSTEM_ADDRESS: BalAccountExpectation.empty(),
+                    }
+                ).modify(remove_accounts(SYSTEM_ADDRESS)),
+            )
+        ],
+    )
+
+
+@pytest.mark.valid_from("Amsterdam")
+@pytest.mark.exception_test
 def test_bal_invalid_balance_value(
     blockchain_test: BlockchainTestFiller,
     pre: Alloc,
