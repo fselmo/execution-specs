@@ -99,16 +99,16 @@ def pad_with_untouched_accounts(
 ) -> Callable[[BlockAccessList], BlockAccessList]:
     """
     Append accounts with no changes until the list holds `item_count`
-    items: one per address plus one per unique storage key.
+    items: one per address plus one per listed storage key.
+
+    A key listed in both storage changes and storage reads counts twice, so
+    the list stays within the cap whether a client counts listed or unique
+    keys.
     """
 
     def transform(bal: BlockAccessList) -> BlockAccessList:
         items = sum(
-            1
-            + len(
-                {int(slot.slot) for slot in account.storage_changes}
-                | {int(slot) for slot in account.storage_reads}
-            )
+            1 + len(account.storage_changes) + len(account.storage_reads)
             for account in bal.root
         )
         missing = item_count - items
@@ -1011,14 +1011,13 @@ def test_bal_invalid_balance_value(
 @pytest.mark.valid_from("Amsterdam")
 @pytest.mark.exception_test
 @pytest.mark.parametrize(
-    "modifier,lists_a_slot_twice",
+    "modifier",
     [
         pytest.param(
             lambda idx, **actors: append_change(
                 account=actors["oracle"],
                 change=BalNonceChange(block_access_index=idx, post_nonce=999),
             ),
-            False,
             id="extra_nonce",
         ),
         pytest.param(
@@ -1032,7 +1031,6 @@ def test_bal_invalid_balance_value(
                     ],
                 )
             ),
-            False,
             id="extra_balance",
         ),
         pytest.param(
@@ -1042,7 +1040,6 @@ def test_bal_invalid_balance_value(
                     block_access_index=idx, new_code=b"Amsterdam"
                 ),
             ),
-            False,
             id="extra_code",
         ),
         pytest.param(
@@ -1053,7 +1050,6 @@ def test_bal_invalid_balance_value(
                     block_access_index=idx, post_value=0xCAFE
                 ),
             ),
-            True,
             id="extra_storage_write_touched",
         ),
         pytest.param(
@@ -1064,7 +1060,6 @@ def test_bal_invalid_balance_value(
                     block_access_index=idx, post_value=0xCAFE
                 ),
             ),
-            False,
             id="extra_storage_write_untouched",
         ),
         pytest.param(
@@ -1084,7 +1079,6 @@ def test_bal_invalid_balance_value(
                     ],
                 )
             ),
-            False,
             id="extra_storage_write_uninvolved_account",
         ),
         pytest.param(
@@ -1093,7 +1087,6 @@ def test_bal_invalid_balance_value(
                     address=actors["charlie"],
                 )
             ),
-            False,
             id="extra_account_access",
         ),
         pytest.param(
@@ -1102,7 +1095,6 @@ def test_bal_invalid_balance_value(
                 slot=999,
                 read=True,
             ),
-            False,
             id="extra_storage_read",
         ),
     ],
@@ -1121,7 +1113,6 @@ def test_bal_invalid_extraneous_entries(
     pre: Alloc,
     fork: Fork,
     modifier: Callable,
-    lists_a_slot_twice: bool,
     bal_index: int,
     padding: str,
 ) -> None:
@@ -1172,15 +1163,7 @@ def test_bal_invalid_extraneous_entries(
         )
     elif padding == "to_cap":
         padding_modifiers = [pad_with_untouched_accounts(untouched, item_cap)]
-        if lists_a_slot_twice:
-            # Counting the encoded entries, not unique keys, puts this list
-            # one item over the cap, a second defect next to the duplicate.
-            exception = [
-                BlockException.INVALID_BLOCK_ACCESS_LIST,
-                BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED,
-            ]
-        else:
-            exception = BlockException.INVALID_BLOCK_ACCESS_LIST
+        exception = BlockException.INVALID_BLOCK_ACCESS_LIST
     elif padding == "past_cap":
         padding_modifiers = [
             pad_with_untouched_accounts(untouched, item_cap + 1)
