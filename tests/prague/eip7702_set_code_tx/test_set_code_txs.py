@@ -491,10 +491,7 @@ def test_set_code_to_tstore_available_at_correct_address(
     )
 
 
-@pytest.mark.parametrize(
-    "external_sendall_recipient",
-    [False, True],
-)
+@pytest.mark.parametrize("beneficiary", ["self", "external", "delegate"])
 @pytest.mark.parametrize(
     "balance",
     [0, 1],
@@ -504,27 +501,43 @@ def test_set_code_to_self_destruct(
     state_test: StateTestFiller,
     pre: Alloc,
     fork: Fork,
-    external_sendall_recipient: bool,
+    beneficiary: str,
     balance: int,
     tx_value: int,
 ) -> None:
-    """Test the executing self-destruct opcode in a set-code transaction."""
+    """
+    Test a delegated EOA running SELFDESTRUCT, which moves its balance to the
+    beneficiary but never deletes the EOA.
+    """
     # With balance 0 the authority does not exist until the authorization
     # creates it.
     auth_signer = pre.fund_eoa(balance)
-    if external_sendall_recipient:
-        recipient = pre.fund_eoa(0)
-    else:
+    recipient: Address
+    tx_data = b""
+    if beneficiary == "self":
         recipient = auth_signer
+        selfdestruct_code = Op.SELFDESTRUCT(recipient)
+    elif beneficiary == "external":
+        recipient = pre.fund_eoa(0)
+        selfdestruct_code = Op.SELFDESTRUCT(recipient)
+    elif beneficiary == "delegate":
+        # The delegate cannot embed its own address, so the tx passes it in.
+        selfdestruct_code = Op.SELFDESTRUCT(Op.CALLDATALOAD(0))
+    else:
+        raise ValueError(f"Unknown beneficiary: {beneficiary}")
 
     set_code_to_address = pre.deploy_contract(
-        Op.SSTORE(1, 1) + Op.SELFDESTRUCT(recipient)
+        Op.SSTORE(1, 1) + selfdestruct_code
     )
+    if beneficiary == "delegate":
+        recipient = set_code_to_address
+        tx_data = Hash(recipient, left_padding=True)
 
     sender = pre.fund_eoa()
     tx = Transaction(
         to=auth_signer,
         value=tx_value,
+        data=tx_data,
         authorization_list=[
             AuthorizationTuple(
                 address=set_code_to_address,
@@ -538,7 +551,7 @@ def test_set_code_to_self_destruct(
     # The authorization does not make the authority a contract created in
     # this transaction, so SELFDESTRUCT only moves its balance.
     total_balance = balance + tx_value
-    final_balance = 0 if external_sendall_recipient else total_balance
+    final_balance = total_balance if beneficiary == "self" else 0
     post: dict[Address, Account | None] = {
         auth_signer: Account(
             nonce=1,
@@ -548,18 +561,21 @@ def test_set_code_to_self_destruct(
         ),
     }
 
-    if external_sendall_recipient:
+    if beneficiary == "external":
         if total_balance > 0:
             post[recipient] = Account(balance=total_balance)
         else:
             post[recipient] = Account.NONEXISTENT
+    elif beneficiary == "delegate":
+        # The SSTORE ran in the EOA's storage, not the delegate's.
+        post[recipient] = Account(balance=total_balance, storage={})
 
     if fork.is_eip_enabled(7708):
         # SELFDESTRUCT logs nothing when it sends to itself or moves zero.
         logs = []
         if tx_value > 0:
             logs.append(transfer_log(sender, auth_signer, tx_value))
-        if external_sendall_recipient and total_balance > 0:
+        if beneficiary != "self" and total_balance > 0:
             logs.append(transfer_log(auth_signer, recipient, total_balance))
         tx.expected_receipt = TransactionReceipt(logs=logs)
 
@@ -574,7 +590,7 @@ def test_set_code_to_self_destruct(
                     block_access_index=1, post_balance=final_balance
                 )
             )
-        account_expectations = {
+        account_expectations: dict[Address, BalAccountExpectation] = {
             auth_signer: BalAccountExpectation(
                 nonce_changes=[
                     BalNonceChange(block_access_index=1, post_nonce=1)
@@ -600,7 +616,7 @@ def test_set_code_to_self_destruct(
                 balance_changes=authority_balance_changes,
             ),
         }
-        if external_sendall_recipient:
+        if beneficiary != "self":
             recipient_balance_changes = []
             if total_balance > 0:
                 recipient_balance_changes.append(
