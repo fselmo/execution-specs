@@ -18,7 +18,7 @@ from typing import (
     Type,
 )
 
-from execution_testing.base_types import Account
+from execution_testing.test_types import Account
 from execution_testing.test_types.block_access_list import BalAccountChange
 from execution_testing.vm import Op
 

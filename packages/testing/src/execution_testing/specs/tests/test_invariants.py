@@ -5,14 +5,14 @@ from typing import Any, Dict, List
 
 import pytest
 
-from execution_testing.base_types import Account, Address
+from execution_testing.base_types import Address
 from execution_testing.evm_tools.t8n.evm_trace.bal_witness import (
     BalWitness,
     bal_slots,
     check_bal_relation,
 )
 from execution_testing.forks import Amsterdam, Osaka
-from execution_testing.test_types import Alloc
+from execution_testing.test_types import Account, Alloc
 from execution_testing.test_types.block_access_list import (
     BalAccountChange,
     BalBalanceChange,
