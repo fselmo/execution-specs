@@ -6,6 +6,7 @@ BAL values in tests.
 """
 
 from typing import Any, Callable, ClassVar, Dict, List, Optional
+from weakref import WeakSet
 
 from pydantic import Field, PrivateAttr
 
@@ -100,6 +101,44 @@ def compose(
     return composed
 
 
+_AFTER_SORT: WeakSet[Callable[["BlockAccessList"], "BlockAccessList"]] = (
+    WeakSet()
+)
+
+
+def apply_after_sort(
+    modifier: Callable[["BlockAccessList"], "BlockAccessList"],
+) -> Callable[["BlockAccessList"], "BlockAccessList"]:
+    """
+    Mark a modifier that must see the BAL after `modify` sorts it.
+
+    That is a modifier whose defect is an out-of-order entry, or one that
+    encodes the final list.
+    """
+    _AFTER_SORT.add(modifier)
+    return modifier
+
+
+def in_canonical_order(bal: BlockAccessList) -> BlockAccessList:
+    """
+    Return a copy of the BAL sorted by the EIP-7928 sort keys.
+
+    The sort is stable, so a duplicated entry stays next to its original.
+    """
+    accounts = []
+    for account in sorted(bal.root, key=lambda a: a.address):
+        account = account.model_copy(deep=True)
+        for field in ("nonce_changes", "balance_changes", "code_changes"):
+            changes = getattr(account, field)
+            changes.sort(key=lambda c: c.block_access_index)
+        account.storage_changes.sort(key=lambda s: s.slot)
+        for storage_slot in account.storage_changes:
+            storage_slot.slot_changes.sort(key=lambda c: c.block_access_index)
+        account.storage_reads.sort()
+        accounts.append(account)
+    return BlockAccessList(root=accounts)
+
+
 class BlockAccessListExpectation(CamelModel):
     """
     Block Access List expectation model for test writing.
@@ -133,6 +172,9 @@ class BlockAccessListExpectation(CamelModel):
     _modifier: Callable[["BlockAccessList"], "BlockAccessList"] | None = (
         PrivateAttr(default=None)
     )
+    _after_sort_modifier: (
+        Callable[["BlockAccessList"], "BlockAccessList"] | None
+    ) = PrivateAttr(default=None)
     _rlp_modifier: Callable[["BlockAccessList"], Bytes] | None = PrivateAttr(
         default=None
     )
@@ -142,6 +184,10 @@ class BlockAccessListExpectation(CamelModel):
     ) -> "BlockAccessListExpectation":
         """
         Create a new expectation with a modifier for invalid test cases.
+
+        The modified BAL is put back in canonical order before modifiers
+        marked with `apply_after_sort` run, so a modifier that adds an
+        entry cannot also break the ordering by accident.
 
         Args:
             modifiers: One or more functions that take and return
@@ -167,7 +213,10 @@ class BlockAccessListExpectation(CamelModel):
                 "single `modify` call instead."
             )
         new_instance = self.model_copy(deep=True)
-        new_instance._modifier = compose(*modifiers)
+        after_sort = [m for m in modifiers if m in _AFTER_SORT]
+        content = [m for m in modifiers if m not in _AFTER_SORT]
+        new_instance._modifier = compose(*content)
+        new_instance._after_sort_modifier = compose(*after_sort)
         return new_instance
 
     def modify_if_invalid_test(
@@ -192,6 +241,9 @@ class BlockAccessListExpectation(CamelModel):
                 f"BlockAccessList, got {type(modified).__name__}. Use "
                 "`modify_rlp` or `override_rlp` for encoders."
             )
+        modified = in_canonical_order(modified)
+        if self._after_sort_modifier is not None:
+            modified = self._after_sort_modifier(modified)
         return modified
 
     def modify_rlp(
