@@ -142,6 +142,19 @@ class NimbusExceptionMapper(ExceptionMapper):
         BlockException.INVALID_STATE_ROOT: "stateRoot mismatch",
         BlockException.INVALID_RECEIPTS_ROOT: "receiptRoot mismatch",
         BlockException.INVALID_LOG_BLOOM: "bloom mismatch",
+        BlockException.INVALID_GAS_USED: "gasUsed mismatch",
+        BlockException.INVALID_WITHDRAWALS_ROOT: "Mismatched withdrawalsRoot",
+        BlockException.INCORRECT_EXCESS_BLOB_GAS: (
+            "not equal header.excessBlobGas"
+        ),
+        BlockException.INCORRECT_BLOB_GAS_USED: (
+            "not equal header.blobGasUsed"
+        ),
+        BlockException.INVALID_DEPOSIT_EVENT_LAYOUT: "deposit wrong length",
+        TransactionException.NONCE_IS_MAX: "invalid tx: nonce at maximum",
+        TransactionException.PRIORITY_GREATER_THAN_MAX_FEE_PER_GAS: (
+            "maxFee is smaller than maxPriorityFee"
+        ),
     }
     mapping_regex: ClassVar[Dict[ExceptionBase, str]] = {
         TransactionException.INSUFFICIENT_ACCOUNT_FUNDS: (
@@ -156,7 +169,8 @@ class NimbusExceptionMapper(ExceptionMapper):
             r"account nonce mismatch\. txNonce=\d+, accNonce=\d+"
         ),
         TransactionException.GAS_ALLOWANCE_EXCEEDED: (
-            r"execution gas used exceeds limit, want: \d+, available: \d+"
+            r"(execution |state )?gas used exceeds limit, "
+            r"want: \d+, available: \d+"
         ),
         BlockException.GAS_USED_OVERFLOW: (
             r"execution gas used exceeds limit, want: \d+, available: \d+"
@@ -166,12 +180,50 @@ class NimbusExceptionMapper(ExceptionMapper):
             r"Computed block access list hash does not match|"
             r"should be unique and sorted|"
             r"A slot should not be in both changes and reads|"
-            r"Each slot in storage changes must have at least"
+            r"Each slot in storage changes must have at least|"
+            r"Failed to decode BAL in payload"
         ),
         BlockException.INCORRECT_BLOCK_FORMAT: (
-            r"should be unique and sorted"
+            r"should be unique and sorted|"
+            r"unexpected EIP-4844 blobGasUsed in block header|"
+            r"Post-Amsterdam block header must have slotNumber|"
+            r"slotNumber appear before Amsterdam|"
+            r"blobGasUsed appear before Cancun|"
+            r"blobGasUsed is expected from execution payload"
         ),
         BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED: (
             r"BAL exceeds max items cap"
+        ),
+        BlockException.INVALID_REQUESTS: (
+            r"requestsHash mismatch|"
+            r"Execution requests are not in strictly ascending order|"
+            r"Invalid execution request type|"
+            r"Execution request data must not be empty|"
+            r"Empty data for request type"
+        ),
+        BlockException.SYSTEM_CONTRACT_CALL_FAILED: (
+            r"process(DequeueWithdrawal|DequeueConsolidation|BuilderDeposit|"
+            r"BuilderExit)Requests: (Opcode Dispatch Error|execution reverted)"
+        ),
+        BlockException.SYSTEM_CONTRACT_EMPTY: (
+            r"process\w+Requests: No code found for"
+        ),
+        BlockException.RLP_BLOCK_LIMIT_EXCEEDED: (
+            r"block exceeded MAX_RLP_BLOCK_SIZE"
+        ),
+        TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM: (
+            r"invalid tx: gas limit exceeds TX_MAX_TOTAL_GAS_LIMIT"
+        ),
+        TransactionException.INITCODE_SIZE_EXCEEDED: (
+            r"invalid tx: initcode size exceeds EIP-\d+ maximum"
+        ),
+        # The larger of intrinsic gas and the calldata floor, so either.
+        TransactionException.INTRINSIC_GAS_TOO_LOW: (
+            r"invalid tx: not enough gas to perform calculation|"
+            r"invalid tx: Intrinsic execution or calldata floor exceeds "
+            r"TX_MAX_GAS_LIMIT"
+        ),
+        TransactionException.INTRINSIC_GAS_BELOW_FLOOR_GAS_COST: (
+            r"invalid tx: not enough gas to perform calculation"
         ),
     }
