@@ -191,11 +191,20 @@ class EthrexExceptionMapper(ExceptionMapper):
             r"Invalid block hash"
         ),
         BlockException.INCORRECT_BLOCK_FORMAT: (
+            # An Amsterdam header missing the field.
+            r"Block access list hash is not present|"
+            r"Slot number is not present|"
             r"Block access list hash does not match "
             r"the one in the header after executing|"
             r"Block access list contains index \d+ "
             r"exceeding max valid index \d+|"
             r"Failed to RLP decode BAL|"
-            r"Block access list accounts not in strictly ascending order.*"
+            r"Block access list accounts not in strictly ascending order.*|"
+            # A pre-Amsterdam header carrying the field.
+            r"Block access list hash is present|"
+            # A blob field or slot number present before its fork, or a blob
+            # field missing after it.
+            r"(Excess blob gas|Blob gas used) is (not )?present|"
+            r"Slot number is present"
         ),
     }
