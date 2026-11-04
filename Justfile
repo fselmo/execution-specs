@@ -316,6 +316,25 @@ spec-tools *args: (_tmp "spec-tools")
 
 # --- Unit Tests ---
 
+# Run the Hypothesis property tests over spec components
+[group('unit tests')]
+test-spec-properties *args: (_tmp "test-spec-properties")
+    uv run pytest \
+        -n {{ xdist_workers }} \
+        --basetemp="{{ output_dir }}/test-spec-properties/tmp" \
+        "$@" \
+        tests_property
+
+# Run the property tests with the CrossHair solver as their backend
+[group('unit tests')]
+test-spec-properties-crosshair *args: (_tmp "test-spec-properties-crosshair")
+    uv run --group crosshair pytest \
+        -n {{ xdist_workers }} \
+        --basetemp="{{ output_dir }}/test-spec-properties-crosshair/tmp" \
+        --hypothesis-profile=crosshair \
+        "$@" \
+        tests_property
+
 # Run the testing package unit tests (with Python)
 [group('unit tests')]
 test-tests *args: (_tmp "test-tests")

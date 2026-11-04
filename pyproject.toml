@@ -265,6 +265,11 @@ dev = [
 optimized = [
     "ethereum-execution[optimized]",
 ]
+# Opt-in: the CrossHair backend for the property suite's `crosshair` profile,
+# which explores spec functions with an SMT solver instead of random draws.
+crosshair = [
+    "hypothesis-crosshair>=0.0.31,<0.1",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "ethereum.__version__" }
@@ -505,7 +510,7 @@ mypy_path = [
     "packages/testing/stubs",
     "packages/verifier/src",
 ]
-files = ["src", "tests", "packages"]
+files = ["src", "tests", "tests_property", "packages"]
 enable_error_code = [
     "truthy-iterable",
     "unused-awaitable",
