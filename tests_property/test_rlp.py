@@ -1,0 +1,89 @@
+"""
+Properties of how the spec RLP-encodes and decodes its transactions.
+
+Transactions are compared with the framework's own encoding of the same
+transaction, which is written apart from `src/`.
+"""
+
+from types import ModuleType
+
+import pytest
+from ethereum_types.bytes import Bytes
+from execution_testing.forks import Fork
+from hypothesis import given
+from hypothesis import strategies as st
+
+from ethereum.exceptions import InvalidBlock
+from ethereum_spec_tools.forks import Hardfork
+
+from .forks import requires
+from .spec_api import (
+    decode_transaction,
+    encode_transaction,
+    spec_transaction,
+    transaction_types,
+    type_byte,
+)
+from .strategies import aim_at, framework_txs
+
+# Yellow Paper, Appendix B: a list whose payload is this long or longer
+# takes a long length prefix.
+LONG_LIST_PAYLOAD = 56
+# EIP-2718: a first byte up to this one is a transaction type, not RLP.
+LAST_TYPE_BYTE = 0x7F
+
+with_typed_transactions = requires(lambda fork: max(fork.tx_types()) > 0)
+
+
+def test_transaction_types_match_the_framework(
+    fork: Fork, transactions: ModuleType
+) -> None:
+    """The spec defines exactly the transaction types the framework lists."""
+    spec_type_bytes = [
+        type_byte(tx_type) for tx_type in transaction_types(transactions)
+    ]
+    assert sorted(spec_type_bytes) == sorted(fork.tx_types())
+
+
+@given(data=st.data())
+def test_transaction_encoding_matches_the_framework(
+    fork: Fork, transactions: ModuleType, data: st.DataObject
+) -> None:
+    """
+    Every transaction type encodes to the framework's encoding of the same
+    transaction, and decodes back to itself.
+    """
+    framework = data.draw(framework_txs(fork))
+    aim_at(
+        len(framework.rlp()), LONG_LIST_PAYLOAD, "encoding near a long prefix"
+    )
+    tx = spec_transaction(transactions, framework)
+    assert encode_transaction(transactions, tx) == framework.rlp()
+    assert decode_transaction(transactions, framework.rlp()) == tx
+
+
+@with_typed_transactions
+@given(data=st.data(), payload=st.binary(max_size=8))
+def test_decoding_rejects_unknown_types(
+    fork: Fork,
+    spec: Hardfork,
+    transactions: ModuleType,
+    data: st.DataObject,
+    payload: bytes,
+) -> None:
+    """
+    An encoding that starts with a byte in the transaction type range,
+    but not one of the fork's types, is rejected, and so is an empty one.
+    """
+    unknown_types = [
+        byte
+        for byte in range(LAST_TYPE_BYTE + 1)
+        if byte == 0 or byte not in fork.tx_types()
+    ]
+    unknown = data.draw(st.sampled_from(unknown_types))
+    aim_at(unknown, max(fork.tx_types()) + 1, "type byte near the newest")
+
+    with pytest.raises(spec.module("exceptions").TransactionTypeError):
+        transactions.decode_transaction(Bytes([unknown]) + payload)
+    with pytest.raises(InvalidBlock):
+        transactions.decode_transaction(Bytes(b""))
