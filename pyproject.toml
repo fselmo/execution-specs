@@ -212,6 +212,7 @@ test = [
     "requests-cache>=1.2.1,<2",
     "libcst>=1.8,<2",
     "ethereum-execution-testing",
+    "ethereum-execution-verifier",
 ]
 lint = [
     "codespell==2.4.1",
@@ -263,6 +264,11 @@ dev = [
 # requires a C toolchain on 3.14.
 optimized = [
     "ethereum-execution[optimized]",
+]
+# Opt-in: the CrossHair backend for the property suite's `crosshair` profile,
+# which explores spec functions with an SMT solver instead of random draws.
+crosshair = [
+    "hypothesis-crosshair>=0.0.31,<0.1",
 ]
 
 [tool.setuptools.dynamic]
@@ -498,8 +504,13 @@ warn_unused_ignores = true
 warn_unused_configs = true
 warn_redundant_casts = true
 ignore_missing_imports = false
-mypy_path = ["src", "packages/testing/src", "packages/testing/stubs"]
-files = ["src", "tests", "packages"]
+mypy_path = [
+    "src",
+    "packages/testing/src",
+    "packages/testing/stubs",
+    "packages/verifier/src",
+]
+files = ["src", "tests", "tests_property", "packages"]
 enable_error_code = [
     "truthy-iterable",
     "unused-awaitable",
@@ -530,6 +541,7 @@ exclude = [
     "^site/",
     "^tests/json_loader/fixtures/",
     "^packages/testing/build/",
+    "^packages/verifier/build/",
 ]
 plugins = ["pydantic.mypy"]
 
@@ -554,3 +566,4 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 ethereum-execution-testing = { workspace = true }
+ethereum-execution-verifier = { workspace = true }

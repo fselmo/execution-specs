@@ -93,6 +93,7 @@
       * [Releasing](dev/releasing.md)
       * [Releasing Test Fixtures](dev/releasing_tests.md)
       * [Publishing Simulator Images](dev/publishing_images.md)
+      * [Property Testing](dev/property_testing.md)
   * [Library Reference](library/index.md)
       * [EEST CLI Tools](library/cli/index.md)
           * [eest](library/cli/eest.md)

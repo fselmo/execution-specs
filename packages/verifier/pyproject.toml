@@ -1,0 +1,46 @@
+[build-system]
+requires = [
+    "setuptools==78.0.2",
+    "wheel==0.45.1",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ethereum-execution-verifier"
+version = "0.1.0"
+description = "Verification tooling beside the Ethereum execution layer specification"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["ethereum", "verification", "testing"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "ethereum-execution",
+    "ethereum-execution-testing",
+    "hypothesis>=6.100,<7",
+]
+
+[project.urls]
+Homepage = "https://github.com/ethereum/execution-specs"
+Repository = "https://github.com/ethereum/execution-specs"
+Issues = "https://github.com/ethereum/execution-specs/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["*tests*"]
+
+[tool.setuptools.package-data]
+"execution_verifier" = ["py.typed"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.uv]
+required-version = ">=0.13.4"
+
+[tool.uv.sources]
+ethereum-execution = { workspace = true }
+ethereum-execution-testing = { workspace = true }
