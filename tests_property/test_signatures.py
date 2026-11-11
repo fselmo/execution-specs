@@ -81,8 +81,9 @@ BREAK_TYPES: Dict[str, Sequence[int]] = {
     "chain_id_past_64_bits": [TransactionType.LEGACY],
 }
 # Each rule flips at its bound and nothing changes past it, so the first
-# value past it and the top of the field are the offsets that matter.
-OFFSETS = st.sampled_from([0, 1, 2**64, MAX_U256])
+# values past it and the top of the field are the offsets that matter. The
+# first six also walk `v` through every value below the protected range.
+OFFSETS = st.sampled_from([*range(FIRST_PROTECTED_V - 29), 2**64, MAX_U256])
 
 
 def breakable(break_name: str) -> Any:

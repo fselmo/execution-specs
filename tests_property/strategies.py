@@ -81,10 +81,12 @@ def bytes_data(
 ) -> st.SearchStrategy[Bytes]:
     """
     Return byte strings with sizes weighted toward 32-byte word
-    boundaries, where memory expansion and calldata pricing change.
+    boundaries, where memory expansion and calldata pricing change, and
+    toward the 55 and 56 bytes where RLP moves to a long string prefix.
     """
     hotspot_sizes = sorted(
-        {0, 1, 31, 32, 33, 63, 64, 65} & set(range(min_size, max_size + 1))
+        {0, 1, 31, 32, 33, 55, 56, 63, 64, 65}
+        & set(range(min_size, max_size + 1))
     )
     return st.one_of(
         st.sampled_from(hotspot_sizes).flatmap(
@@ -132,7 +134,7 @@ def framework_tx_fields(
         "gas_limit": draw(ints(MAX_U64)),
         "value": draw(ints(MAX_U256)),
         "data": draw(bytes_data()),
-        "chain_id": draw(st.integers(1, MAX_U64)),
+        "chain_id": draw(st.one_of(st.just(MAX_U64), st.integers(1, MAX_U64))),
     }
     if ty == TransactionType.LEGACY:
         fields["protected"] = fork.supports_protected_txs() and draw(

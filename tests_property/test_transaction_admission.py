@@ -331,14 +331,26 @@ def fitted(fork: Fork, fields: Dict[str, Any], spare_gas: int) -> Transaction:
     return signed({**fields, "gas_limit": minimum + spare_gas})
 
 
+def spare_gas_near(fork: Fork) -> st.SearchStrategy[int]:
+    """
+    Return gas above a transaction's least limit: a little, or enough to
+    put the limit on either side of the per-transaction execution cap.
+    """
+    cap = fork.transaction_gas_limit_cap()
+    if cap is None:
+        return ints(1 << 20)
+    return st.one_of(
+        ints(1 << 20), st.integers(cap - (1 << 20), cap + (1 << 20))
+    )
+
+
 @pytest.mark.parametrize("case_name", sorted(CASES))
-@given(data=st.data(), spare_gas=ints(1 << 20))
+@given(data=st.data())
 def test_admission_rule_boundary(
     spec: Hardfork,
     fork: Fork,
     case_name: str,
     data: st.DataObject,
-    spare_gas: int,
 ) -> None:
     """
     A transaction in a block built to fit it is admitted, and the case's
@@ -346,6 +358,7 @@ def test_admission_rule_boundary(
     case's exception.
     """
     case = CASES[case_name]
+    spare_gas = data.draw(spare_gas_near(fork))
     types = [ty for ty in case.types if ty in fork.tx_types()]
     if not types:
         pytest.skip(f"{fork.name()} has no transaction type to change")

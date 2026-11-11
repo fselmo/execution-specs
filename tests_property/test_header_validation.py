@@ -17,7 +17,7 @@ from ethereum_rlp import rlp
 from ethereum_types.bytes import Bytes, Bytes8, Bytes32
 from ethereum_types.numeric import U64, U256, Uint
 from execution_testing.forks import Fork
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from ethereum.crypto.hash import keccak256
@@ -154,6 +154,8 @@ class Case:
 
     change: Callable[[Family], Family]
     valid: bool
+    applies: Callable[[Family], bool] = lambda _: True
+    """Whether the change can be made to this family at all."""
 
 
 CASES: Dict[str, Case] = {
@@ -230,6 +232,16 @@ CASES: Dict[str, Case] = {
         ),
         valid=False,
     ),
+    "base_fee_one_too_low": Case(
+        lambda f: Family(
+            f.parent,
+            replace(
+                f.child, base_fee_per_gas=f.child.base_fee_per_gas - Uint(1)
+            ),
+        ),
+        valid=False,
+        applies=lambda f: int(f.child.base_fee_per_gas) > 0,
+    ),
     "extra_data_at_its_limit": Case(
         change_child(extra_data=Bytes(b"\x01" * MAX_EXTRA_DATA)), valid=True
     ),
@@ -270,6 +282,14 @@ BLOB_CASES: Dict[str, Case] = {
             replace(f.child, excess_blob_gas=f.child.excess_blob_gas + U64(1)),
         ),
         valid=False,
+    ),
+    "excess_blob_gas_one_too_low": Case(
+        lambda f: Family(
+            f.parent,
+            replace(f.child, excess_blob_gas=f.child.excess_blob_gas - U64(1)),
+        ),
+        valid=False,
+        applies=lambda f: int(f.child.excess_blob_gas) > 0,
     ),
 }
 
@@ -324,6 +344,7 @@ def check_case(spec: Hardfork, family: Family, case: Case) -> None:
     fork_module = spec.module("fork")
     validate_header(fork_module, family.parent, family.child)
 
+    assume(case.applies(family))
     changed = case.change(family)
     if case.valid:
         validate_header(fork_module, changed.parent, changed.child)

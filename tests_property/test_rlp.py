@@ -26,9 +26,9 @@ from .spec_api import (
 )
 from .strategies import aim_at, framework_txs
 
-# Yellow Paper, Appendix B: a list whose payload is this long or longer
-# takes a long length prefix.
-LONG_LIST_PAYLOAD = 56
+# Yellow Paper, Appendix B: a string this long or longer takes a long
+# length prefix. Every signed transaction is already a long list.
+LONG_STRING = 56
 # EIP-2718: a first byte up to this one is a transaction type, not RLP.
 LAST_TYPE_BYTE = 0x7F
 
@@ -54,9 +54,7 @@ def test_transaction_encoding_matches_the_framework(
     transaction, and decodes back to itself.
     """
     framework = data.draw(framework_txs(fork))
-    aim_at(
-        len(framework.rlp()), LONG_LIST_PAYLOAD, "encoding near a long prefix"
-    )
+    aim_at(len(framework.data), LONG_STRING, "calldata near a long prefix")
     tx = spec_transaction(transactions, framework)
     assert encode_transaction(transactions, tx) == framework.rlp()
     assert decode_transaction(transactions, framework.rlp()) == tx
