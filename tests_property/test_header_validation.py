@@ -26,7 +26,7 @@ from ethereum_spec_tools.forks import Hardfork
 
 from .forks import requires
 from .spec_api import validate_header, zeroed
-from .strategies import MAX_U64, aim_at, ints
+from .strategies import MAX_U64, ints
 
 # Proof of work headers carry checks of their own (EIP-3675).
 pytestmark = requires(lambda fork: fork.header_zero_difficulty_required())
@@ -76,7 +76,6 @@ def families(draw: st.DrawFn, fork: Fork, blocks: ModuleType) -> Family:
             st.integers(GAS_LIMIT_MINIMUM, MAX_U64),
         )
     )
-    aim_at(parent_gas_limit, MAX_U64, "parent gas limit near 2**64")
     parent_gas_used = draw(ints(parent_gas_limit))
     parent_base_fee = draw(ints(MAX_U64))
     parent_blob_gas_used = parent_excess_blob_gas = 0

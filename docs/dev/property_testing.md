@@ -54,10 +54,10 @@ A rule about a limit is checked on both sides: the last input that passes and th
 
 ## Aiming at a Boundary
 
-A property over a function that rejects input should reach each of its rejections. Where random draws rarely land on the boundary, such as the highest nonce EIP-2681 allows, steer the search toward it with `aim_at`, which wraps Hypothesis's [`target()`](https://hypothesis.readthedocs.io/en/latest/reference/api.html#hypothesis.target):
+A property over a function that rejects input should reach each of its rejections. Where the value that picks the branch under test rarely lands on its boundary, such as a base fee at the top of its 256-bit field, steer the search toward it with `aim_at`, which wraps Hypothesis's [`target()`](https://hypothesis.readthedocs.io/en/latest/reference/api.html#hypothesis.target):
 
 ```python
-aim_at(int(exact.nonce), MAX_U64 - 1, "nonce near the EIP-2681 limit")
+aim_at(base_fee, MAX_U256, "base fee near 2**256")
 ```
 
 Hypothesis keeps the examples that land closest to the edge and mutates them further, so more of the budget goes to both sides of it. Aim at the edge of a rule (a cap, a fee, a step) and at the top of 64-bit and 256-bit fields, where an implementation that stores the value in a fixed-width integer could overflow.

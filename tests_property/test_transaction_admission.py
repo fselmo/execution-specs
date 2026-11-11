@@ -17,6 +17,9 @@ from ethereum_types.bytes import Bytes, Bytes0
 from ethereum_types.numeric import U64, U256, Uint
 from execution_testing import Hash, Transaction, TransactionType
 from execution_testing.forks import Fork
+from execution_testing.test_types.balance_expectations import (
+    effective_gas_price,
+)
 from hypothesis import assume, given
 from hypothesis import strategies as st
 
@@ -31,8 +34,8 @@ from .spec_api import spec_transaction, zeroed
 from .strategies import (
     MAX_U64,
     MAX_U256,
-    aim_at,
     framework_tx_fields,
+    intrinsic_execution_gas,
     ints,
     minimum_gas_limit,
     signed,
@@ -109,8 +112,11 @@ def admit(
     tx: Transaction,
     block: Block,
     change_spec_tx: Callable[[Any], Any] = lambda tx: tx,
-) -> None:
-    """Run the spec's admission check for `tx` in `block`."""
+) -> Any:
+    """
+    Run the spec's admission check for `tx` in `block`, and return the
+    environment it builds for execution.
+    """
     vm = spec.module("vm")
     tracker = spec.module("state_tracker")
     bal = spec.module("block_access_lists")
@@ -143,7 +149,7 @@ def admit(
         blob_gas_used=U64(max(max_blob_gas - block.blob_gas_left, 0)),
     )
     spec_tx = change_spec_tx(spec_transaction(transactions, tx))
-    spec.module("fork").check_transaction(
+    return spec.module("fork").check_transaction(
         block_env, block_output, spec_tx, Uint(0)
     )
 
@@ -205,6 +211,25 @@ CASES: Dict[str, Case] = {
         ALL_TYPES,
         "InvalidSenderError",
         block=lambda b: replace(b, sender_code=CONTRACT_CODE),
+    ),
+    "sender_delegation_one_byte_short": Case(
+        ALL_TYPES,
+        "InvalidSenderError",
+        block=lambda b: replace(
+            b, sender_code=DELEGATION_PREFIX + b"\x01" * 19
+        ),
+    ),
+    "sender_delegation_one_byte_long": Case(
+        ALL_TYPES,
+        "InvalidSenderError",
+        block=lambda b: replace(
+            b, sender_code=DELEGATION_PREFIX + b"\x01" * 21
+        ),
+    ),
+    "sender_delegation_of_another_version": Case(
+        ALL_TYPES,
+        "InvalidSenderError",
+        block=lambda b: replace(b, sender_code=b"\xef\x01\x01" + b"\x01" * 20),
     ),
     "max_fee_below_the_base_fee": Case(
         FEE_MARKET_TYPES,
@@ -344,6 +369,22 @@ def spare_gas_near(fork: Fork) -> st.SearchStrategy[int]:
     )
 
 
+def check_environment(
+    fork: Fork, tx: Transaction, base_fee: int, env: Any
+) -> None:
+    """
+    Check what admission hands to execution: the price per gas, and the
+    gas left after the intrinsic cost, split at the EIP-7825 cap.
+    """
+    assert int(env.effective_gas_price) == effective_gas_price(tx, base_fee)
+    cap = fork.transaction_gas_limit_cap()
+    assert cap is not None
+    intrinsic = intrinsic_execution_gas(fork, tx)
+    grant = int(env.execution_gas_grant)
+    assert grant + int(env.state_gas_reservoir) == tx.gas_limit - intrinsic
+    assert grant <= cap - intrinsic
+
+
 @pytest.mark.parametrize("case_name", sorted(CASES))
 @given(data=st.data())
 def test_admission_rule_boundary(
@@ -371,14 +412,15 @@ def test_admission_rule_boundary(
     exact = fitted(fork, fields, spare_gas)
     assume(exact.gas_limit <= (fork.transaction_total_gas_limit_cap() or 0))
     block = exact_fit(fork, exact)
-    aim_at(int(exact.nonce), MAX_U64 - 1, "nonce near the EIP-2681 limit")
     # The balance field is 256 bits wide, so a transaction can cost more
     # than any sender holds.
     if block.sender_balance > MAX_U256:
         with pytest.raises(exception_named(spec, "InsufficientBalanceError")):
             admit(spec, fork, exact, replace(block, sender_balance=MAX_U256))
         return
-    admit(spec, fork, exact, block)
+    base_fee = data.draw(ints(block.base_fee))
+    env = admit(spec, fork, exact, replace(block, base_fee=base_fee))
+    check_environment(fork, exact, base_fee, env)
 
     changed = fitted(fork, case.tx(f=dict(fields), fork=fork), spare_gas)
     changed_block = case.block(exact_fit(fork, changed))

@@ -31,7 +31,6 @@ from .strategies import (
     MAX_U256,
     SIGNATURE_BREAKS,
     addresses,
-    aim_at,
     highest_s,
     ints,
     private_keys,
@@ -258,7 +257,6 @@ def test_authorization_rule_boundary(
         nonce=nonce,
         code=b"",
     )
-    aim_at(nonce, MAX_U64 - 1, "nonce near the EIP-7702 limit")
     framework, authority, warmed = check(spec, valid, address, key)
     assert authority == framework.signer
     assert warmed == {framework.signer}

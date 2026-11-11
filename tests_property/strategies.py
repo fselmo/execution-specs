@@ -184,6 +184,17 @@ def framework_txs(
 
 def minimum_gas_limit(fork: Fork, tx: Transaction) -> int:
     """Return the least gas limit the framework says `tx` needs."""
+    return _intrinsic_cost(fork, tx, deducted_before_execution=False)
+
+
+def intrinsic_execution_gas(fork: Fork, tx: Transaction) -> int:
+    """Return the execution gas the framework says `tx` pays up front."""
+    return _intrinsic_cost(fork, tx, deducted_before_execution=True)
+
+
+def _intrinsic_cost(
+    fork: Fork, tx: Transaction, *, deducted_before_execution: bool
+) -> int:
     return fork.transaction_intrinsic_cost_calculator()(
         calldata=tx.data,
         contract_creation=tx.to is None,
@@ -195,6 +206,7 @@ def minimum_gas_limit(fork: Fork, tx: Transaction) -> int:
             if tx.to == tx.sender
             else RecipientType.CONTRACT
         ),
+        return_cost_deducted_prior_execution=deducted_before_execution,
     )
 
 
