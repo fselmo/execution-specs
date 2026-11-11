@@ -33,6 +33,9 @@ LONG_STRING = 56
 LAST_TYPE_BYTE = 0x7F
 
 with_typed_transactions = requires(lambda fork: max(fork.tx_types()) > 0)
+# EIP-2718: a first byte past the type range starts an RLP string or 0xff,
+# and starts neither a typed transaction nor a legacy one, an RLP list.
+NEITHER_FIRST_BYTES = [*range(LAST_TYPE_BYTE + 1, 0xC0), 0xFF]
 
 
 def test_transaction_types_match_the_framework(
@@ -85,3 +88,22 @@ def test_decoding_rejects_unknown_types(
         transactions.decode_transaction(Bytes([unknown]) + payload)
     with pytest.raises(InvalidBlock):
         transactions.decode_transaction(Bytes(b""))
+
+
+@with_typed_transactions
+@given(
+    first=st.one_of(
+        st.sampled_from([0x80, 0xBF, 0xFF]),
+        st.sampled_from(NEITHER_FIRST_BYTES),
+    ),
+    payload=st.binary(max_size=8),
+)
+def test_decoding_rejects_bytes_that_start_neither_kind(
+    spec: Hardfork, transactions: ModuleType, first: int, payload: bytes
+) -> None:
+    """
+    An encoding whose first byte starts neither a transaction type nor an
+    RLP list is rejected on every fork with typed transactions.
+    """
+    with pytest.raises(spec.module("exceptions").TransactionTypeError):
+        transactions.decode_transaction(Bytes([first]) + payload)
