@@ -8,7 +8,7 @@ The suite runs as plain pytest and produces no fixtures, so `fill` never collect
 
 ```console
 just test-spec-properties
-just test-spec-properties --hypothesis-profile=nightly
+just test-spec-properties --hypothesis-profile=long
 just test-spec-properties tests_property/test_block_access_list.py
 ```
 
@@ -16,7 +16,7 @@ just test-spec-properties tests_property/test_block_access_list.py
 | ----------- | --------------------- | ---------- |
 | `ci`        | 50 (default)          | no         |
 | `dev`       | 200                   | yes        |
-| `nightly`   | 5000                  | yes        |
+| `long`      | 5000, run by hand     | yes        |
 
 The `ci` profile is derandomized, so a failure reproduces on every run and Hypothesis prints a `@reproduce_failure` blob for it. Once a failure is fixed, keep its input as an `@example(...)` on the test so it stays covered.
 
@@ -54,10 +54,10 @@ A rule about a limit is checked on both sides: the last input that passes and th
 
 ## Aiming at a Boundary
 
-A property over a function that rejects input should reach each of its rejections. Where the boundary depends on several drawn values, such as a balance against a transaction's maximum cost, steer the search toward it with `aim_at`, which wraps Hypothesis's [`target()`](https://hypothesis.readthedocs.io/en/latest/reference/api.html#hypothesis.target):
+A property over a function that rejects input should reach each of its rejections. Where random draws rarely land on the boundary, such as the highest nonce EIP-2681 allows, steer the search toward it with `aim_at`, which wraps Hypothesis's [`target()`](https://hypothesis.readthedocs.io/en/latest/reference/api.html#hypothesis.target):
 
 ```python
-aim_at(block.sender_balance, MAX_U256, "minimum balance near 2**256")
+aim_at(int(exact.nonce), MAX_U64 - 1, "nonce near the EIP-2681 limit")
 ```
 
 Hypothesis keeps the examples that land closest to the edge and mutates them further, so more of the budget goes to both sides of it. Aim at the edge of a rule (a cap, a fee, a step) and at the top of 64-bit and 256-bit fields, where an implementation that stores the value in a fixed-width integer could overflow.

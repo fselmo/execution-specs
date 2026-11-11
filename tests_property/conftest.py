@@ -2,8 +2,8 @@
 Hypothesis profiles, the fork axis and the spec module fixtures.
 
 The `ci` profile is the default and is derandomized, so a failure reproduces
-from its printed blob. `dev` explores randomly and `nightly` runs a larger
-budget; select one with `--hypothesis-profile`.
+from its printed blob. `dev` explores randomly and `long` runs a larger
+budget by hand; select one with `--hypothesis-profile`.
 """
 
 from types import ModuleType
@@ -26,7 +26,7 @@ settings.register_profile(
     print_blob=True,
 )
 # A quarter of the dev budget: the suite runs on every pull request, and the
-# nightly profile covers the long tail.
+# nightly workflow runs it at the dev profile.
 settings.register_profile(
     "ci",
     parent=settings.get_profile("dev"),
@@ -34,7 +34,7 @@ settings.register_profile(
     derandomize=True,
 )
 settings.register_profile(
-    "nightly",
+    "long",
     parent=settings.get_profile("dev"),
     max_examples=5000,
     suppress_health_check=[HealthCheck.too_slow],
