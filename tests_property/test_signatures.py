@@ -29,10 +29,13 @@ from .spec_api import (
 )
 from .strategies import (
     MAX_U256,
+    SIGNATURE_BREAKS,
     addresses,
     bytes_data,
     framework_tx,
     framework_txs,
+    highest_s,
+    past,
     private_keys,
 )
 
@@ -41,33 +44,10 @@ TYPED = [ty for ty in TransactionType if ty != TransactionType.LEGACY]
 FIRST_PROTECTED_V = 35
 
 
-def past(bound: int, offset: int) -> U256:
-    """Return the value `offset` past `bound`, within 256 bits."""
-    return U256(min(bound + offset, MAX_U256))
-
-
-def highest_s(fork: Fork) -> int:
-    """Return the largest `s` a fork accepts."""
-    # EIP-2 keeps `s` in the lower half of the curve order.
-    return (
-        int(SECP256K1N) // 2 if fork.is_eip_enabled(2) else int(SECP256K1N) - 1
-    )
-
-
-# Each break returns the signed transaction `tx` with one signature value at
-# its bound plus `offset`, given by keyword along with the `fork`.
+# The signature breaks shared with authorizations, and two that only a
+# legacy transaction's `v` can make.
 BREAKS: Dict[str, Callable[..., Any]] = {
-    "r_zero": lambda tx, **_: replace(tx, r=U256(0)),
-    "r_past_the_curve_order": lambda tx, offset, **_: replace(
-        tx, r=past(int(SECP256K1N), offset)
-    ),
-    "s_zero": lambda tx, **_: replace(tx, s=U256(0)),
-    "s_past_its_bound": lambda tx, fork, offset: replace(
-        tx, s=past(highest_s(fork) + 1, offset)
-    ),
-    "y_parity_past_one": lambda tx, offset, **_: replace(
-        tx, y_parity=past(2, offset)
-    ),
+    **SIGNATURE_BREAKS,
     "v_below_the_protected_range": lambda tx, offset, **_: replace(
         tx, v=U256(FIRST_PROTECTED_V - 1 - offset % (FIRST_PROTECTED_V - 29))
     ),
@@ -115,7 +95,7 @@ def test_signature_values_past_their_bounds_are_rejected(
     assert sender_of(transactions, tx) == framework.sender
 
     with pytest.raises(InvalidSignatureError):
-        broken = BREAKS[break_name](tx=tx, fork=fork, offset=offset)
+        broken = BREAKS[break_name](tx, fork=fork, offset=offset)
         sender_of(transactions, broken)
 
 

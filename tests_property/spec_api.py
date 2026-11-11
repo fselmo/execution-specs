@@ -9,7 +9,16 @@ the one bridge from the framework's transactions to the spec's.
 import dataclasses
 import inspect
 from types import ModuleType, SimpleNamespace, UnionType
-from typing import Any, Dict, Tuple, Union, get_args, get_origin
+from typing import (
+    Any,
+    Dict,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from ethereum_rlp import rlp
 from ethereum_types.bytes import Bytes0
@@ -133,6 +142,34 @@ def spec_transaction(transactions: ModuleType, tx: Transaction) -> Any:
         if type_byte(tx_type) == tx.ty
     )
     return _spec_object(tx_type, tx)
+
+
+def spec_authorization(fork_types: ModuleType, authorization: Any) -> Any:
+    """Return the spec's copy of a framework EIP-7702 authorization."""
+    return _spec_object(fork_types.Authorization, authorization)
+
+
+def validate_authorization(
+    vm: ModuleType, block_env: Any, tx_env: Any, authorization: Any
+) -> Tuple[Optional[Address], Set[Address]]:
+    """
+    Check one EIP-7702 authorization, and return its authority, or None if
+    it is invalid, with the addresses the check warmed.
+
+    Some forks warm the authority in the message's accessed addresses, and
+    later ones collect it in a set of its own.
+    """
+    validate = vm.eoa_delegation.validate_authorization
+    accessed: Set[Address] = set()
+    if "message" not in inspect.signature(validate).parameters:
+        return validate(block_env, tx_env, accessed, authorization), accessed
+    message = zeroed(
+        vm.Message,
+        block_env=block_env,
+        tx_env=tx_env,
+        accessed_addresses=accessed,
+    )
+    return validate(message, authorization), accessed
 
 
 def encode_transaction(transactions: ModuleType, tx: Any) -> bytes:

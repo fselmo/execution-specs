@@ -8,7 +8,8 @@ numeric strategy here mixes explicit boundary sampling with the full
 range.
 """
 
-from typing import Any, Dict, List, Sequence
+from dataclasses import replace
+from typing import Any, Callable, Dict, List, Sequence
 
 from ethereum_types.bytes import Bytes, Bytes20
 from ethereum_types.numeric import U64, U256, Uint
@@ -209,6 +210,37 @@ def access_lists() -> st.SearchStrategy[List[AccessList]]:
         ),
         max_size=3,
     )
+
+
+def past(bound: int, offset: int) -> U256:
+    """Return the value `offset` past `bound`, within 256 bits."""
+    return U256(min(bound + offset, MAX_U256))
+
+
+def highest_s(fork: Fork) -> int:
+    """Return the largest `s` a fork accepts."""
+    # EIP-2 keeps `s` in the lower half of the curve order.
+    return (
+        int(SECP256K1N) // 2 if fork.is_eip_enabled(2) else int(SECP256K1N) - 1
+    )
+
+
+# Each break returns `item`, a signed transaction or authorization, with one
+# signature value at its bound plus `offset`. The `offset` and the `fork` come
+# by keyword.
+SIGNATURE_BREAKS: Dict[str, Callable[..., Any]] = {
+    "r_zero": lambda item, **_: replace(item, r=U256(0)),
+    "r_past_the_curve_order": lambda item, offset, **_: replace(
+        item, r=past(int(SECP256K1N), offset)
+    ),
+    "s_zero": lambda item, **_: replace(item, s=U256(0)),
+    "s_past_its_bound": lambda item, fork, offset: replace(
+        item, s=past(highest_s(fork) + 1, offset)
+    ),
+    "y_parity_past_one": lambda item, offset, **_: replace(
+        item, y_parity=past(2, offset)
+    ),
+}
 
 
 def aim_at(value: int, edge: int, label: str) -> None:
