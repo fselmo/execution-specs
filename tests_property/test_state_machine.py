@@ -1,21 +1,28 @@
 """
 Model-based test of each fork's `state_tracker`.
 
-A state machine runs account, storage, snapshot and rollback operations on a
-`TransactionState` and checks every read against a plain Python model.
+A state machine runs account, storage, snapshot, rollback and commit
+operations on a `TransactionState` over a random pre-state, and checks every
+read, original value and transient value against a plain Python model, so
+reads also fall through to earlier transactions and the pre-state. Which
+operations a fork has comes from its `state_tracker` module, as a unit test
+of the spec's own data structure.
 """
 
 import copy
+from dataclasses import replace
 from types import ModuleType
-from typing import Dict, List, NamedTuple, Set, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 import pytest
 from ethereum_types.bytes import Bytes, Bytes20, Bytes32
 from ethereum_types.numeric import U256, Uint
+from execution_testing.forks import Fork
 from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
     RuleBasedStateMachine,
+    initialize,
     invariant,
     precondition,
     rule,
@@ -24,7 +31,8 @@ from hypothesis.stateful import (
 
 from ethereum.crypto.hash import keccak256
 from ethereum.state import EMPTY_CODE_HASH, Account
-from ethereum.state_mpt import State
+from ethereum.state_mpt import State, set_account, set_storage, store_code
+from ethereum_spec_tools.forks import Hardfork
 
 from .spec_api import (
     modify_deletes_empty_accounts,
@@ -33,7 +41,8 @@ from .spec_api import (
 # Small pools, so that operations often hit the same account or slot.
 ADDRESSES = [Bytes20(bytes([i]) * 20) for i in range(1, 5)]
 KEYS = [Bytes32(bytes([i]) * 32) for i in range(1, 4)]
-CODE_HASHES = [EMPTY_CODE_HASH, keccak256(b"\x01"), keccak256(b"\x02")]
+CODES = [b"", b"\x01", b"\x02"]
+CODE_HASHES = [keccak256(code) for code in CODES]
 
 
 pytestmark = pytest.mark.spec_unit
@@ -47,21 +56,94 @@ class ModelAccount(NamedTuple):
     code_hash: bytes = bytes(EMPTY_CODE_HASH)
 
 
+Accounts = Dict[Bytes20, ModelAccount]
+Storage = Dict[Bytes20, Dict[Bytes32, int]]
+
+
+@st.composite
+def pre_states(draw: st.DrawFn) -> Tuple[Accounts, Storage]:
+    """Return a few non-empty accounts, some with storage."""
+    accounts = draw(
+        st.dictionaries(
+            st.sampled_from(ADDRESSES),
+            st.builds(
+                ModelAccount,
+                st.integers(1, 3),
+                st.integers(0, 3),
+                st.sampled_from([bytes(h) for h in CODE_HASHES]),
+            ),
+            max_size=3,
+        )
+    )
+    storage = {
+        address: draw(
+            st.dictionaries(st.sampled_from(KEYS), st.integers(1, 3))
+        )
+        for address in accounts
+    }
+    return accounts, {a: slots for a, slots in storage.items() if slots}
+
+
+def spec_state(accounts: Accounts, storage: Storage) -> State:
+    """Return the spec's pre-state holding the model's accounts."""
+    state = State()
+    # A committed account's code is looked up by its hash, so the state
+    # holds every code an account here can name.
+    for code in CODES:
+        store_code(state, Bytes(code))
+    for address, account in accounts.items():
+        set_account(
+            state,
+            address,
+            Account(
+                nonce=Uint(account.nonce),
+                balance=U256(account.balance),
+                code_hash=Bytes32(account.code_hash),
+            ),
+        )
+        for key, value in storage.get(address, {}).items():
+            set_storage(state, address, key, U256(value))
+    return state
+
+
 class StateTrackerMachine(RuleBasedStateMachine):
     """Run a fork's `state_tracker` against a model of accounts."""
 
     tracker: ModuleType
+    bal: Optional[ModuleType]
+    """The fork's block access list module, where its blocks carry one."""
 
     def __init__(self) -> None:
         super().__init__()
-        block = self.tracker.BlockState(pre_state=State())
-        self.tx = self.tracker.TransactionState(parent=block)
-        self.accounts: Dict[Bytes20, ModelAccount] = {}
-        self.storage: Dict[Bytes20, Dict[Bytes32, int]] = {}
+        self.accounts: Accounts = {}
+        self.storage: Storage = {}
+        self.original: Storage = {}
+        self.transient: Dict[Tuple[Bytes20, Bytes32], int] = {}
         self.created: Set[Bytes20] = set()
-        self.snapshots: List[
-            Tuple[object, Dict[Bytes20, ModelAccount], Dict]
-        ] = []
+        self.read_accounts: Set[Bytes20] = set()
+        self.read_slots: Set[Tuple[Bytes20, Bytes32]] = set()
+        self.snapshots: List[Tuple[object, Accounts, Storage, Dict]] = []
+
+    @initialize(pre=pre_states())
+    def start(self, pre: Tuple[Accounts, Storage]) -> None:
+        """Open a transaction in a block over a random pre-state."""
+        accounts, storage = pre
+        block = self.tracker.BlockState(
+            pre_state=spec_state(accounts, storage)
+        )
+        self.tx = self.tracker.TransactionState(parent=block)
+        self.accounts = dict(accounts)
+        self.storage = copy.deepcopy(storage)
+        self.original = copy.deepcopy(storage)
+
+    def _probe(self) -> Any:
+        """
+        Return a view of the transaction to check reads on, so the checks
+        add nothing to the reads the transaction records.
+        """
+        if self.bal is None:
+            return self.tx
+        return replace(self.tx, account_reads=set(), storage_reads=set())
 
     def _account(self, addr: Bytes20) -> ModelAccount:
         """Return the model account, or an empty one if it is absent."""
@@ -178,29 +260,78 @@ class StateTrackerMachine(RuleBasedStateMachine):
         self.tracker.mark_account_created(self.tx, addr)
         self.created.add(addr)
 
+    @precondition(
+        lambda self: hasattr(self.tracker, "clear_account_preserving_balance")
+    )
+    @rule(addr=st.sampled_from(ADDRESSES))
+    def clear_account(self, addr: Bytes20) -> None:
+        """Clear an account's nonce, code and storage, keeping its balance."""
+        self.tracker.clear_account_preserving_balance(self.tx, addr)
+        self.storage.pop(addr, None)
+        balance = self._account(addr).balance
+        self._modify(addr, ModelAccount(balance=balance))
+
+    @rule(
+        addr=st.sampled_from(ADDRESSES),
+        key=st.sampled_from(KEYS),
+        value=st.integers(0, 10),
+    )
+    def set_transient(self, addr: Bytes20, key: Bytes32, value: int) -> None:
+        """Set a transient storage slot (EIP-1153)."""
+        self.tracker.set_transient_storage(self.tx, addr, key, U256(value))
+        self.transient[addr, key] = value
+
+    @rule(addr=st.sampled_from(ADDRESSES), key=st.sampled_from(KEYS))
+    def read(self, addr: Bytes20, key: Bytes32) -> None:
+        """Read an account and one of its slots."""
+        self.tracker.get_account_optional(self.tx, addr)
+        self.tracker.get_storage(self.tx, addr, key)
+        self.read_accounts.add(addr)
+        self.read_slots.add((addr, key))
+
     @rule()
     def snapshot(self) -> None:
         """Snapshot the transaction state for rollback."""
         snap = self.tracker.copy_tx_state(self.tx)
         self.snapshots.append(
-            (snap, copy.deepcopy(self.accounts), copy.deepcopy(self.storage))
+            (
+                snap,
+                copy.deepcopy(self.accounts),
+                copy.deepcopy(self.storage),
+                dict(self.transient),
+            )
         )
 
     @precondition(lambda self: bool(self.snapshots))
     @rule()
     def rollback(self) -> None:
-        """Roll back to the most recent snapshot."""
-        snap, accounts, storage = self.snapshots.pop()
+        """Roll back to the most recent snapshot; reads are kept."""
+        snap, accounts, storage, transient = self.snapshots.pop()
         self.tracker.restore_tx_state(self.tx, snap)
         # `mark_account_created` documents that a rollback keeps the mark.
         self.accounts = accounts
         self.storage = storage
+        self.transient = transient
+
+    @rule()
+    def commit(self) -> None:
+        """Commit the transaction to the block and start the next one."""
+        if self.bal is None:
+            self.tracker.incorporate_tx_into_block(self.tx)
+        else:
+            builder = self.bal.BlockAccessListBuilder()
+            self.tracker.incorporate_tx_into_block(self.tx, builder)
+        self.original = copy.deepcopy(self.storage)
+        self.transient = {}
+        self.created = set()
+        self.snapshots = []
 
     @invariant()
     def accounts_match(self) -> None:
         """Every account read matches the model."""
+        probe = self._probe()
         for addr in ADDRESSES:
-            actual = self.tracker.get_account_optional(self.tx, addr)
+            actual = self.tracker.get_account_optional(probe, addr)
             model = self.accounts.get(addr)
             if model is None:
                 assert actual is None, f"{addr!r} should be absent"
@@ -218,11 +349,50 @@ class StateTrackerMachine(RuleBasedStateMachine):
     @invariant()
     def storage_matches(self) -> None:
         """Every storage read matches the model."""
+        probe = self._probe()
         for addr in ADDRESSES:
             for key in KEYS:
-                actual = self.tracker.get_storage(self.tx, addr, key)
+                actual = self.tracker.get_storage(probe, addr, key)
                 expected = self.storage.get(addr, {}).get(key, 0)
                 assert int(actual) == expected
+
+    @invariant()
+    def original_storage_matches(self) -> None:
+        """
+        The original value of a slot is the one the transaction started
+        with, and zero for an account the transaction created.
+        """
+        for addr in ADDRESSES:
+            for key in KEYS:
+                actual = self.tracker.get_storage_original(self.tx, addr, key)
+                expected = (
+                    0
+                    if addr in self.created
+                    else self.original.get(addr, {}).get(key, 0)
+                )
+                assert int(actual) == expected
+
+    @invariant()
+    def transient_storage_matches(self) -> None:
+        """Every transient read matches the model."""
+        for addr in ADDRESSES:
+            for key in KEYS:
+                actual = self.tracker.get_transient_storage(self.tx, addr, key)
+                assert int(actual) == self.transient.get((addr, key), 0)
+
+    @invariant()
+    def reads_are_kept(self) -> None:
+        """
+        Every account and slot read stays recorded through rollbacks, in
+        the transaction or, once committed, the block.
+        """
+        if self.bal is None:
+            return
+        block = self.tx.parent
+        assert self.read_accounts <= (
+            self.tx.account_reads | block.account_reads
+        )
+        assert self.read_slots <= (self.tx.storage_reads | block.storage_reads)
 
     @invariant()
     def created_matches(self) -> None:
@@ -230,10 +400,19 @@ class StateTrackerMachine(RuleBasedStateMachine):
         assert set(self.tx.created_accounts) == self.created
 
 
-def test_state_tracker_matches_model(tracker: ModuleType) -> None:
+def test_state_tracker_matches_model(
+    fork: Fork, spec: Hardfork, tracker: ModuleType
+) -> None:
     """The state tracker agrees with the model on every operation sequence."""
+    bal = (
+        spec.module("block_access_lists")
+        if fork.header_bal_hash_required()
+        else None
+    )
     machine = type(
-        "StateTrackerMachine", (StateTrackerMachine,), {"tracker": tracker}
+        "StateTrackerMachine",
+        (StateTrackerMachine,),
+        {"tracker": tracker, "bal": bal},
     )
     run_state_machine_as_test(
         machine, settings=settings(stateful_step_count=40)
