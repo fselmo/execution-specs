@@ -1,7 +1,7 @@
 """Strategies and helpers for driving an EIP-8037 `GasMeter` directly."""
 
 from types import ModuleType
-from typing import Any, List, NamedTuple, Set, Tuple
+from typing import Any, List, NamedTuple, Optional, Set, Tuple
 
 from ethereum_types.numeric import Uint
 from hypothesis import strategies as st
@@ -95,11 +95,17 @@ def op_lists(
 
 
 def apply_ops(
-    gas: ModuleType, frame: FrameStub, ops: List[MeterOp]
+    gas: ModuleType,
+    frame: FrameStub,
+    ops: List[MeterOp],
+    applied: Optional[List[MeterOp]] = None,
 ) -> Tuple[int, int, int]:
     """
     Apply meter operations and return the regular gas charged, state gas
     charged and state gas refunded.
+
+    Each operation that runs is appended to `applied`, as a plain charge
+    or refund of its final amount, so it can be replayed in another frame.
     """
     meter = frame.gas_meter
     regular = state = refunded = 0
@@ -112,6 +118,7 @@ def apply_ops(
             regular += amount
         elif kind == "spill":
             # Size the charge past the reservoir so the spill branch runs.
+            kind = "state"
             amount = int(meter.state_gas_left) + min(
                 amount, int(meter.gas_left)
             )
@@ -127,4 +134,6 @@ def apply_ops(
             refunded += amount
         else:
             raise ValueError(f"unknown meter op: {kind}")
+        if applied is not None:
+            applied.append((kind, amount))
     return regular, state, refunded

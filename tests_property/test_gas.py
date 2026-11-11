@@ -18,6 +18,7 @@ from hypothesis import strategies as st
 from ethereum_spec_tools.forks import Hardfork
 
 from .forks import requires
+from .gas_meter import AMOUNT_BOUND, amounts, pools
 from .spec_api import spec_transaction, zeroed
 from .strategies import (
     MAX_U64,
@@ -32,6 +33,8 @@ from .strategies import (
 # excess blob gas stays far below the U64 limit to keep it fast.
 BLOB_GAS_BOUND = 1 << 30
 GAS_LIMIT_BOUND = 1 << 40
+# EIP-150: a parent keeps one 64th of its gas when it makes a call.
+RETAINED_FRACTION = 64
 
 with_blobs = requires(lambda fork: fork.supports_blobs())
 
@@ -85,6 +88,95 @@ def test_memory_extension(
     assert result.cost == fork.memory_expansion_gas_calculator()(
         new_bytes=final_size, previous_bytes=len(memory)
     )
+
+
+with_call_gas_cap = requires(lambda fork: fork.is_eip_enabled(150))
+
+
+@with_call_gas_cap
+@given(
+    request=amounts(),
+    gas_left=pools(),
+    memory_cost=amounts(),
+    extra_gas=amounts(),
+    big_value=st.integers(min_value=2, max_value=MAX_U256),
+)
+def test_value_adds_only_the_stipend_to_the_child_grant(
+    gas: ModuleType,
+    fork: Fork,
+    request: int,
+    gas_left: int,
+    memory_cost: int,
+    extra_gas: int,
+    big_value: int,
+) -> None:
+    """
+    A value-bearing call gives the child exactly the call stipend more
+    than the same call without value, costs the caller the same, and does
+    not depend on how much value is sent.
+    """
+    aim_at(big_value, MAX_U256, "value near 2**256")
+    without_value, with_one, with_big = (
+        gas.calculate_message_call_gas(
+            U256(value),
+            Uint(request),
+            Uint(gas_left),
+            Uint(memory_cost),
+            Uint(extra_gas),
+        )
+        for value in (0, 1, big_value)
+    )
+    assert with_one.cost == without_value.cost
+    assert int(with_one.sub_call) - int(without_value.sub_call) == (
+        fork.call_value_stipend()
+    )
+    assert with_big == with_one
+
+
+@with_call_gas_cap
+@given(
+    request=amounts(),
+    memory_cost=amounts(),
+    extra_gas=amounts(),
+    value=st.sampled_from([0, 1]),
+    delta=st.integers(min_value=-AMOUNT_BOUND, max_value=AMOUNT_BOUND),
+)
+def test_call_runs_out_of_gas_only_on_its_own_costs(
+    gas: ModuleType,
+    fork: Fork,
+    request: int,
+    memory_cost: int,
+    extra_gas: int,
+    value: int,
+    delta: int,
+) -> None:
+    """
+    A call costs more than `gas_left` exactly when `gas_left` cannot cover
+    the call's own costs; a large gas request never does. Otherwise the
+    child gets its request, capped at all but a 64th of the rest, and the
+    parent keeps at least that 64th.
+    """
+    aim_at(delta, 0, "gas left near the call's own costs")
+    gas_left = max(extra_gas + memory_cost + delta, 0)
+
+    result = gas.calculate_message_call_gas(
+        U256(value),
+        Uint(request),
+        Uint(gas_left),
+        Uint(memory_cost),
+        Uint(extra_gas),
+    )
+
+    charged = int(result.cost) + memory_cost
+    if gas_left < extra_gas + memory_cost:
+        assert charged > gas_left
+    else:
+        remaining = gas_left - memory_cost - extra_gas
+        stipend = fork.call_value_stipend() if value else 0
+        assert int(result.sub_call) - stipend == min(
+            request, remaining - remaining // RETAINED_FRACTION
+        )
+        assert gas_left - charged >= remaining // RETAINED_FRACTION
 
 
 @requires(lambda fork: fork.header_base_fee_required())

@@ -1,11 +1,10 @@
 """
-Properties of the [EIP-8037] two-pool gas meter, and of the gas a call
-grants its child ([EIP-150]).
+Properties of the [EIP-8037] two-pool gas meter, in one frame and across a
+call into a child frame.
 
 State gas draws from a reservoir before spilling into `gas_left`, and
 refunds credit the pools in reverse order.
 
-[EIP-150]: https://eips.ethereum.org/EIPS/eip-150
 [EIP-8037]: https://eips.ethereum.org/EIPS/eip-8037
 """
 
@@ -13,8 +12,7 @@ from types import ModuleType
 from typing import List
 
 import pytest
-from ethereum_types.numeric import U256, Uint
-from execution_testing.forks import Fork
+from ethereum_types.numeric import Uint
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
@@ -25,6 +23,8 @@ from hypothesis.stateful import (
     rule,
     run_state_machine_as_test,
 )
+
+from ethereum_spec_tools.forks import Hardfork
 
 from .forks import requires
 from .gas_meter import (
@@ -40,12 +40,9 @@ from .gas_meter import (
     op_lists,
     pools,
 )
-from .strategies import MAX_U256, aim_at
+from .strategies import aim_at
 
 pytestmark = requires(lambda fork: fork.state_gas_reservoir_enabled())
-
-# EIP-150: a parent keeps one 64th of its gas when it makes a call.
-RETAINED_FRACTION = 64
 
 
 @pytest.mark.spec_unit
@@ -56,6 +53,7 @@ RETAINED_FRACTION = 64
     commit=st.booleans(),
     post_ops=op_lists(CHARGES_AND_REFUNDS),
     refund_counter=st.integers(min_value=-(1 << 20), max_value=1 << 20),
+    halt=st.booleans(),
 )
 def test_restore_returns_to_the_last_commit(
     gas: ModuleType,
@@ -65,11 +63,12 @@ def test_restore_returns_to_the_last_commit(
     commit: bool,
     post_ops: List[MeterOp],
     refund_counter: int,
+    halt: bool,
 ) -> None:
     """
     A frame rollback undoes every state charge and refund since the last
     commit, keeps the regular gas spent since then, and leaves the state
-    gas charged before the commit in place.
+    gas charged before the commit in place. A halt then burns `gas_left`.
     """
     frame = fresh_frame(gas, gas_left, reservoir)
     meter = frame.gas_meter
@@ -88,39 +87,16 @@ def test_restore_returns_to_the_last_commit(
     meter.refund_counter = refund_counter
 
     gas.restore_state_gas(meter)
+    if halt:
+        gas.forfeit_remaining_gas(meter)
 
+    expected_gas_left = (
+        0 if halt else at_commit.gas_left - regular_after_commit
+    )
     assert meter_fields(meter) == at_commit._replace(
-        gas_left=at_commit.gas_left - regular_after_commit
+        gas_left=expected_gas_left
     )
     assert gas.tx_state_gas_used(meter, Uint(reservoir)) == committed
-
-
-@pytest.mark.spec_unit
-@given(
-    gas_left=pools(),
-    reservoir=pools(),
-    ops=op_lists(CHARGES_AND_REFUNDS),
-)
-def test_halted_frame_leaves_the_reservoir_whole(
-    gas: ModuleType,
-    gas_left: int,
-    reservoir: int,
-    ops: List[MeterOp],
-) -> None:
-    """
-    An exceptional halt in a frame without a commit burns `gas_left` and
-    leaves the reservoir at its value when the frame started.
-    """
-    frame = fresh_frame(gas, gas_left, reservoir)
-    _, state, _ = apply_ops(gas, frame, ops)
-    aim_at(state, reservoir, "state charges near the reservoir")
-
-    gas.restore_state_gas(frame.gas_meter)
-    gas.forfeit_remaining_gas(frame.gas_meter)
-
-    assert int(frame.gas_meter.gas_left) == 0
-    assert int(frame.gas_meter.state_gas_left) == reservoir
-    assert int(frame.gas_meter.state_gas_spilled) == 0
 
 
 @pytest.mark.spec_unit
@@ -185,96 +161,82 @@ def test_restore_child_gas_undoes_withhold_and_drain(
     assert meter_fields(meter) == before
 
 
+@pytest.mark.spec_unit
 @given(
-    request=amounts(),
     gas_left=pools(),
-    memory_cost=amounts(),
-    extra_gas=amounts(),
-    big_value=st.integers(min_value=2, max_value=MAX_U256),
-)
-def test_value_adds_only_the_stipend_to_the_child_grant(
-    gas: ModuleType,
-    fork: Fork,
-    request: int,
-    gas_left: int,
-    memory_cost: int,
-    extra_gas: int,
-    big_value: int,
-) -> None:
-    """
-    A value-bearing call gives the child exactly the call stipend more
-    than the same call without value, costs the caller the same, and does
-    not depend on how much value is sent.
-    """
-    aim_at(big_value, MAX_U256, "value near 2**256")
-    without_value, with_one, with_big = (
-        gas.calculate_message_call_gas(
-            U256(value),
-            Uint(request),
-            Uint(gas_left),
-            Uint(memory_cost),
-            Uint(extra_gas),
-        )
-        for value in (0, 1, big_value)
-    )
-    assert with_one.cost == without_value.cost
-    assert int(with_one.sub_call) - int(without_value.sub_call) == (
-        fork.call_value_stipend()
-    )
-    assert with_big == with_one
-
-
-@given(
     reservoir=pools(),
-    request=amounts(),
-    memory_cost=amounts(),
-    extra_gas=amounts(),
-    value=st.sampled_from([0, 1]),
-    delta=st.integers(min_value=-AMOUNT_BOUND, max_value=AMOUNT_BOUND),
+    parent_ops=op_lists(CHARGES_AND_REFUNDS, max_size=6),
+    grant=pools(),
+    child_ops=op_lists(CHARGES_AND_REFUNDS),
+    child_refund_counter=st.integers(min_value=-(1 << 20), max_value=1 << 20),
+    outcome=st.sampled_from(["success", "revert", "halt"]),
 )
-def test_call_runs_out_of_gas_only_on_its_own_costs(
+def test_child_gas_returns_exactly(
+    spec: Hardfork,
     gas: ModuleType,
-    fork: Fork,
+    gas_left: int,
     reservoir: int,
-    request: int,
-    memory_cost: int,
-    extra_gas: int,
-    value: int,
-    delta: int,
+    parent_ops: List[MeterOp],
+    grant: int,
+    child_ops: List[MeterOp],
+    child_refund_counter: int,
+    outcome: str,
 ) -> None:
     """
-    Charging a call runs out of gas exactly when `gas_left` cannot cover
-    the call's own costs; a large gas request never does. Otherwise the
-    child gets its request, capped at all but a 64th of the rest, and the
-    parent keeps at least that 64th.
+    A returning child leaves its parent short by its net charges on
+    success, by its regular charges after a revert and by its whole grant
+    after a halt. A successful merge leaves no spill the reservoir could
+    repay, and the parent settles to the state gas the same operations use
+    in one frame.
     """
-    aim_at(delta, 0, "gas left near the call's own costs")
-    gas_left = max(extra_gas + memory_cost + delta, 0)
-    frame = fresh_frame(gas, gas_left, reservoir)
-    before = meter_fields(frame.gas_meter)
+    parent = fresh_frame(gas, gas_left, reservoir)
+    apply_ops(gas, parent, parent_ops)
+    before = meter_fields(parent.gas_meter)
 
-    result = gas.calculate_message_call_gas(
-        U256(value),
-        Uint(request),
-        Uint(gas_left),
-        Uint(memory_cost),
-        Uint(extra_gas),
-    )
+    # A call charges the child's grant to the parent and lends the child
+    # the whole reservoir.
+    child_gas = min(grant, before.gas_left)
+    gas.charge_gas(parent, Uint(child_gas))
+    gas.drain_state_gas_reservoir(parent.gas_meter)
+    child = fresh_frame(gas, child_gas, before.state_gas_left)
+    child_applied: List[MeterOp] = []
+    regular, state, refunded = apply_ops(gas, child, child_ops, child_applied)
+    child.gas_meter.refund_counter = child_refund_counter
+    exceptions = spec.module("vm.exceptions")
+    if outcome == "revert":
+        gas.restore_state_gas(child.gas_meter)
+        child.error = exceptions.Revert()
+    elif outcome == "halt":
+        gas.restore_state_gas(child.gas_meter)
+        gas.forfeit_remaining_gas(child.gas_meter)
+        child.error = exceptions.OutOfGasError()
 
-    if gas_left < extra_gas + memory_cost:
-        with pytest.raises(gas.OutOfGasError):
-            gas.charge_gas(frame, result.cost + Uint(memory_cost))
-        assert meter_fields(frame.gas_meter) == before
+    spec.module("vm").incorporate_child(parent, child)
+
+    after = meter_fields(parent.gas_meter)
+    if outcome == "success":
+        held = before.gas_left + before.state_gas_left
+        assert after.gas_left + after.state_gas_left == (
+            held - regular - (state - refunded)
+        )
+        assert after.state_gas_left == 0 or after.state_gas_spilled == 0
+        assert after.refund_counter == (
+            before.refund_counter + child_refund_counter
+        )
+        assert after.state_gas_baseline == before.state_gas_baseline
     else:
-        gas.charge_gas(frame, result.cost + Uint(memory_cost))
-        remaining = gas_left - memory_cost - extra_gas
-        stipend = fork.call_value_stipend() if value else 0
-        assert int(result.sub_call) - stipend == min(
-            request, remaining - remaining // RETAINED_FRACTION
-        )
-        assert int(frame.gas_meter.gas_left) >= (
-            remaining // RETAINED_FRACTION
-        )
+        spent = regular if outcome == "revert" else child_gas
+        assert after == before._replace(gas_left=before.gas_left - spent)
+
+    # A rolled-back child leaves no state gas used behind it.
+    one_frame = fresh_frame(gas, gas_left, reservoir)
+    apply_ops(gas, one_frame, parent_ops)
+    if outcome == "success":
+        replayed = apply_ops(gas, one_frame, child_applied)
+        assert replayed == (regular, state, refunded)
+    assert gas.tx_state_gas_used(parent.gas_meter, Uint(reservoir)) == (
+        gas.tx_state_gas_used(one_frame.gas_meter, Uint(reservoir))
+    )
 
 
 class ReservoirModel:
