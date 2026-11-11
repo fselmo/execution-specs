@@ -265,6 +265,7 @@ ethereum-spec-lint = "ethereum_spec_tools.lint:main"
 ethereum-spec-sync = "ethereum_spec_tools.sync:main"
 ethereum-spec-new-fork = "ethereum_spec_tools.new_fork.cli:main"
 ethereum-spec-patch = "ethereum_spec_tools.patch_tool:main"
+ethereum-spec-mutate = "ethereum_spec_tools.mutate.cli:main"
 
 [tool.pytest.ini_options]
 markers = [

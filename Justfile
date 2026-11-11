@@ -314,6 +314,11 @@ spec-tools *args: (_tmp "spec-tools")
         "$@" \
         tests/spec_tools
 
+# Mutation-test spec areas against their tests (docs/dev/mutation_testing.md)
+[group('integration tests')]
+mutate *args:
+    uv run ethereum-spec-mutate --fork {{ latest_fork }} --output "{{ output_dir }}/mutate" "$@"
+
 # --- Unit Tests ---
 
 # Run the Hypothesis property tests over spec components

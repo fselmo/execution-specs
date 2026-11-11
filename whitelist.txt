@@ -842,6 +842,7 @@ nop
 NOPs
 noPython
 notbookspath
+NotIn
 NOTSET
 nq2
 nSHA
