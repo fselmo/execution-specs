@@ -28,9 +28,12 @@ from .spec_api import (
 )
 from .strategies import (
     aim_at,
+    bytes_data,
     framework_tx,
+    framework_tx_fields,
     framework_txs,
     minimum_gas_limit,
+    signed,
 )
 
 BOUNDARY_SIDES = ["at_cap", "above_cap"]
@@ -49,16 +52,29 @@ def validate(transactions: ModuleType, framework: Transaction) -> None:
     validate_tx(transactions, tx, framework.sender)
 
 
+@pytest.mark.parametrize(
+    "creation",
+    [pytest.param(False, id="call"), pytest.param(True, id="creation")],
+)
 @given(data=st.data())
 def test_minimum_gas_limit_boundary(
-    fork: Fork, transactions: ModuleType, data: st.DataObject
+    fork: Fork, transactions: ModuleType, data: st.DataObject, creation: bool
 ) -> None:
     """
     Validation accepts a gas limit of exactly the framework's intrinsic
     cost, for any transaction type, recipient, value, calldata, access list
     and authorization count, and rejects one gas less.
     """
-    framework = data.draw(framework_txs(fork))
+    if creation:
+        # Init code is charged per word, so the creation deploys some.
+        fields = data.draw(
+            framework_tx_fields(fork, fork.contract_creating_tx_types())
+        )
+        framework = signed(
+            {**fields, "to": None, "data": data.draw(bytes_data(min_size=1))}
+        )
+    else:
+        framework = data.draw(framework_txs(fork))
     minimum = minimum_gas_limit(fork, framework)
     # Calldata heavy enough for the EIP-7623 floor to set the minimum.
     aim_at(

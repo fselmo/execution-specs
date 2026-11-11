@@ -6,9 +6,11 @@ transaction, which is written apart from `src/`.
 """
 
 from types import ModuleType
+from typing import Any, List
 
 import pytest
 from ethereum_types.bytes import Bytes
+from execution_testing import TransactionType
 from execution_testing.forks import Fork
 from hypothesis import given
 from hypothesis import strategies as st
@@ -48,15 +50,29 @@ def test_transaction_types_match_the_framework(
     assert sorted(spec_type_bytes) == sorted(fork.tx_types())
 
 
+def has_type(ty: int) -> pytest.MarkDecorator:
+    """Return a mark that runs a test only on forks with type `ty`."""
+    return requires(lambda fork: ty in fork.tx_types())
+
+
+def each_transaction_type() -> List[Any]:
+    """Return every transaction type as a parameter for forks that have it."""
+    return [
+        pytest.param(ty, id=ty.name.lower(), marks=has_type(ty))
+        for ty in TransactionType
+    ]
+
+
+@pytest.mark.parametrize("tx_type", each_transaction_type())
 @given(data=st.data())
 def test_transaction_encoding_matches_the_framework(
-    fork: Fork, transactions: ModuleType, data: st.DataObject
+    fork: Fork, transactions: ModuleType, data: st.DataObject, tx_type: int
 ) -> None:
     """
     Every transaction type encodes to the framework's encoding of the same
     transaction, and decodes back to itself.
     """
-    framework = data.draw(framework_txs(fork))
+    framework = data.draw(framework_txs(fork, [tx_type]))
     aim_at(len(framework.data), LONG_STRING, "calldata near a long prefix")
     tx = spec_transaction(transactions, framework)
     assert encode_transaction(transactions, tx) == framework.rlp()
