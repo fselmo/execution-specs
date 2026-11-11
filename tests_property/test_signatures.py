@@ -69,7 +69,7 @@ BREAKS: Dict[str, Callable[..., Any]] = {
         tx, y_parity=past(2, offset)
     ),
     "v_below_the_protected_range": lambda tx, offset, **_: replace(
-        tx, v=U256(29 + offset % (FIRST_PROTECTED_V - 29))
+        tx, v=U256(FIRST_PROTECTED_V - 1 - offset % (FIRST_PROTECTED_V - 29))
     ),
     "chain_id_past_64_bits": lambda tx, offset, **_: replace(
         tx, v=past(FIRST_PROTECTED_V + 2 * 2**64, 2 * offset)
@@ -116,6 +116,19 @@ def test_signature_values_past_their_bounds_are_rejected(
     with pytest.raises(InvalidSignatureError):
         broken = BREAKS[break_name](tx=tx, fork=fork, offset=offset)
         sender_of(transactions, broken)
+
+
+@given(data=st.data())
+def test_s_at_its_bound_is_accepted(
+    fork: Fork, transactions: ModuleType, data: st.DataObject
+) -> None:
+    """
+    A signature whose `s` is the largest the fork accepts recovers a
+    sender, the accepting side of the `s_past_its_bound` break.
+    """
+    framework = data.draw(framework_txs(fork))
+    tx = spec_transaction(transactions, framework)
+    sender_of(transactions, replace(tx, s=U256(highest_s(fork))))
 
 
 def signed_legacy_tx(key: int, data: Bytes, to: Address) -> Transaction:

@@ -234,6 +234,7 @@ def test_value_adds_only_the_stipend_to_the_child_grant(
 )
 def test_call_runs_out_of_gas_only_on_its_own_costs(
     gas: ModuleType,
+    fork: Fork,
     reservoir: int,
     request: int,
     memory_cost: int,
@@ -243,8 +244,9 @@ def test_call_runs_out_of_gas_only_on_its_own_costs(
 ) -> None:
     """
     Charging a call runs out of gas exactly when `gas_left` cannot cover
-    the call's own costs; a large gas request never does, and a
-    successful charge leaves the parent at least a 64th of the rest.
+    the call's own costs; a large gas request never does. Otherwise the
+    child gets its request, capped at all but a 64th of the rest, and the
+    parent keeps at least that 64th.
     """
     aim_at(delta, 0, "gas left near the call's own costs")
     gas_left = max(extra_gas + memory_cost + delta, 0)
@@ -266,6 +268,10 @@ def test_call_runs_out_of_gas_only_on_its_own_costs(
     else:
         gas.charge_gas(frame, result.cost + Uint(memory_cost))
         remaining = gas_left - memory_cost - extra_gas
+        stipend = fork.call_value_stipend() if value else 0
+        assert int(result.sub_call) - stipend == min(
+            request, remaining - remaining // RETAINED_FRACTION
+        )
         assert int(frame.gas_meter.gas_left) >= (
             remaining // RETAINED_FRACTION
         )

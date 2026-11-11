@@ -10,6 +10,7 @@ from types import ModuleType
 from typing import Any, List, Tuple
 
 from ethereum_types.numeric import U64, U256, Uint
+from execution_testing import TransactionType
 from execution_testing.forks import Fork
 from hypothesis import given
 from hypothesis import strategies as st
@@ -48,9 +49,14 @@ def test_memory_gas_cost(gas: ModuleType, fork: Fork, size: Uint) -> None:
     assert gas.calculate_memory_gas_cost(size) == expected
 
 
+# An empty range grows nothing, even one that starts past the end, so
+# empty ranges are drawn more often than their share of sizes.
+range_sizes = st.one_of(st.just(0), ints(MAX_U256))
+
+
 @given(
     initial_words=ints(64),
-    extensions=st.lists(st.tuples(ints(MAX_U256), ints(MAX_U256)), max_size=8),
+    extensions=st.lists(st.tuples(ints(MAX_U256), range_sizes), max_size=8),
 )
 def test_memory_extension(
     gas: ModuleType,
@@ -144,8 +150,13 @@ def test_excess_blob_gas(
     """
     blob_gas_per_blob = fork.blob_gas_per_blob()
     target = fork.target_blobs_per_block() * blob_gas_per_blob
+    # Only a parent at or past the target reaches the reserve price rule.
     excess = data.draw(
-        st.one_of(st.sampled_from([0, target - 1, target]), ints(4 * target))
+        st.one_of(
+            st.sampled_from([0, target - 1, target]),
+            ints(4 * target),
+            st.integers(target, 4 * target),
+        )
     )
     used = data.draw(
         st.integers(0, fork.max_blobs_per_block()).map(
@@ -192,7 +203,13 @@ def test_blob_fee(
     A transaction uses blob gas only for its blobs, and pays the blob gas
     price for each unit of it.
     """
-    framework = data.draw(framework_txs(fork))
+    # Blob transactions are one type of several, so draw them more often.
+    framework = data.draw(
+        st.one_of(
+            framework_txs(fork, [TransactionType.BLOB_TRANSACTION]),
+            framework_txs(fork),
+        )
+    )
     tx = spec_transaction(transactions, framework)
 
     blob_count = len(framework.blob_versioned_hashes or [])
