@@ -382,8 +382,8 @@ def check_environment(
     assert cap is not None
     intrinsic = intrinsic_execution_gas(fork, tx)
     grant = int(env.execution_gas_grant)
+    assert grant == min(tx.gas_limit, cap) - intrinsic
     assert grant + int(env.state_gas_reservoir) == tx.gas_limit - intrinsic
-    assert grant <= cap - intrinsic
 
 
 @pytest.mark.parametrize("case_name", sorted(CASES))
