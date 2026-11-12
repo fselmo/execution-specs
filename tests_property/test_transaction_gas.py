@@ -280,7 +280,9 @@ def test_settlement_refunds_and_floors(
     The sender pays the gas used less a refund of at most a fifth of it
     (EIP-3529), never below the calldata floor (EIP-7623), and gets the
     rest back. The block counts state gas above zero apart and execution
-    gas before the refund, also never below the floor (EIP-7778).
+    gas before the refund, also never below the floor (EIP-7778). The
+    model follows EIP-8037's "Transaction gas used" and "Block-level gas
+    accounting" sections.
     """
     tx_gas = data.draw(ints(fork.transaction_total_gas_limit_cap() or 2**32))
     returned = data.draw(ints(tx_gas))
