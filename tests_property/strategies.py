@@ -26,16 +26,18 @@ from execution_testing.forks import Fork
 from hypothesis import strategies as st
 from hypothesis import target
 
-from ethereum.crypto.elliptic_curve import SECP256K1N
 from ethereum.state import Address
 
 # EIP-4844: a versioned hash starts with the KZG version byte.
+# SEC 2, section 2.4.1: the order of secp256k1's group, which bounds a
+# private key and a signature's `r` and `s`.
+SECP256K1N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 VERSIONED_HASH = Hash(b"\x01" + b"\x00" * 31)
 
 MAX_U64 = int(U64.MAX_VALUE)
 MAX_U256 = int(U256.MAX_VALUE)
 
-private_keys = st.integers(min_value=1, max_value=int(SECP256K1N) - 1)
+private_keys = st.integers(min_value=1, max_value=SECP256K1N - 1)
 
 
 def _boundaries(bits: int) -> List[int]:
@@ -154,14 +156,15 @@ def framework_tx_fields(
         blob_count = draw(st.integers(1, fork.max_blobs_per_tx()))
         fields["blob_versioned_hashes"] = [VERSIONED_HASH] * blob_count
     if ty == TransactionType.SET_CODE:
-        authorization = AuthorizationTuple(
-            chain_id=draw(ints(MAX_U64)),
-            address=draw(addresses()),
-            nonce=draw(ints(MAX_U64)),
-            secret_key=draw(private_keys),
+        authorization = st.builds(
+            AuthorizationTuple,
+            chain_id=ints(MAX_U64),
+            address=addresses(),
+            nonce=ints(MAX_U64),
+            secret_key=private_keys,
         )
-        fields["authorization_list"] = [authorization] * draw(
-            st.integers(1, 4)
+        fields["authorization_list"] = draw(
+            st.lists(authorization, min_size=1, max_size=4)
         )
     return fields
 
@@ -232,9 +235,7 @@ def past(bound: int, offset: int) -> U256:
 def highest_s(fork: Fork) -> int:
     """Return the largest `s` a fork accepts."""
     # EIP-2 keeps `s` in the lower half of the curve order.
-    return (
-        int(SECP256K1N) // 2 if fork.is_eip_enabled(2) else int(SECP256K1N) - 1
-    )
+    return SECP256K1N // 2 if fork.is_eip_enabled(2) else SECP256K1N - 1
 
 
 # Each break returns `item`, a signed transaction or authorization, with one
@@ -243,7 +244,7 @@ def highest_s(fork: Fork) -> int:
 SIGNATURE_BREAKS: Dict[str, Callable[..., Any]] = {
     "r_zero": lambda item, **_: replace(item, r=U256(0)),
     "r_past_the_curve_order": lambda item, offset, **_: replace(
-        item, r=past(int(SECP256K1N), offset)
+        item, r=past(SECP256K1N, offset)
     ),
     "s_zero": lambda item, **_: replace(item, s=U256(0)),
     "s_past_its_bound": lambda item, fork, offset: replace(

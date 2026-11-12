@@ -167,7 +167,9 @@ def test_intrinsic_execution_gas_cap_boundary(
     )
     at_cap = tx_with(slots, zero_bytes)
     above_cap = tx_with(slots, zero_bytes + 1)
-    assert execution_gas(at_cap) == cap
+    assert execution_gas(at_cap) == cap, (
+        "zero bytes and access list slots no longer add up to the cap"
+    )
     assert (
         floor_cost(data=above_cap.data, access_list=above_cap.access_list)
         < cap

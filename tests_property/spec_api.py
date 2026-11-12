@@ -11,7 +11,6 @@ import inspect
 from types import ModuleType, SimpleNamespace, UnionType
 from typing import (
     Any,
-    Dict,
     Optional,
     Set,
     Tuple,
@@ -22,7 +21,7 @@ from typing import (
 
 from ethereum_rlp import rlp
 from ethereum_types.bytes import Bytes0
-from ethereum_types.numeric import U64, FixedUnsigned, Uint
+from ethereum_types.numeric import FixedUnsigned, Uint
 from execution_testing import Transaction, TransactionType
 
 from ethereum.state import Address
@@ -36,14 +35,6 @@ TYPE_BYTES = {
     "FeeMarketTransaction": TransactionType.BASE_FEE,
     "BlobTransaction": TransactionType.BLOB_TRANSACTION,
     "SetCodeTransaction": TransactionType.SET_CODE,
-}
-
-# The spec's signing hash of each typed transaction.
-TYPED_SIGNING_HASHES: Dict[int, str] = {
-    TransactionType.ACCESS_LIST: "signing_hash_2930",
-    TransactionType.BASE_FEE: "signing_hash_1559",
-    TransactionType.BLOB_TRANSACTION: "signing_hash_4844",
-    TransactionType.SET_CODE: "signing_hash_7702",
 }
 
 # Spec field names that the framework spells differently.
@@ -92,11 +83,6 @@ def zeroed(cls: Any, **overrides: Any) -> Any:
 def transaction_types(transactions: ModuleType) -> Tuple[type, ...]:
     """Return every transaction class of a fork."""
     return get_args(transactions.Transaction) or (transactions.Transaction,)
-
-
-def legacy_transaction(transactions: ModuleType) -> type:
-    """Return a fork's legacy, untyped transaction class."""
-    return getattr(transactions, "LegacyTransaction", transactions.Transaction)
 
 
 def type_byte(tx_type: type) -> int:
@@ -187,25 +173,6 @@ def decode_transaction(transactions: ModuleType, encoded: bytes) -> Any:
         # An RLP list: a legacy transaction.
         return rlp.decode_to(transactions.LegacyTransaction, encoded)
     return transactions.decode_transaction(encoded)
-
-
-def unprotected_signing_hash(transactions: ModuleType, tx: Any) -> Any:
-    """Return the signing hash of a legacy transaction without a chain id."""
-    if hasattr(transactions, "signing_hash_pre155"):
-        return transactions.signing_hash_pre155(tx)
-    return transactions.signing_hash(tx)
-
-
-def signing_hash(transactions: ModuleType, tx: Any) -> Any:
-    """Return the hash the sender of any transaction signs."""
-    ty = type_byte(type(tx))
-    if ty != TransactionType.LEGACY:
-        return getattr(transactions, TYPED_SIGNING_HASHES[ty])(tx)
-    if tx.v in (27, 28):
-        return unprotected_signing_hash(transactions, tx)
-    # EIP-155: `v` is `35 + 2 * chain_id + parity`.
-    chain_id = U64((int(tx.v) - 35) // 2)
-    return transactions.signing_hash_155(tx, chain_id)
 
 
 def sender_of(transactions: ModuleType, tx: Any) -> Address:

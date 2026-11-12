@@ -248,6 +248,8 @@ def test_excess_blob_gas(
             st.sampled_from([0, target - 1, target]),
             ints(4 * target),
             st.integers(target, 4 * target),
+            # Far past the target, where the blob price is above 1.
+            ints(BLOB_GAS_BOUND),
         )
     )
     used = data.draw(

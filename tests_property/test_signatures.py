@@ -18,7 +18,6 @@ from execution_testing.forks import Fork
 from hypothesis import given
 from hypothesis import strategies as st
 
-from ethereum.crypto.elliptic_curve import SECP256K1N
 from ethereum.exceptions import InvalidSignatureError
 from ethereum.state import Address
 
@@ -29,6 +28,7 @@ from .spec_api import (
 )
 from .strategies import (
     MAX_U256,
+    SECP256K1N,
     SIGNATURE_BREAKS,
     addresses,
     bytes_data,
@@ -134,7 +134,7 @@ def test_high_s_signatures_are_rejected_from_eip_2(
     framework = signed_legacy_tx(key, data, to)
     tx = spec_transaction(transactions, framework)
     # Negating `s` and flipping the parity gives a second valid signature.
-    flipped = replace(tx, v=U256(55) - tx.v, s=SECP256K1N - tx.s)
+    flipped = replace(tx, v=U256(55) - tx.v, s=U256(SECP256K1N) - tx.s)
     if fork.is_eip_enabled(2):
         with pytest.raises(InvalidSignatureError):
             transactions.recover_sender(flipped)

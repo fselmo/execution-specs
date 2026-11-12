@@ -90,7 +90,7 @@ def test_decoding_rejects_unknown_types(
 ) -> None:
     """
     An encoding that starts with a byte in the transaction type range,
-    but not one of the fork's types, is rejected, and so is an empty one.
+    but not one of the fork's types, is rejected.
     """
     unknown_types = [
         byte
@@ -102,6 +102,11 @@ def test_decoding_rejects_unknown_types(
 
     with pytest.raises(spec.module("exceptions").TransactionTypeError):
         transactions.decode_transaction(Bytes([unknown]) + payload)
+
+
+@with_typed_transactions
+def test_decoding_rejects_an_empty_encoding(transactions: ModuleType) -> None:
+    """An empty encoding is no transaction."""
     with pytest.raises(InvalidBlock):
         transactions.decode_transaction(Bytes(b""))
 

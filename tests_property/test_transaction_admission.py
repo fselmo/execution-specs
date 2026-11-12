@@ -34,6 +34,7 @@ from .spec_api import spec_transaction, zeroed
 from .strategies import (
     MAX_U64,
     MAX_U256,
+    VERSIONED_HASH,
     framework_tx_fields,
     intrinsic_execution_gas,
     ints,
@@ -307,7 +308,7 @@ CASES: Dict[str, Case] = {
         "BlobCountExceededError",
         tx=lambda f, fork: {
             **f,
-            "blob_versioned_hashes": [Hash(b"\x01" + b"\x00" * 31)]
+            "blob_versioned_hashes": [VERSIONED_HASH]
             * (fork.max_blobs_per_tx() + 1),
         },
     ),

@@ -123,17 +123,6 @@ def families(draw: st.DrawFn, fork: Fork, blocks: ModuleType) -> Family:
     return Family(parent, child)
 
 
-def with_parent_gas_limit(family: Family, gas_limit: int) -> Family:
-    """Return the family with the parent's gas limit and hash changed."""
-    parent = replace(family.parent, gas_limit=Uint(gas_limit))
-    child = replace(
-        family.child,
-        parent_hash=keccak256(rlp.encode(parent)),
-        gas_used=Uint(0),
-    )
-    return Family(parent, child)
-
-
 def with_child_gas_limit(family: Family, gas_limit: int) -> Family:
     """Return the family with the child's gas limit, and no gas used."""
     child = replace(family.child, gas_limit=Uint(gas_limit), gas_used=Uint(0))
@@ -216,11 +205,9 @@ CASES: Dict[str, Case] = {
         valid=False,
     ),
     "gas_limit_below_the_minimum": Case(
-        lambda f: with_child_gas_limit(
-            with_parent_gas_limit(f, GAS_LIMIT_MINIMUM),
-            GAS_LIMIT_MINIMUM - 1,
-        ),
+        lambda f: with_child_gas_limit(f, GAS_LIMIT_MINIMUM - 1),
         valid=False,
+        applies=lambda f: int(f.parent.gas_limit) == GAS_LIMIT_MINIMUM,
     ),
     "base_fee_one_too_high": Case(
         lambda f: Family(
