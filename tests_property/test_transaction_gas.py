@@ -11,7 +11,7 @@ from types import ModuleType
 from typing import Callable
 
 import pytest
-from ethereum_types.numeric import Uint
+from ethereum_types.numeric import U256, Uint
 from execution_testing import Transaction, TransactionType
 from execution_testing.base_types import AccessList
 from execution_testing.forks import Fork
@@ -32,11 +32,16 @@ from .strategies import (
     framework_tx,
     framework_tx_fields,
     framework_txs,
+    ints,
     minimum_gas_limit,
     signed,
 )
 
 BOUNDARY_SIDES = ["at_cap", "above_cap"]
+
+with_state_gas_reservoir = requires(
+    lambda fork: fork.state_gas_reservoir_enabled()
+)
 
 # From EIP-8037 a separate cap bounds the gas limit, and the EIP-7825 cap
 # bounds the intrinsic execution gas and the calldata floor instead.
@@ -227,3 +232,84 @@ def test_calldata_floor_cap_boundary(
             validate(transactions, tx_with(data_bytes + 1))
     else:
         raise ValueError(f"unknown boundary side: {side}")
+
+
+@pytest.mark.spec_unit
+@with_state_gas_reservoir
+@given(data=st.data())
+def test_evm_gas_splits_at_the_cap(
+    fork: Fork, gas: ModuleType, spec: Hardfork, data: st.DataObject
+) -> None:
+    """
+    After the intrinsic cost, EIP-8037 grants execution gas up to the
+    EIP-7825 cap and puts the rest in the state gas reservoir, which is
+    empty exactly when the gas limit fits the cap.
+    """
+    cap = fork.transaction_gas_limit_cap()
+    assert cap is not None
+    tx_gas = data.draw(
+        st.one_of(
+            st.sampled_from([cap - 1, cap, cap + 1]),
+            ints(fork.transaction_total_gas_limit_cap() or 2 * cap),
+        )
+    )
+    intrinsic = data.draw(ints(min(tx_gas, cap)))
+    cost = spec.module("transactions").IntrinsicGasCost(
+        execution=gas.ExecutionGas(Uint(intrinsic)),
+        calldata_floor=gas.ExecutionGas(Uint(0)),
+    )
+
+    allocation = gas.allocate_evm_gas(Uint(tx_gas), cost)
+
+    execution, reservoir = (
+        int(allocation.execution_gas),
+        int(allocation.state_gas_reservoir),
+    )
+    assert execution + reservoir == tx_gas - intrinsic
+    assert execution == min(tx_gas, cap) - intrinsic
+    assert (reservoir == 0) == (tx_gas <= cap)
+
+
+@pytest.mark.spec_unit
+@with_state_gas_reservoir
+@given(data=st.data())
+def test_settlement_refunds_and_floors(
+    fork: Fork, gas: ModuleType, data: st.DataObject
+) -> None:
+    """
+    The sender pays the gas used less a refund of at most a fifth of it
+    (EIP-3529), never below the calldata floor (EIP-7623), and gets the
+    rest back. The block counts state gas above zero apart and execution
+    gas before the refund, also never below the floor (EIP-7778).
+    """
+    tx_gas = data.draw(ints(fork.transaction_total_gas_limit_cap() or 2**32))
+    returned = data.draw(ints(tx_gas))
+    reservoir_left = data.draw(ints(tx_gas - returned))
+    used = tx_gas - returned - reservoir_left
+    floor = data.draw(st.one_of(st.sampled_from([0, used]), ints(tx_gas)))
+    refund_counter = data.draw(
+        st.one_of(
+            st.sampled_from(
+                [used // fork.max_refund_quotient() + k for k in (-1, 0, 1)]
+            ).filter(lambda r: r >= 0),
+            ints(2 * used),
+        )
+    )
+    state_gas = data.draw(st.integers(-used, used))
+
+    settled = gas.settle_transaction_gas(
+        Uint(tx_gas),
+        Uint(floor),
+        gas.ExecutionGas(Uint(returned)),
+        gas.StateGas(Uint(reservoir_left)),
+        U256(refund_counter),
+        state_gas,
+    )
+
+    refund = min(used // fork.max_refund_quotient(), refund_counter)
+    assert int(settled.gas_used) == max(used - refund, floor)
+    assert int(settled.gas_used) + int(settled.gas_left) == tx_gas
+    assert int(settled.state_gas_used) == max(state_gas, 0)
+    assert int(settled.execution_gas_used) == max(
+        used - max(state_gas, 0), floor
+    )
