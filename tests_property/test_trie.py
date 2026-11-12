@@ -8,7 +8,9 @@ from ethereum_types.bytes import Bytes
 from execution_testing.base_types import EmptyTrieRoot
 from hypothesis import assume, given, target
 from hypothesis import strategies as st
+from trie import HexaryTrie
 
+from ethereum.crypto.hash import keccak256
 from ethereum.merkle_patricia_trie import (
     Trie,
     copy_trie,
@@ -50,6 +52,51 @@ def make_trie(
     for key, value in items:
         trie_set(trie, key, value)
     return trie
+
+
+def py_trie_root(is_secured: bool, items: List[Tuple[Bytes, Bytes]]) -> bytes:
+    """Return py-trie's root, hashing each key first in a secured trie."""
+    reference = HexaryTrie(db={})
+    for key, value in items:
+        reference.set(keccak256(key) if is_secured else key, value)
+    return reference.root_hash
+
+
+@given(is_secured=secured, items=trie_items(max_items=64))
+def test_root_matches_py_trie(
+    is_secured: bool, items: List[Tuple[Bytes, Bytes]]
+) -> None:
+    """
+    The root of any trie matches py-trie's, with keys hashed first in a
+    secured trie.
+    """
+    target(len(items), label="items in the trie")
+    assert root(make_trie(is_secured, items)) == py_trie_root(
+        is_secured, items
+    )
+
+
+@given(
+    keys=st.lists(
+        st.binary(min_size=1, max_size=4).map(Bytes),
+        min_size=1,
+        max_size=3,
+        unique=True,
+    ),
+    fill=st.integers(0, 255),
+)
+def test_nodes_around_32_bytes_match_py_trie(
+    keys: List[Bytes], fill: int
+) -> None:
+    """
+    As the first value grows, its leaf's encoding passes 32 bytes, where
+    the leaf stops being inlined in its parent and is hashed instead, and
+    the root still matches py-trie's.
+    """
+    for size in range(1, 41):
+        items = [(keys[0], Bytes(bytes([fill]) * size))]
+        items += [(key, Bytes(b"\x01")) for key in keys[1:]]
+        assert root(make_trie(False, items)) == py_trie_root(False, items)
 
 
 @given(is_secured=secured, items=trie_items(), seed=st.randoms())
