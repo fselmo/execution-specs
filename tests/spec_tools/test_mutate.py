@@ -9,6 +9,7 @@ from execution_testing.forks import Fork, get_forks
 
 from ethereum_spec_tools.mutate.areas import AREAS
 from ethereum_spec_tools.mutate.driver import (
+    Baseline,
     Planned,
     fork_by_name,
     package_of,
@@ -77,10 +78,16 @@ def mutants_of(operator: str) -> List[Mutant]:
             id="compare",
         ),
         pytest.param(
-            "drop-guard",
+            "drop-call",
             "ensure(evm.gas_left >= amount, OutOfGasError)",
             "pass",
             id="ensure",
+        ),
+        pytest.param(
+            "drop-update",
+            "evm.gas_left -= amount",
+            "pass",
+            id="drop-update",
         ),
         pytest.param(
             "drop-guard",
@@ -112,9 +119,6 @@ def mutants_of(operator: str) -> List[Mutant]:
             "U256(evm.total) + U256(amount)",
             id="checked",
         ),
-        pytest.param(
-            "integer-type", "U256(amount)", "Uint(amount)", id="type"
-        ),
     ],
 )
 def test_operator_makes_the_edit(
@@ -130,6 +134,53 @@ def test_operator_makes_the_edit(
     edited = apply(SOURCE, found[0])
     assert mutated in edited and edited != SOURCE
     ast.parse(edited)
+
+
+def test_a_nested_edit_keeps_its_meaning() -> None:
+    """
+    An operator expression spliced into a tighter-binding parent gets
+    parentheses, so `a - b * c` becomes `a - (b + c)`, not `a - b + c`.
+    """
+    source = "def f(a, b, c):\n    return a - b * c\n"
+    (mutant,) = [
+        m
+        for m in function_mutants("f.py", source, ["f"])
+        if m.original == "b * c" and "+" in m.mutated
+    ]
+    assert "a - (b + c)" in apply(source, mutant)
+    assert mutant.construct == "f: b * c -> b + c"
+
+
+def test_a_loop_is_skipped() -> None:
+    """A `for` loop over nothing and a `while` that never runs."""
+    source = (
+        "def f(xs):\n    for x in xs:\n        g(x)\n"
+        "    while xs:\n        xs.pop()\n"
+    )
+    skipped = {
+        (m.original, m.mutated)
+        for m in function_mutants("f.py", source, ["f"])
+        if m.operator == "skip-loop"
+    }
+    assert skipped == {("xs", "()"), ("xs", "False")}
+
+
+def test_a_mutant_on_an_unexecuted_line_is_not_reached() -> None:
+    """The baseline's coverage decides which mutants are worth running."""
+    (first, *_) = mutants_of("compare")
+    reached = Baseline(1.0, {"gas.py": {first.lineno}})
+    assert reached.reaches(first)
+    assert not Baseline(1.0, {"gas.py": {first.lineno + 50}}).reaches(first)
+    assert not Baseline(1.0, {}).reaches(first)
+
+
+@pytest.mark.parametrize("area", sorted(AREAS))
+def test_every_note_names_a_mutant_the_area_still_has(area: str) -> None:
+    """A note on an edit the spec no longer has is stale."""
+    constructs = {
+        p.mutant.construct for p in plan(ROOT, newest_fork(), [area])
+    }
+    assert set(AREAS[area].notes) <= constructs
 
 
 def test_no_mutant_in_docstrings_annotations_or_fstrings() -> None:
