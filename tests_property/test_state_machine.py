@@ -118,6 +118,7 @@ class StateTrackerMachine(RuleBasedStateMachine):
         self.accounts: Accounts = {}
         self.storage: Storage = {}
         self.original: Storage = {}
+        self.committed: Accounts = {}
         self.transient: Dict[Tuple[Bytes20, Bytes32], int] = {}
         self.created: Set[Bytes20] = set()
         self.read_accounts: Set[Bytes20] = set()
@@ -135,6 +136,7 @@ class StateTrackerMachine(RuleBasedStateMachine):
         self.accounts = dict(accounts)
         self.storage = copy.deepcopy(storage)
         self.original = copy.deepcopy(storage)
+        self.committed = dict(accounts)
 
     def _probe(self) -> Any:
         """
@@ -222,6 +224,16 @@ class StateTrackerMachine(RuleBasedStateMachine):
         self._modify(
             recipient, credited._replace(balance=credited.balance + amount)
         )
+
+    @rule(
+        sender=st.sampled_from(ADDRESSES),
+        recipient=st.sampled_from(ADDRESSES),
+    )
+    def overdraw(self, sender: Bytes20, recipient: Bytes20) -> None:
+        """Moving more ether than the sender holds is refused."""
+        amount = self._account(sender).balance + 1
+        with pytest.raises(AssertionError):
+            self.tracker.move_ether(self.tx, sender, recipient, U256(amount))
 
     @rule(
         addr=st.sampled_from(ADDRESSES),
@@ -322,6 +334,7 @@ class StateTrackerMachine(RuleBasedStateMachine):
             builder = self.bal.BlockAccessListBuilder()
             self.tracker.incorporate_tx_into_block(self.tx, builder)
         self.original = copy.deepcopy(self.storage)
+        self.committed = dict(self.accounts)
         self.transient = {}
         self.created = set()
         self.snapshots = []
@@ -355,6 +368,47 @@ class StateTrackerMachine(RuleBasedStateMachine):
                 actual = self.tracker.get_storage(probe, addr, key)
                 expected = self.storage.get(addr, {}).get(key, 0)
                 assert int(actual) == expected
+
+    @invariant()
+    def account_predicates_match(self) -> None:
+        """
+        Existence, EIP-161 emptiness and liveness, and EIP-684's room for
+        a new contract (no nonce and no code) match the model.
+        """
+        probe = self._probe()
+        empty = ModelAccount()
+        for addr in ADDRESSES:
+            model = self.accounts.get(addr)
+            account = model or empty
+            assert self.tracker.account_exists(probe, addr) == (
+                model is not None
+            )
+            assert self.tracker.account_exists_and_is_empty(probe, addr) == (
+                model == empty
+            )
+            assert self.tracker.is_account_alive(probe, addr) == (
+                model is not None and model != empty
+            )
+            assert self.tracker.account_deployable(probe, addr) == (
+                account.nonce == 0
+                and account.code_hash == bytes(EMPTY_CODE_HASH)
+            )
+
+    @precondition(lambda self: hasattr(self.tracker, "get_pre_state_account"))
+    @invariant()
+    def pre_transaction_accounts_match(self) -> None:
+        """The account before the transaction is the one last committed."""
+        for addr in ADDRESSES:
+            actual = self.tracker.get_pre_state_account(self.tx, addr)
+            expected = self.committed.get(addr, ModelAccount())
+            assert (
+                ModelAccount(
+                    int(actual.nonce),
+                    int(actual.balance),
+                    bytes(actual.code_hash),
+                )
+                == expected
+            )
 
     @invariant()
     def original_storage_matches(self) -> None:

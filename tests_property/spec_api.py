@@ -212,6 +212,8 @@ def modify_deletes_empty_accounts(tracker: ModuleType) -> bool:
     Return whether a change that leaves an account empty deletes it.
 
     Forks that sweep touched empty accounts at the end of a transaction
-    keep them until then; later forks delete them on the spot.
+    keep them until then; later forks delete them on the spot. The answer
+    is read from the spec's own tracker, which only `spec_unit` tests may
+    do.
     """
     return not hasattr(tracker, "destroy_touched_empty_accounts")
