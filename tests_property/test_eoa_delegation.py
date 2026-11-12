@@ -301,8 +301,9 @@ def test_set_delegation_applies_and_charges(
     that did not exist, one account write (execution gas) per authority
     the transaction has not paid to write, and a delegation indicator
     (state gas) the first time the transaction sets one on an authority
-    that had none before it. The charges spend exactly the gas given, and
-    one less runs out.
+    that had none before it, as EIP-2780's "EIP-7702 authorization
+    processing" section sets them. The charges spend exactly the gas
+    given, and one less runs out.
     """
     vm = spec.module("vm")
     tracker = spec.module("state_tracker")
@@ -337,7 +338,8 @@ def test_set_delegation_applies_and_charges(
         if start != "missing":
             block_state.account_writes[signer] = Account(
                 nonce=Uint(nonce),
-                balance=U256(0),
+                # EIP-7523: an account that exists is never empty.
+                balance=U256(1),
                 code_hash=keccak256(code) if code else EMPTY_CODE_HASH,
             )
             if code:
