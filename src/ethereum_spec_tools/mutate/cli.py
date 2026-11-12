@@ -40,7 +40,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument(
-        "--timeout", type=int, default=300, help="seconds per oracle run"
+        "--timeout",
+        type=int,
+        default=0,
+        help="seconds per oracle run (0: ten times the area's baseline)",
     )
     parser.add_argument(
         "--output",

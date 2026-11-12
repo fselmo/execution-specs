@@ -4,10 +4,15 @@ Mutation operators for spec source.
 A mutant is one small edit to one spec function, kept as the exact source
 segment it replaces so it can be spliced in and undone byte for byte.
 Besides the generic swaps (comparisons, arithmetic, boolean operators,
-constants) the operators know the spec's idioms: `ensure` and
-`if ...: raise` guards, calls made for their effect on state, the
-fixed-width integer types and their wrapping methods, and the gas
-constants classes.
+constants) the operators know the spec's idioms: `if ...: raise` guards,
+calls and in-place updates made for their effect on state, the wrapping
+methods of the fixed-width integers, and the gas constants classes.
+
+There is no operator swapping one integer type for another (`U256(x)`
+for `Uint(x)`): the types compare by value and refuse to mix in
+arithmetic, so such a mutant is either equivalent or dies on a
+`TypeError` in the first test that runs it, and neither says anything
+about the tests.
 
 Mutants that cannot change behavior by construction are never made: edits
 inside docstrings, f-strings and type annotations.
@@ -63,20 +68,24 @@ CHECKED: Dict[str, Type[ast.operator]] = {
 """The checked operator a wrapping method replaces: it raises where the
 method wraps."""
 
-INTEGER_SWAPS: Dict[str, Tuple[str, ...]] = {
-    "U256": ("Uint",),
-    "Uint": ("U256",),
-    "U64": ("Uint",),
-}
-"""A fixed-width integer conversion swapped for another width."""
-
 GAS_CLASSES = ("GasCosts", "StateGasCosts")
 """Classes of named gas constants whose members are swapped for their
 neighbors in the class."""
 
-GUARD_CALLS = ("ensure",)
-"""Calls that raise when their condition fails: deleting one drops the
-rule it enforces."""
+BINDS_TIGHTER = (
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Compare,
+    ast.BoolOp,
+    ast.Attribute,
+    ast.Subscript,
+    ast.IfExp,
+    ast.Await,
+    ast.Starred,
+)
+"""Parents an operator expression is spliced into in parentheses, so the
+edit stays the one its operator names: `a - b * c` with `*` turned into
+`+` must become `a - (b + c)`."""
 
 
 @dataclass(frozen=True)
@@ -129,11 +138,17 @@ class Mutant:
 def construct(function: str, original: str, mutated: str) -> str:
     """
     An edit named by its function and text, so a note on it survives the
-    file's lines moving.
+    file's lines moving. Parentheses added for splicing are left out.
     """
-    return f"{function}: {' '.join(original.split())} -> " + " ".join(
-        mutated.split()
-    )
+    mutated = " ".join(mutated.split())
+    if mutated.startswith("(") and mutated.endswith(")"):
+        try:
+            inner = ast.parse(mutated[1:-1], mode="eval")
+            if ast.unparse(inner) == mutated[1:-1]:
+                mutated = mutated[1:-1]
+        except SyntaxError:
+            pass
+    return f"{function}: {' '.join(original.split())} -> {mutated}"
 
 
 def line_starts(source: str) -> List[int]:
@@ -217,11 +232,18 @@ def gas_constants(source: str) -> Dict[str, List[str]]:
 class _Builder:
     """Makes mutants of one function's nodes."""
 
-    def __init__(self, path: str, source: str, function: str) -> None:
+    def __init__(
+        self,
+        path: str,
+        source: str,
+        function: str,
+        parents: Optional[Dict[int, ast.AST]] = None,
+    ) -> None:
         self.path = path
         self.source = source
         self.function = function
         self.starts = line_starts(source)
+        self.parents = parents or {}
 
     def make(
         self, node: ast.AST, mutated: str, operator: str
@@ -247,7 +269,12 @@ class _Builder:
     def swap(
         self, node: ast.AST, replacement: ast.AST, operator: str
     ) -> Optional[Mutant]:
-        return self.make(node, ast.unparse(replacement), operator)
+        text = ast.unparse(replacement)
+        if isinstance(
+            replacement, (ast.BinOp, ast.BoolOp, ast.Compare, ast.UnaryOp)
+        ) and isinstance(self.parents.get(id(node)), BINDS_TIGHTER):
+            text = f"({text})"
+        return self.make(node, text, operator)
 
 
 def _node_mutants(
@@ -289,16 +316,13 @@ def _node_mutants(
     ):
         yield builder.make(node.test, "False", "drop-guard")
     elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-        callee = node.value.func
-        name = (
-            callee.id
-            if isinstance(callee, ast.Name)
-            else callee.attr
-            if isinstance(callee, ast.Attribute)
-            else ""
-        )
-        operator = "drop-guard" if name in GUARD_CALLS else "drop-call"
-        yield builder.make(node, "pass", operator)
+        yield builder.make(node, "pass", "drop-call")
+    elif isinstance(node, ast.AugAssign):
+        yield builder.make(node, "pass", "drop-update")
+    elif isinstance(node, ast.For):
+        yield builder.make(node.iter, "()", "skip-loop")
+    elif isinstance(node, ast.While):
+        yield builder.make(node.test, "False", "skip-loop")
     elif isinstance(node, ast.Call):
         callee = node.func
         if isinstance(callee, ast.Attribute) and callee.attr in CHECKED:
@@ -311,11 +335,6 @@ def _node_mutants(
                     callee.value, CHECKED[callee.attr](), node.args[0]
                 )
                 yield builder.swap(node, checked, "wrapping")
-        elif isinstance(callee, ast.Name) and callee.id in INTEGER_SWAPS:
-            for other in INTEGER_SWAPS[callee.id]:
-                converted = copy.deepcopy(node)
-                converted.func = ast.Name(other)
-                yield builder.swap(node, converted, "integer-type")
     elif (
         isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name)
@@ -354,7 +373,12 @@ def function_mutants(
             function, (ast.FunctionDef, ast.AsyncFunctionDef)
         ) or not matches(function.name, patterns):
             continue
-        builder = _Builder(path, source, function.name)
+        parents = {
+            id(child): parent
+            for parent in ast.walk(function)
+            for child in ast.iter_child_nodes(parent)
+        }
+        builder = _Builder(path, source, function.name, parents)
         for statement in function.body:
             for node in ast.walk(statement):
                 if id(node) in inert:

@@ -2,14 +2,18 @@
 Run mutants against an oracle, in parallel, without touching the checkout.
 
 Each worker owns a copy of `src/` that it imports through `PYTHONPATH`, so
-the checkout's own `src/` is never edited and an interrupted run leaves
-nothing behind. A mutant is killed when its oracle fails or times out,
-and survives when the oracle passes.
+the checkout's own `src/` is never edited. Before any mutant runs, each
+area's oracle must pass on the unmutated spec, under coverage: a mutant
+on a line the oracle never executes is reported as not reached without
+being run, a mutant is killed only when tests ran and failed, and it
+survives when the oracle passes.
 """
 
+import hashlib
 import json
 import os
 import random
+import re
 import shutil
 import signal
 import subprocess
@@ -19,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from queue import Queue
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from execution_testing.forks import Fork, get_forks
 
@@ -28,6 +32,7 @@ from ethereum_spec_tools.utils import resolve_fork
 from .areas import AREAS, Area
 from .operators import (
     Mutant,
+    apply,
     construct,
     function_mutants,
     function_source,
@@ -37,6 +42,13 @@ from .operators import (
 )
 
 ORACLES = ("properties", "fixtures")
+
+CRASHES = ("TypeError", "NameError", "AttributeError", "UnboundLocalError")
+"""Errors that mean a mutant broke the code's shape, not its result: the
+first test to run it fails whatever it asserts, so the kill shows that the
+line is reached and nothing about what is checked."""
+
+_RAISED = re.compile(r"^E\s+(?:\w+\.)*(\w+(?:Error|Exception))\b", re.M)
 
 
 def fork_by_name(name: str) -> Fork:
@@ -155,11 +167,29 @@ def carried_forks(
     return out
 
 
+def spec_state(root: Path) -> str:
+    """The commit and uncommitted changes of the checkout, as one hash."""
+    parts = [
+        subprocess.run(
+            ["git", *arguments],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        for arguments in (["rev-parse", "HEAD"], ["diff", "HEAD"])
+    ]
+    return hashlib.sha256("".join(parts).encode()).hexdigest()
+
+
 def fill_fixtures(root: Path, out: Path, fork: Fork, area: Area) -> Path:
-    """Fill ``area``'s EEST tests once, from the unmutated spec."""
+    """
+    Fill ``area``'s EEST tests from the unmutated spec, unless the fixtures
+    there were filled from this same checkout state.
+    """
     target = out / "fixtures" / fork.name()
     marker = target / ".filled"
-    wanted = "\n".join(area.fixtures)
+    wanted = "\n".join((*area.fixtures, spec_state(root)))
     if marker.exists() and marker.read_text() == wanted:
         return target / "blockchain_tests"
     command = [
@@ -188,10 +218,12 @@ def oracle_commands(
     area_name: str,
     oracle: str,
 ) -> List[List[str]]:
-    """The commands that must all pass for a mutant to survive."""
+    """
+    The pytest arguments of each run that must pass for a mutant to
+    survive.
+    """
     area = AREAS[area_name]
-    python = sys.executable
-    base = [python, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider"]
+    base = ["-x", "-q", "-p", "no:cacheprovider"]
     if oracle == "properties":
         if not area.properties:
             raise ValueError(f"{area_name} has no property tests")
@@ -206,32 +238,102 @@ def oracle_commands(
     return [[*base, "-p", "tests.json_loader.conftest", str(fixtures)]]
 
 
+def _environment(copy: Path) -> Dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(copy / "src")
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return env
+
+
+@dataclass(frozen=True)
+class Baseline:
+    """What an area's oracle does on the unmutated spec."""
+
+    seconds: float
+    """How long the oracle took."""
+    lines: Dict[str, Set[int]]
+    """The lines it executed, by file relative to the repository root."""
+
+    def reaches(self, mutant: Mutant) -> bool:
+        """Whether the oracle executes any line ``mutant`` edits."""
+        executed = self.lines.get(mutant.path, set())
+        return any(
+            line in executed
+            for line in range(mutant.lineno, mutant.end_lineno + 1)
+        )
+
+
+def baseline(
+    root: Path, copy: Path, area: str, commands: List[List[str]], out: Path
+) -> Baseline:
+    """
+    Run ``area``'s oracle on the unmutated spec, under coverage. It must
+    pass: an oracle that fails, or selects no test, would report every
+    mutant killed.
+    """
+    # A development dependency, needed only when mutants are run.
+    from coverage import CoverageData
+
+    data = out / f"coverage-{area}"
+    data.unlink(missing_ok=True)
+    env = _environment(copy)
+    env.setdefault("COVERAGE_CORE", "sysmon")
+    started = time.monotonic()
+    for command in commands:
+        process = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "coverage",
+                "run",
+                "--append",
+                f"--data-file={data}",
+                f"--include={copy}/src/ethereum/*",
+                "-m",
+                "pytest",
+                *command,
+            ],
+            cwd=root,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if process.returncode != 0:
+            raise RuntimeError(
+                f"{area}: the oracle does not pass on the unmutated spec "
+                f"(pytest {' '.join(command)} exited "
+                f"{process.returncode}):\n{process.stdout[-600:]}"
+            )
+    seconds = time.monotonic() - started
+    measured = CoverageData(str(data))
+    measured.read()
+    lines = {
+        str(Path(name).relative_to(copy)): set(measured.lines(name) or ())
+        for name in measured.measured_files()
+    }
+    return Baseline(seconds, lines)
+
+
 def run_one(
     root: Path,
     copy: Path,
     planned: Planned,
     commands: List[List[str]],
-    timeout: int,
-    scratch: Path,
+    timeout: float,
 ) -> Dict[str, object]:
     """Apply one mutant to ``copy``, run the oracle, and undo it."""
-    from .operators import apply
-
     mutant = planned.mutant
     target = copy / mutant.path
-    original = target.read_text()
+    original = (root / mutant.path).read_text()
     target.write_text(apply(original, mutant))
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(copy / "src")
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env["HYPOTHESIS_STORAGE_DIRECTORY"] = str(scratch)
     verdict, by, started = "survived", "", time.monotonic()
     try:
         for command in commands:
             process = subprocess.Popen(
-                command,
+                [sys.executable, "-m", "pytest", *command],
                 cwd=root,
-                env=env,
+                env=_environment(copy),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -242,26 +344,41 @@ def run_one(
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.communicate()
-                verdict, by = "killed-timeout", " ".join(command[-2:])
+                verdict, by = "timed-out", " ".join(command[-2:])
                 break
-            if process.returncode != 0:
+            # pytest exits 1 when tests ran and some failed. Anything else
+            # non-zero (a usage error, no test selected) says nothing about
+            # the mutant.
+            if process.returncode == 1:
                 failed = [
                     line
                     for line in output.splitlines()
                     if line.startswith(("FAILED", "ERROR"))
                 ]
-                verdict = "killed"
+                raised = _RAISED.search(output)
+                crashed = raised is not None and raised.group(1) in CRASHES
+                verdict = "crashed" if crashed else "killed"
                 by = (failed[0] if failed else output[-300:])[:300]
+                break
+            if process.returncode != 0:
+                verdict = "error"
+                by = f"pytest exited {process.returncode}: {output[-300:]}"
                 break
     finally:
         target.write_text(original)
+    return _row(planned, verdict, by, time.monotonic() - started)
+
+
+def _row(
+    planned: Planned, verdict: str, by: str, seconds: float
+) -> Dict[str, object]:
     return {
         "area": planned.area,
-        **asdict(mutant),
-        "id": mutant.ident,
+        **asdict(planned.mutant),
+        "id": planned.mutant.ident,
         "verdict": verdict,
         "by": by,
-        "seconds": round(time.monotonic() - started, 1),
+        "seconds": round(seconds, 1),
     }
 
 
@@ -274,33 +391,51 @@ def run(
     workers: int,
     timeout: int,
 ) -> Path:
-    """Run ``chosen`` against ``oracle``; return the results file."""
+    """
+    Run ``chosen`` against ``oracle``; return the results file. A
+    ``timeout`` of zero allows each mutant ten times its area's baseline.
+    """
     out.mkdir(parents=True, exist_ok=True)
     results = out / f"results-{oracle}.jsonl"
+    state = spec_state(root)
+    stamp = out / f"results-{oracle}.state"
+    if results.exists() and (not stamp.exists() or stamp.read_text() != state):
+        # Verdicts for another state of the spec or its tests say nothing
+        # about this one.
+        results.rename(results.with_suffix(f".{int(time.time())}.jsonl"))
+    stamp.write_text(state)
     done = set()
     if results.exists():
         done = {
             json.loads(line)["id"] for line in results.read_text().splitlines()
         }
     todo = [p for p in chosen if p.mutant.ident not in done]
-    commands = {
-        area: oracle_commands(root, out, fork, area, oracle)
-        for area in dict.fromkeys(p.area for p in todo)
-    }
     print(f"{len(todo)} mutants to run, {len(done)} already done")
+    if not todo:
+        return results
+    # Fresh copies every run: one left mutated by a killed run, or made
+    # from an older checkout, would corrupt every verdict after it.
+    shutil.rmtree(out / "workers", ignore_errors=True)
     slots: "Queue[int]" = Queue()
     for i in range(workers):
-        copy = out / "workers" / str(i)
-        if not copy.exists():
-            shutil.copytree(
-                root / "src",
-                copy / "src",
-                ignore=shutil.ignore_patterns("__pycache__"),
-            )
-        (out / "workers" / f"hypothesis-{i}").mkdir(exist_ok=True)
+        shutil.copytree(
+            root / "src",
+            out / "workers" / str(i) / "src",
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
         slots.put(i)
+    commands: Dict[str, List[List[str]]] = {}
+    baselines: Dict[str, Baseline] = {}
+    for area in dict.fromkeys(p.area for p in todo):
+        commands[area] = oracle_commands(root, out, fork, area, oracle)
+        baselines[area] = baseline(
+            root, out / "workers" / "0", area, commands[area], out
+        )
+        print(f"{area}: baseline passes in {baselines[area].seconds:.0f} s")
 
     def task(planned: Planned) -> Dict[str, object]:
+        if not baselines[planned.area].reaches(planned.mutant):
+            return _row(planned, "not-reached", "", 0.0)
         i = slots.get()
         try:
             return run_one(
@@ -308,8 +443,7 @@ def run(
                 out / "workers" / str(i),
                 planned,
                 commands[planned.area],
-                timeout,
-                out / "workers" / f"hypothesis-{i}",
+                timeout or 10 * baselines[planned.area].seconds + 30,
             )
         finally:
             slots.put(i)
@@ -321,7 +455,7 @@ def run(
             log.write(json.dumps(result) + "\n")
             log.flush()
             print(
-                f"[{n}/{len(todo)}] {result['verdict']:<14} "
+                f"[{n}/{len(todo)}] {result['verdict']:<12} "
                 f"{result['area']} {result['path']}:{result['lineno']} "
                 f"{result['operator']}",
                 flush=True,
@@ -338,36 +472,67 @@ def _construct(row: Dict[str, object]) -> str:
 def summarize(
     root: Path, fork: Fork, results: Path, ids: Optional[Sequence[str]]
 ) -> str:
-    """A table per area and operator, then every survivor."""
+    """
+    A table per area, then every mutant the tests ran over without
+    noticing, then the ones they never ran.
+    """
     rows = [json.loads(line) for line in results.read_text().splitlines()]
     if ids is not None:
         wanted = set(ids)
         rows = [row for row in rows if row["id"] in wanted]
-    lines = ["| area | mutants | killed | survived | known equivalent |"]
-    lines.append("| --- | ---: | ---: | ---: | ---: |")
-    survivors: List[Tuple[str, Dict[str, object]]] = []
+    lines = [
+        "| area | mutants | killed | crashed | timed out | survived | "
+        "known equivalent | not reached |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    listed: Dict[str, List[Tuple[str, Dict[str, object]]]] = {
+        "survived": [],
+        "not-reached": [],
+        "error": [],
+    }
     for area in dict.fromkeys(row["area"] for row in rows):
         mine = [row for row in rows if row["area"] == area]
         notes = AREAS[area].notes
-        alive = [row for row in mine if row["verdict"] == "survived"]
-        equivalent = [row for row in alive if _construct(row) in notes]
+        count = {
+            verdict: sum(row["verdict"] == verdict for row in mine)
+            for verdict in (
+                "killed",
+                "crashed",
+                "timed-out",
+                "survived",
+                "not-reached",
+            )
+        }
+        equivalent = sum(
+            row["verdict"] == "survived" and _construct(row) in notes
+            for row in mine
+        )
         lines.append(
-            f"| {area} | {len(mine)} | {len(mine) - len(alive)} | "
-            f"{len(alive) - len(equivalent)} | {len(equivalent)} |"
+            f"| {area} | {len(mine)} | {count['killed']} | "
+            f"{count['crashed']} | {count['timed-out']} | "
+            f"{count['survived'] - equivalent} | {equivalent} | "
+            f"{count['not-reached']} |"
         )
-        survivors += [
-            (area, row) for row in alive if _construct(row) not in notes
-        ]
-    lines.append("")
-    for area, row in survivors:
-        carried = carried_forks(
-            root, fork, str(row["path"]), str(row["function"])
-        )
-        also = f" (same code in {', '.join(carried)})" if carried else ""
-        lines.append(
-            f"- `{row['id']}` {area} `{row['path']}:{row['lineno']}` "
-            f"`{row['function']}` {row['operator']}: "
-            f"`{' '.join(str(row['original']).split())[:80]}` -> "
-            f"`{' '.join(str(row['mutated']).split())[:80]}`{also}"
-        )
+        for row in mine:
+            if row["verdict"] in listed and _construct(row) not in notes:
+                listed[str(row["verdict"])].append((area, row))
+    for verdict, title in (
+        ("survived", "Ran and went unnoticed"),
+        ("not-reached", "Never ran"),
+        ("error", "Could not be judged"),
+    ):
+        if not listed[verdict]:
+            continue
+        lines += ["", f"{title}:", ""]
+        for area, row in listed[verdict]:
+            carried = carried_forks(
+                root, fork, str(row["path"]), str(row["function"])
+            )
+            also = f" (same code in {', '.join(carried)})" if carried else ""
+            lines.append(
+                f"- `{row['id']}` {area} `{row['path']}:{row['lineno']}` "
+                f"`{row['function']}` {row['operator']}: "
+                f"`{' '.join(str(row['original']).split())[:80]}` -> "
+                f"`{' '.join(str(row['mutated']).split())[:80]}`{also}"
+            )
     return "\n".join(lines)

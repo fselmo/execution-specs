@@ -162,19 +162,6 @@ AREAS: Dict[str, Area] = {
                 "Every code change comes with a nonce change at the same "
                 "index, a creation or a delegation, which added the account."
             ),
-            "_get_pre_tx_storage: U256(0) -> Uint(0)": (
-                "`Uint` and `U256` compare by value."
-            ),
-            "update_builder_from_tx: U256(0) -> Uint(0)": (
-                "`Uint` and `U256` compare by value."
-            ),
-            "update_builder_from_tx: Uint(0) -> U256(0)": (
-                "`Uint` and `U256` compare by value."
-            ),
-            "update_builder_from_tx: U64(post_nonce) -> Uint(post_nonce)": (
-                "The same RLP encoding, and validity keeps a nonce below "
-                "2**64."
-            ),
             "update_builder_from_tx: remove_nonce_change(builder, address, "
             "idx) -> pass": (
                 "Only a second system call at the same index could need it, "
