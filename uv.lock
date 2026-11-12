@@ -790,6 +790,7 @@ dev = [
     { name = "requests-cache" },
     { name = "ruff" },
     { name = "shellcheck-py" },
+    { name = "trie" },
     { name = "types-requests" },
     { name = "vulture" },
     { name = "zensical" },
@@ -827,6 +828,7 @@ test = [
     { name = "pytest-xdist" },
     { name = "requests" },
     { name = "requests-cache" },
+    { name = "trie" },
 ]
 
 [package.metadata]
@@ -876,6 +878,7 @@ dev = [
     { name = "requests-cache", specifier = ">=1.2.1,<2" },
     { name = "ruff", specifier = "==0.13.2" },
     { name = "shellcheck-py", specifier = ">=0.10" },
+    { name = "trie", specifier = ">=3.1.0,<4" },
     { name = "types-requests", specifier = ">=2.31,<2.33" },
     { name = "vulture", specifier = "==2.14.0" },
     { name = "zensical", specifier = ">=0.1.0,<0.2" },
@@ -911,6 +914,7 @@ test = [
     { name = "pytest-xdist", specifier = ">=3.3.1,<4" },
     { name = "requests" },
     { name = "requests-cache", specifier = ">=1.2.1,<2" },
+    { name = "trie", specifier = ">=3.1.0,<4" },
 ]
 
 [[package]]
