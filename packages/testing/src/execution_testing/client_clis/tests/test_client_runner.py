@@ -10,6 +10,7 @@ import pytest
 
 from execution_testing.base_types import Hash, to_json
 from execution_testing.client_clis import (
+    BesuFixtureConsumer,
     EthrexBlocktestConsumer,
     EthrexEnginetestConsumer,
     FixtureConsumerTool,
@@ -463,6 +464,40 @@ def test_ethrex_runs_its_binary_without_a_subcommand(
     assert run.error is None
     assert (tmp_path / "calls.log").read_text() == (
         f"--json --bal-report {BLOCKCHAIN_FIXTURE}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "fixture_format,fixture_path,command",
+    [
+        pytest.param(
+            BlockchainFixture, BLOCKCHAIN_FIXTURE, "block-test", id="blocktest"
+        ),
+        pytest.param(
+            BlockchainEngineFixture,
+            ENGINE_FIXTURE,
+            "engine-test --outcome-only",
+            id="enginetest",
+        ),
+    ],
+)
+def test_besu_leaves_the_engine_reason_to_the_mapper(
+    fake_runner: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fixture_format: FixtureFormat,
+    fixture_path: Path,
+    command: str,
+) -> None:
+    """
+    Besu's `engine-test` runs with `--outcome-only`, so a rejection's reason
+    is judged by `BesuExceptionMapper` and not by Besu's own check.
+    """
+    monkeypatch.setenv("RESULTS", "[]")
+    consumer = BesuFixtureConsumer(binary=fake_runner)
+    consumer.run_fixture_file(fixture_format, fixture_path)
+    assert (tmp_path / "calls.log").read_text() == (
+        f"{command} --json-array --bal-report {fixture_path}\n"
     )
 
 

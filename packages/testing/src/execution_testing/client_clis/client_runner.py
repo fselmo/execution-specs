@@ -82,8 +82,12 @@ class RunnerCommands:
 
 RUNNER_COMMANDS: Dict[str, RunnerCommands] = {
     "go-ethereum": RunnerCommands(("blocktest",), ("enginetest",)),
+    # Besu's engine-test checks the reason itself unless told not to, and
+    # the reason is checked here through its exception mapper.
     "besu": RunnerCommands(
-        ("block-test",), ("engine-test",), ("--json-array",)
+        ("block-test",),
+        ("engine-test", "--outcome-only"),
+        ("--json-array",),
     ),
     "nethermind": RunnerCommands(("blocktest",), ("enginetest",)),
     "erigon": RunnerCommands(("blocktest",), ("enginetest",), ("--jsonout",)),
